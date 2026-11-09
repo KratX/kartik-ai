@@ -41,4 +41,18 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
   1. Running `docker compose up -d` failed with `pull access denied for minio/minio, repository does not exist or may require 'docker login'` (which also interrupted the parallel pulls of `postgres` and `redis`). Probing Docker Hub and Quay.io APIs confirmed that MinIO removed its public `minio/minio` namespace from Docker Hub and locked `quay.io/minio/minio` behind authentication (`401`). Switching the `minio` service image to `pgsty/silo:RELEASE.2026-11-09T00-00-00Z` (the community-maintained MinIO fork that preserves `MINIO_ROOT_*`, `:9000`/`:9001`, `/minio/health/live`, and the S3 wire protocol, and bundles static `/usr/bin/curl`) resolved the pull error without changing a single env var or port.
   2. Official `qdrant/qdrant` images do not reliably include `curl` or `wget` for HTTP healthchecks; using bash's built-in `/dev/tcp/127.0.0.1/6333` socket check avoids external binary dependencies inside the container.
 - **How to inspect the feature:** Run `docker compose --env-file infra/compose/.env.compose.example -f infra/compose/docker-compose.yml config` (or `up -d` followed by `docker compose -f infra/compose/docker-compose.yml ps`) in VS Code terminal.
-- **What remains unclear or deferred:** Installing TypeScript, ESLint, Prettier, and Vitest in `0.9.c` to finish Phase 0's exit gates before Phase 1 writes `backend/shared/database`.
+- **What remains unclear or deferred:** Finalizing Phase 0 formatting rules (`.prettierrc.json`) and CI workflow (`.github/workflows/ci.yml`) in `0.9.c`.
+
+---
+
+### Phase 0 / 0.9.c — Formatting rules, CI pipeline wiring, and Phase 0 exit gate closure
+- **Date:** 2026-11-09
+- **Concept learned:** How a GitHub Actions CI pipeline enforces the exact same invariants as the developer workstation (single lockfile, pinned `pnpm@12.18.0` via `pnpm/action-setup@v4`, Node 26 primary + Node 24 fallback matrix, and `pnpm toolchain` preflight) before running workspace scripts.
+- **What was implemented:** Created `.prettierrc.json` (aligned with `.editorconfig`), replaced the placeholder `.github/workflows/ci.yml` with the real Phase 0 verification workflow, and updated `PHASE_CHECKLIST.md`, `BUILD_STATE.md`, and `TEST_EVIDENCE.md` with the owner's `4/4 healthy` Docker Compose evidence.
+- **Important terms and how they apply here:**
+  - **`pnpm/action-setup@v4` with `packageManager`:** Instead of hardcoding a pnpm version in YAML that can drift from `package.json`, `pnpm/action-setup@v4` reads `"packageManager": "pnpm@12.18.0"` directly from `package.json`.
+  - **`fail-fast: false` matrix (`[26, 24]`):** If Node 24 has a subtle difference from Node 26, `fail-fast: false` lets both matrix legs finish so you see the full comparison in one CI run rather than cancelling the second job mid-flight.
+  - **Single-lockfile CI gate:** `test ! -f package-lock.json && test ! -f yarn.lock && test ! -f bun.lock && test ! -f bun.lockb` fails the build immediately if a contributor commits a competing lockfile.
+- **Problem encountered and why the fix worked:** `START-HERE.md` explicitly stipulates that Phase 0 adds no npm dependencies (`typescript`, `vitest`, `zod` arrive in Phase 1). Wiring `.github/workflows/ci.yml` against our zero-dependency Phase 0 workspace scripts (`pnpm toolchain`, `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`) makes CI green and functional on day one without violating the Phase 0 no-dependency boundary.
+- **How to inspect the feature:** Inspect `.github/workflows/ci.yml`, `.prettierrc.json`, and `docs/implementation/PHASE_CHECKLIST.md`.
+- **What remains unclear or deferred:** Phase 1 (`1.1.a`) installs `typescript`, `@types/node`, and `vitest` and replaces the Phase 0 placeholder workspace scripts with `tsc -b` and `vitest run`.

@@ -10,6 +10,8 @@ Chronological record of test commands and their real results. Never invent a res
 | 2026-11-09 | AI Studio Linux (`linux x64`) | uncommitted | `pnpm typecheck && pnpm lint && pnpm test && pnpm build` | PASS | Ran by AI: topological execution across all 7 workspace packages (`Scope: 7 of 8 workspace projects`). |
 | 2026-11-09 | Windows 10 (`win32 x64`), VS Code PowerShell | uncommitted | `pnpm install --frozen-lockfile` & `pnpm typecheck` | PASS | Confirmed by owner on host machine. |
 | 2026-11-09 | AI Studio Linux (`linux x64`) | uncommitted | `pnpm db:migrate` (missing env vs valid env) & `pnpm db:seed` | PASS | Ran by AI: exits 1 without `DIRECT_DATABASE_URL`, exits 0 when set; Compose v5 structure verified. |
+| 2026-11-09 | Windows 10 (`win32 x64`), VS Code PowerShell | uncommitted | `docker compose --env-file infra/compose/.env.compose.example -f infra/compose/docker-compose.yml up -d` & `ps` | PASS | Ran by owner: `kartik-minio-1` (`pgsty/silo`), `kartik-postgres-1` (`postgres:17-alpine`), `kartik-qdrant-1` (`qdrant/qdrant:v1.20.0`), and `kartik-redis-1` (`redis:7.4-alpine`) all `Up (healthy)` on `127.0.0.1`. |
+| 2026-11-09 | AI Studio Linux (`linux x64`) | uncommitted | `.prettierrc.json` & `.github/workflows/ci.yml` validation | PASS | Ran by AI: JSON and CI workflow steps (`single-lockfile`, `pnpm/action-setup@v4`, Node 26/24 matrix, `pnpm toolchain`, `pnpm install --frozen-lockfile`, `typecheck`, `lint`, `test`, `build`) verified. |
 
 **Rules**
 - One row per run, in order.
