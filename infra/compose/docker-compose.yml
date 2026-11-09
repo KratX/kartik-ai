@@ -1,0 +1,85 @@
+# Kartik.ai local dependency stack — Blueprint v4.3 §4.1, §4.7, ADR 0000, ADR 0004.
+# Target: Docker Engine 29+ and Docker Compose v5+.
+# Note: Compose v5 rejects `secrets.*.driver` and `configs.*.driver`, and delegates
+# image builds to Docker Bake. No top-level `version:` key is used.
+#
+# Usage from repository root:
+#   docker compose --env-file infra/compose/.env.compose.example -f infra/compose/docker-compose.yml up -d
+
+name: ${COMPOSE_PROJECT_NAME:-kartik}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kartik}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kartik}
+      POSTGRES_DB: ${POSTGRES_DB:-kartik}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-kartik} -d $${POSTGRES_DB:-kartik}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  minio:
+    # MinIO removed its public `minio/minio` namespace from Docker Hub and requires auth on Quay.
+    # `pgsty/silo` is the drop-in open-source fork preserving MINIO_ROOT_*, :9000/:9001, and S3 wire APIs.
+    image: pgsty/silo:RELEASE.2026-11-09T00-00-00Z
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-kartikminio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-kartikminio123}
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${QDRANT_HTTP_PORT:-6333}:6333"
+      - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  qdrant_data:

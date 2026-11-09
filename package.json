@@ -1,0 +1,23 @@
+{
+  "name": "kartik-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^24.0.0 || ^26.0.0",
+    "pnpm": "12.18.0"
+  },
+  "packageManager": "pnpm@12.18.0",
+  "scripts": {
+    "preinstall": "node -e \"const u=process.env.npm_config_user_agent||'';if(!u.startsWith('pnpm/')){console.error('This repository uses pnpm only — see Blueprint §4.6.');process.exit(1)}\"",
+    "toolchain": "node scripts/check-toolchain.mjs",
+    "check:env": "node scripts/check-env.mjs",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:seed": "node scripts/seed-dev-data.mjs",
+    "dev": "pnpm --parallel -r --if-present run dev",
+    "build": "pnpm -r --if-present run build",
+    "test": "pnpm -r --if-present run test",
+    "lint": "pnpm -r --if-present run lint",
+    "typecheck": "pnpm -r --if-present run typecheck"
+  }
+}

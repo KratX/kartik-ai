@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./dist"
+  },
+  "include": [
+    "auth/**/*.ts",
+    "config/**/*.ts",
+    "contracts/**/*.ts",
+    "database/**/*.ts",
+    "errors/**/*.ts",
+    "logger/**/*.ts",
+    "middleware/**/*.ts",
+    "redis/**/*.ts",
+    "storage/**/*.ts",
+    "validation/**/*.ts"
+  ]
+}

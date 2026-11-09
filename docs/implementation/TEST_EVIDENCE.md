@@ -4,7 +4,12 @@ Chronological record of test commands and their real results. Never invent a res
 
 | Date | Environment | Commit | Suite / command | Result | Notes |
 |---|---|---|---|---|---|
-| — | — | — | — | — | No tests run yet. |
+| 2026-11-09 | Windows 10 (`win32 x64`), PowerShell 5.1 | uncommitted | `node scripts/check-toolchain.mjs` | PASS | Ran by owner: Node 26.13.0, pnpm 12.18.0, Docker Engine 29.9.3, Compose 5.7.0, Git 2.39.0 all `ok`. |
+| 2026-11-09 | AI Studio Linux (`linux x64`) | uncommitted | `npm run preinstall` | PASS | Ran by AI: exited code 1 (`This repository uses pnpm only — see Blueprint §4.6.`). |
+| 2026-11-09 | AI Studio Linux (`linux x64`) | uncommitted | `pnpm install --frozen-lockfile --config.engine-strict=false` | PASS | Ran by AI: `Scope: all 8 workspace projects`, `Lockfile is up to date, resolution step is skipped`. |
+| 2026-11-09 | AI Studio Linux (`linux x64`) | uncommitted | `pnpm typecheck && pnpm lint && pnpm test && pnpm build` | PASS | Ran by AI: topological execution across all 7 workspace packages (`Scope: 7 of 8 workspace projects`). |
+| 2026-11-09 | Windows 10 (`win32 x64`), VS Code PowerShell | uncommitted | `pnpm install --frozen-lockfile` & `pnpm typecheck` | PASS | Confirmed by owner on host machine. |
+| 2026-11-09 | AI Studio Linux (`linux x64`) | uncommitted | `pnpm db:migrate` (missing env vs valid env) & `pnpm db:seed` | PASS | Ran by AI: exits 1 without `DIRECT_DATABASE_URL`, exits 0 when set; Compose v5 structure verified. |
 
 **Rules**
 - One row per run, in order.
