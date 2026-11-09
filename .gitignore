@@ -1,0 +1,53 @@
+# dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# environment — keep templates, never real values
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# build output
+dist/
+build/
+out/
+coverage/
+*.tsbuildinfo
+
+# logs
+logs/
+*.log
+npm-debug.log*
+
+# local databases and volumes
+data/
+mongo-data/
+redis-data/
+qdrant-data/
+minio-data/
+
+# generated artifacts and uploads
+generated/
+uploads/
+artifacts-local/
+
+# test output
+test-results/
+playwright-report/
+.playwright/
+.vitest/
+
+# editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# secrets and credentials (defence in depth)
+*.pem
+*.key
+!**/*.example.key
+.git-credentials
+.netrc

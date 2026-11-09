@@ -1,0 +1,196 @@
+openapi: 3.1.0
+info:
+  title: Kartik.ai API
+  version: 0.1.0
+  description: |
+    Public surface only. The browser talks to the Gateway and never to the five
+    services directly, and never to /internal/* routes.
+
+    Contract rules that are not expressible in OpenAPI and must be enforced in code:
+      - Mutating endpoints require an `Idempotency-Key` header (400 IDEMPOTENCY_KEY_REQUIRED).
+      - `requestId` is derived from that header; the Gateway generates only `traceId`.
+      - Foreign or non-existent resources both return 404 RESOURCE_NOT_FOUND.
+      - List endpoints are cursor-paginated: ?limit (max 100), ?cursor.
+servers:
+  - url: /api/v1
+
+paths:
+  /auth/google:
+    post:
+      summary: Exchange a Firebase ID token for an application session
+      security: []
+      responses:
+        '200': { description: Session created; HttpOnly cookie set }
+        '401': { description: AUTH_REQUIRED }
+  /auth/me:
+    get:
+      summary: Return the current authenticated user
+      responses:
+        '200': { description: User profile }
+        '401': { description: SESSION_EXPIRED }
+  /auth/logout:
+    post:
+      summary: Revoke the session and clear the cookie
+      responses:
+        '200': { description: Signed out }
+
+  /conversations:
+    get:
+      summary: List the caller's conversations (cursor-paginated)
+      responses:
+        '200': { description: Page of conversations }
+    post:
+      summary: Create a conversation
+      responses:
+        '201': { description: Created }
+  /conversations/{id}:
+    get:
+      summary: Conversation metadata plus the most recent page of messages
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Conversation }
+        '404': { description: RESOURCE_NOT_FOUND }
+    delete:
+      summary: Begin the two-phase deletion (Section 5.6); idempotent
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: deletionState=requested with purgeAfter }
+        '409': { description: RESOURCE_IN_USE — a run is active }
+  /conversations/{id}/messages:
+    get:
+      summary: Cursor-paginated message history, ascending by createdAt,_id
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 100, default: 30 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Page of messages plus meta.nextCursor }
+        '400': { description: VALIDATION_ERROR — foreign or tampered cursor }
+  /conversations/{id}/artifacts:
+    get:
+      summary: Artifact references for one conversation
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Artifact list }
+
+  /chat/messages:
+    post:
+      summary: Save a user message and coordinate the agent response
+      description: Requires Idempotency-Key. Same key + same fingerprint returns the stored result; same key + different payload returns 409 IDEMPOTENCY_CONFLICT.
+      responses:
+        '200': { description: Stored result (replay) }
+        '202': { description: RUN_IN_PROGRESS }
+        '400': { description: IDEMPOTENCY_KEY_REQUIRED }
+        '402': { description: INSUFFICIENT_CREDITS }
+        '409': { description: IDEMPOTENCY_CONFLICT or EXECUTION_UNKNOWN }
+        '429': { description: RATE_LIMITED }
+
+  /artifacts/{id}:
+    get:
+      summary: Artifact metadata and file list after an ownership check
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Artifact }
+        '404': { description: RESOURCE_NOT_FOUND }
+  /artifacts/{id}/download:
+    get:
+      summary: Short-lived signed download URL
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Signed URL }
+        '404': { description: RESOURCE_NOT_FOUND }
+
+  /files/upload-intent:
+    post:
+      summary: Validate the file and issue upload instructions
+      responses:
+        '200': { description: Upload target }
+        '400': { description: FILE_TOO_LARGE or UNSUPPORTED_FILE_TYPE }
+  /files/{id}/complete:
+    post:
+      summary: Confirm the upload and start asynchronous ingestion
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '202': { description: 'Accepted; poll /files/{id}' }
+  /files/{id}:
+    get:
+      summary: Processing status (poll target)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 'uploaded | processing | indexed | failed | deleted' }
+    delete:
+      summary: Delete the file, its objects and its vectors; idempotent
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '202': { description: Accepted }
+  /files/{id}/download:
+    get:
+      summary: Short-lived signed URL for the source file
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Signed URL }
+  /files/{id}/reindex:
+    post:
+      summary: Re-run ingestion after a chunking or embedding change; safe to repeat
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '202': { description: Accepted; status reset to processing }
+
+  /billing/initialize:
+    post:
+      summary: Idempotently create the Free entitlement, account and welcome grant
+      responses:
+        '200': { description: Initialised (or already initialised) }
+  /billing/plans:
+    get:
+      summary: Server-defined plan catalogue
+      responses:
+        '200': { description: Plans }
+  /billing/summary:
+    get:
+      summary: Current plan, credits and usage; read-only
+      responses:
+        '200': { description: Summary }
+  /billing/orders:
+    post:
+      summary: Create a Razorpay order (amount comes from the plan, never the client)
+      responses:
+        '201': { description: Order }
+  /billing/verify:
+    post:
+      summary: Verify the checkout signature server-side
+      responses:
+        '200': { description: Verified }
+        '400': { description: PAYMENT_VERIFICATION_FAILED }
+  /billing/webhook:
+    post:
+      summary: Provider webhook, verified against the raw body
+      security: []
+      responses:
+        '200': { description: Processed or already processed }
+        '400': { description: PAYMENT_VERIFICATION_FAILED }
+
+  /usage:
+    get:
+      summary: Remaining rate limits and usage summary
+      responses:
+        '200': { description: Usage }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: kartik_session
+security:
+  - sessionCookie: []

@@ -1,0 +1,19 @@
+# Placeholder pipeline. Each job is enabled as the corresponding phase lands;
+# do not leave a green workflow that never ran a test.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Note
+        run: |
+          echo "Phase 1 adds: pnpm 12.18.0 (pnpm/action-setup reads packageManager), pnpm install --frozen-lockfile, lint, typecheck, unit tests."
+          echo "Phase 2 adds: integration tests against Compose services."
+          echo "Phase 15 adds: docker buildx --platform linux/arm64 builds."

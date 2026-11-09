@@ -1,0 +1,27 @@
+# Keeps the free VM from being classed as idle (Section 3.4) and doubles as an
+# uptime check. Requires a repository variable DEMO_URL and secret ALERT_WEBHOOK.
+name: keepalive
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health/live
+        env:
+          DEMO_URL: ${{ vars.DEMO_URL }}
+        run: |
+          if [ -z "$DEMO_URL" ]; then
+            echo "DEMO_URL repository variable not set yet — skipping."
+            exit 0
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$DEMO_URL/health/live" || true)
+          echo "status=$code"
+          if [ "$code" != "200" ]; then
+            echo "demo is not healthy"
+            exit 1
+          fi

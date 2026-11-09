@@ -1,0 +1,13 @@
+# Placeholder. Real deploy arrives in Phase 16 (health gate + rollback).
+# Never store long-lived cloud keys here; use a restricted deploy key or OIDC.
+name: deploy-demo-vm
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Note
+        run: echo "Not implemented until Phase 16."

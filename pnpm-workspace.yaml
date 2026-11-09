@@ -1,0 +1,27 @@
+# pnpm 12 workspace configuration — Blueprint v3.2 §4.6.
+# pnpm 12 hard-fails on an unrecognised key here (ERR_PNPM_UNRECOGNIZED_WORKSPACE_SETTINGS),
+# so this file stays short and every key below is one pnpm 12 recognises.
+# The pnpm version itself is pinned in package.json -> "packageManager".
+
+packages:
+  - "backend/shared"
+  - "backend/gateway"
+  - "backend/services/*"
+  - "frontend"
+
+# Dependency lifecycle scripts do not run unless allowed.
+# Map form (pnpm 11+). `true` allows, `false` records a deliberate refusal.
+# strictDepBuilds is on by default: an unlisted native package FAILS the install
+# with ERR_PNPM_IGNORED_BUILDS rather than silently skipping its build.
+allowBuilds:
+  esbuild: true # Vite / bundler step
+
+# Refuse anything published in the last 24 hours unless explicitly excluded.
+# Override per package with minimumReleaseAgeExclude, never globally.
+minimumReleaseAge: 1440
+
+# CI still pins this explicitly with --frozen-lockfile.
+frozenLockfile: true
+
+# The React ecosystem publishes peer ranges that will never agree.
+strictPeerDependencies: false
