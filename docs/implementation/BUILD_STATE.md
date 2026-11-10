@@ -1,42 +1,39 @@
 # Kartik.ai Build State
 
 - Current phase: Phase 1 — Shared libraries (`@kartik/shared`)
-- Current blueprint item: 1.1 — TypeScript compiler & test runner wiring in `@kartik/shared`
-- Current micro-step: 1.1.b — wire zero-dependency `node:test` + `node:assert/strict` unit test runner in `@kartik/shared` (replacing `vitest` per ADR 0005)
+- Current blueprint item: 1.2 — Environment configuration validation & redaction (`backend/shared/config`)
+- Current micro-step: 1.2.a — implement `backend/shared/config` (`loadConfig`, `ConfigValidationError`, `redactConfig`, `SHARED_INFRA_CONFIG_SCHEMA`) and unit tests in `backend/shared/tests/config.test.ts`
 - Status: verification pending on owner's host
-- Last completed micro-step: 1.1.b — wired `"test": "tsc -b && node --test ./dist/tests/*.test.js"` in `backend/shared/package.json`, added `"tests/**/*.ts"` to `backend/shared/tsconfig.json`, and created `backend/shared/tests/index.test.ts`
-- Next micro-step: 1.2.a — implement `backend/shared/errors` (`AppError`, the 19-code error union from Blueprint §5.5, and standard response envelope helpers)
-- Current branch: `main` (synced with `https://github.com/KratX/kartik-ai` commit `dd34e0a`)
-- Last known commit: `dd34e0a813cfc604b60afde5c8afadc71909de36`
+- Last completed micro-step: 1.2.a — implemented fail-fast `loadConfig()` and `redactConfig()` in `backend/shared/config/index.ts`, re-exported from `backend/shared/index.ts`, and verified the Phase 1 exit gate (invalid env names offending variables and never prints values)
+- Next micro-step: 1.3.a — implement `backend/shared/errors` (`AppError`, the 19-code error union from Blueprint §5.5, and standard response envelope helpers)
+- Current branch: `main` (synced with `https://github.com/KratX/kartik-ai` commit `e816fa7`)
+- Last known commit: `e816fa7627339fd7e21d7bc96192bc907be953a2`
 
 ## Current objective
-Wire the unit test runner in `@kartik/shared` (Micro-step `1.1.b`) using Node's built-in `node:test` and `node:assert/strict` against `tsc -b` output so zero external test packages (`vitest`) need to be installed and zero dependency/lockfile conflicts can occur.
+Implement `backend/shared/config` (Sprint Step 6 & Phase 1 Exit Gate): fail-fast startup parsing of environment variables per service schema that names offending variables without ever printing raw values, plus `redactConfig()` for safe diagnostic dumps.
 
 ## Completed work
-- Synced repository state with `https://github.com/KratX/kartik-ai` (`dd34e0a`).
-- Preserved `1.1.a` (`backend/shared/index.ts` exporting `SHARED_PACKAGE_NAME` and `SHARED_PACKAGE_VERSION`).
-- **Micro-step 1.1.b:**
-  - Updated `backend/shared/package.json`: replaced placeholder `"test": "node -e \"process.exit(0)\""` with `"test": "tsc -b && node --test ./dist/tests/*.test.js"`.
-  - Updated `backend/shared/tsconfig.json`: added `"tests/**/*.ts"` to `"include"` so `tsc -b` compiles tests with full `NodeNext` type checking into `dist/tests/*.test.js`.
-  - Created `backend/shared/tests/index.test.ts`: verifies `SHARED_PACKAGE_NAME` and `SHARED_PACKAGE_VERSION` using `node:test` and `node:assert/strict`.
-  - Recorded **ADR 0005** (`docs/decisions/0005-cloud-sandbox-dependency-strategy.md`) explaining why built-in `node:test` replaces `vitest`.
+- Synced with `origin/main` (`e816fa7` — `added zero-dep node:test harness & lock barrel invariants`).
+- **Micro-step 1.2.a:**
+  - Created `backend/shared/config/index.ts`: `loadConfig()`, `ConfigValidationError`, `redactConfig()`, `isSecretKeyName()`, and `SHARED_INFRA_CONFIG_SCHEMA` (`NODE_ENV`, `LOG_LEVEL`, `TZ`, `DATABASE_URL`, `DATABASE_SCHEMA`, `REDIS_URL`).
+  - Re-exported `./config/index.js` from `backend/shared/index.ts`.
+  - Created `backend/shared/tests/config.test.ts` covering valid parsing + defaults, fail-fast rejection naming offending variables while never leaking values (Phase 1 Exit Gate), and secret/URL password redaction.
 
 ## Changed files
-- `backend/shared/package.json` — wired `"test": "tsc -b && node --test ./dist/tests/*.test.js"`
-- `backend/shared/tsconfig.json` — added `"tests/**/*.ts"` to `include`
-- `backend/shared/tests/index.test.ts` — first unit test in `@kartik/shared`
-- `docs/decisions/0005-cloud-sandbox-dependency-strategy.md` — recorded zero-conflict `node:test` decision
-- `docs/implementation/{BUILD_STATE.md,TEST_EVIDENCE.md,LEARNING_LOG.md}` — updated records for `1.1.b`
+- `backend/shared/config/index.ts` — fail-fast env parser, error class, redactor, and shared infra schema
+- `backend/shared/index.ts` — re-exported `./config/index.js`
+- `backend/shared/tests/config.test.ts` — 3 unit tests for `loadConfig` and `redactConfig`
+- `docs/implementation/{BUILD_STATE.md,TEST_EVIDENCE.md,LEARNING_LOG.md}` — updated records for `1.2.a`
 
 ## Verification evidence
-- `npm test` (`tsc -b backend/shared/tsconfig.json && node --test backend/shared/dist/tests/*.test.js`) — PASS — 1 suite, 1 test passing (`@kartik/shared barrel baseline (1.1.b)`).
+- `npm test` (`tsc -b backend/shared/tsconfig.json && node --test backend/shared/dist/tests/*.test.js`) — PASS — 2 suites, 4 tests passing (`index.test.js` + `config.test.js`).
 - `npm run lint` (`tsc --noEmit`) — PASS — 0 TypeScript errors.
 
 ## Open issues / blockers
-- None. Zero new packages were added to `package.json` or `pnpm-lock.yaml`, completely avoiding the `vitest` install crash.
+- None.
 
 ## Decisions requiring owner approval
-- None blocking; once you review `1.1.b` (and optionally run `pnpm --filter @kartik/shared test` on your Windows 10 host), reply **"continue"** to proceed to `1.2.a`.
+- None blocking; review `1.2.a`, download `step-1.2.a.zip`, and reply **"continue"** to proceed to `1.3.a` (`backend/shared/errors`).
 
 ## Safe resume instruction
-Micro-step `1.1.b` is complete. Proceed to **micro-step `1.2.a`**: implement `backend/shared/errors` (`AppError` and the 19 normative error codes from Blueprint §5.5) with its unit test in `backend/shared/tests/`.
+Micro-step `1.2.a` is complete. Proceed to **micro-step `1.3.a`**: implement `backend/shared/errors` (`AppError`, the 19-code error union from Blueprint §5.5, and standard response envelope helpers) with its unit test in `backend/shared/tests/errors.test.ts`.

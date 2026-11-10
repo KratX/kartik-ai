@@ -16,9 +16,9 @@
     }
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b --force",
     "typecheck": "tsc --noEmit",
     "lint": "node -e \"process.exit(0)\"",
-    "test": "tsc -b && node --test ./dist/tests/*.test.js"
+    "test": "tsc -b --force && node --test \"./dist/tests/*.test.js\""
   }
 }

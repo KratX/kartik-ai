@@ -82,5 +82,20 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
   - **Compile-then-test (`tsc -b && node --test ./dist/tests/*.test.js`):** Compiles TypeScript tests under the exact same strict `NodeNext` rules as production code, then executes the emitted `.js` files directly with Node.
 - **Problem encountered and why the fix worked:** Earlier sessions crashed during `1.1.b` when attempting to install `vitest` into the workspace inside the AI Studio container. Using `node:test` + `tsc -b` (recorded in ADR 0005) requires zero package installations and works identically under `pnpm test` on Windows 10 (Node 26.13.0) and `npm test` in the Cloud Sandbox (Node 22.23.2).
 - **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (or `pnpm test`) on Windows 10, or `npm test` in the sandbox, and inspect `backend/shared/dist/tests/index.test.js`.
-- **What remains unclear or deferred:** Implementing `backend/shared/errors` (`1.2.a`) next.
+- **What remains unclear or deferred:** Implementing `backend/shared/config` (`1.2.a`) next.
+
+---
+
+### Phase 1 / 1.2.a — Fail-fast environment config validator & secret redactor (`@kartik/shared/config`)
+- **Date:** 2026-11-10
+- **Concept learned:** Why configuration is validated once at boot (`loadConfig`) rather than lazily when a route is first hit, and why startup validation errors must name the offending environment variable while strictly omitting its value so malformed secrets never leak into container stdout or crash logs.
+- **What was implemented:** Created `backend/shared/config/index.ts` (`loadConfig`, `ConfigValidationError`, `redactConfig`, `isSecretKeyName`, `SHARED_INFRA_CONFIG_SCHEMA`), re-exported it from `backend/shared/index.ts`, and added `backend/shared/tests/config.test.ts`.
+- **Important terms and how they apply here:**
+  - **Fail-fast boot validation:** Every service passes its `ConfigSchema` to `loadConfig()` before binding a port. If `REDIS_URL` is missing or `GATEWAY_CALLER_CREDENTIAL` is shorter than 32 bytes, the process exits immediately with a `ConfigValidationError` listing all invalid keys at once.
+  - **Value-free error reporting (Phase 1 Exit Gate):** `ConfigValidationError` records the variable name (`GATEWAY_CALLER_CREDENTIAL`) and the rule that failed (`must be at least 32 bytes`), never echoing the raw string passed in `process.env`.
+  - **Embedded URL credential redaction:** `DATABASE_URL` and `REDIS_URL` embed passwords inside the URI (`postgresql://user:pass@host/db`). `redactConfig()` parses the URL and replaces `u.password` with `REDACTED` while keeping the host and database name visible for debugging.
+- **Problem encountered and why the fix worked:** Multi-line PEM keys (`FIREBASE_PRIVATE_KEY`) stored in `.env` files often contain literal `\n` sequences; `loadConfig()` automatically unescapes `\n` on `*PRIVATE_KEY` fields while keeping strict trimming on all other strings.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (or `npm test`) and inspect `backend/shared/tests/config.test.ts`.
+- **What remains unclear or deferred:** Implementing `backend/shared/errors` (`1.3.a`) next.
+
 
