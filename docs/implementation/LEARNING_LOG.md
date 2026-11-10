@@ -196,3 +196,17 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **Problem encountered and why the fix worked:** None — compiled and passed on the first run.
 - **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`29/29` passing tests across 9 suites) and inspect `backend/shared/tests/middleware.test.ts`.
 - **What remains unclear or deferred:** Phase 1 is complete; Phase 2 (`@kartik/auth` service & session lifecycle) begins next.
+
+---
+
+### Phase 2 / 2.1.a — Auth service config, `0001_auth_users.sql` migration, and `UserRepository` (`@kartik/auth`)
+- **Date:** 2026-11-10
+- **Concept learned:** How a downstream microservice (`@kartik/auth`) references `@kartik/shared` via TypeScript project references (`references: [{ path: "../../shared" }]`), why Auth owns only user identity and sessions (`auth.users`, Invariant #2) and never touches credits or billing tables, and how `INSERT ... ON CONFLICT (firebase_uid) DO UPDATE` makes Google sign-in idempotent across repeat logins.
+- **What was implemented:** Wired `backend/services/auth/package.json` and `tsconfig.json`, created `src/config/index.ts`, `src/models/index.ts` (`AUTH_MIGRATION_0001`), `src/repositories/index.ts` (`PostgresUserRepository` + `InMemoryUserRepository`), `src/index.ts`, and `tests/user-repository.test.ts`.
+- **Important terms and how they apply here:**
+  - **Idempotent identity upsert (`ON CONFLICT (firebase_uid) DO UPDATE`):** The first time a Google user signs in, a new `usr_<uuid>` row is inserted. On every subsequent sign-in, the same `usr_<uuid>` primary key is preserved while `display_name`, `avatar_url`, and `last_login_at` are refreshed.
+  - **Disabled account refusal (`403 FORBIDDEN` — Invariant #20):** Unlike missing/foreign resources which return `404 NOT_FOUND`, a disabled user signing into their own account receives `403 FORBIDDEN` because they own the identity and policy refuses the action.
+  - **Cross-field provider validation (`AUTH_PROVIDER_MODE`):** Defaults to `'mock'` so local development and CI run with zero external credentials; when switched to `'firebase'`, `loadAuthConfig` requires `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY` at boot.
+- **Problem encountered and why the fix worked:** None — compiled across the `@kartik/shared` project reference and passed all 4 unit tests on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/auth test` and inspect `backend/services/auth/tests/user-repository.test.ts`.
+- **What remains unclear or deferred:** Implementing the Firebase ID-token verification adapter (`2.2.a`) next.
