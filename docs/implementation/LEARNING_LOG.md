@@ -210,3 +210,17 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **Problem encountered and why the fix worked:** None — compiled across the `@kartik/shared` project reference and passed all 4 unit tests on the first run.
 - **How to inspect the feature:** Run `pnpm --filter @kartik/auth test` and inspect `backend/services/auth/tests/user-repository.test.ts`.
 - **What remains unclear or deferred:** Implementing the Firebase ID-token verification adapter (`2.2.a`) next.
+
+---
+
+### Phase 2 / 2.2.a — Firebase ID-token verification adapter (`@kartik/auth/services/firebase-verifier`)
+- **Date:** 2026-11-10
+- **Concept learned:** Why external identity verification belongs behind an interface (`FirebaseTokenVerifier`) with a deterministic mock mode (`MockFirebaseTokenVerifier`, default per Invariant #19) and a cryptographic RS256 verifier (`JwtFirebaseTokenVerifier`) that checks `iss`, `aud` (`FIREBASE_PROJECT_ID`), `email_verified === true`, and `exp` before Auth ever creates a session.
+- **What was implemented:** Created `backend/services/auth/src/services/firebase-verifier.ts`, `backend/services/auth/src/services/index.ts`, re-exported from `backend/services/auth/src/index.ts`, and added `backend/services/auth/tests/firebase-verifier.test.ts`.
+- **Important terms and how they apply here:**
+  - **Key ID (`kid`) rotation:** Google signs Firebase ID tokens with rotating RSA keys published at `securetoken@system.gserviceaccount.com`. `JwtFirebaseTokenVerifier` inspects `header.kid`, resolves the matching public key, and verifies the `RSA-SHA256` signature via `node:crypto`.
+  - **Audience (`aud`) & Issuer (`iss`) binding:** A valid Google-signed Firebase token for *another* Firebase project will have a valid RSA signature from Google, so checking `aud === FIREBASE_PROJECT_ID` and `iss === "https://securetoken.google.com/<projectId>"` is what stops cross-project token replay.
+  - **`email_verified === true` check:** Prevents account pre-hijacking via unverified email claims.
+- **Problem encountered and why the fix worked:** None — compiled and passed all 4 unit tests on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/auth test` (`8/8` passing tests across 2 suites) and inspect `backend/services/auth/tests/firebase-verifier.test.ts`.
+- **What remains unclear or deferred:** Implementing the opaque Redis session service (`2.3.a`) next.
