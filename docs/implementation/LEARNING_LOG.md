@@ -98,4 +98,19 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (or `npm test`) and inspect `backend/shared/tests/config.test.ts`.
 - **What remains unclear or deferred:** Implementing `backend/shared/errors` (`1.3.a`) next.
 
+---
+
+### Phase 1 / 1.3.a — Normative error catalogue, single response envelope, and safe HTTP error mapper (`@kartik/shared/errors`)
+- **Date:** 2026-11-10
+- **Concept learned:** Why a distributed system needs one closed set of machine-readable error codes (`ERROR_CATALOGUE`), one response envelope shape (`{ requestId?, traceId, data, meta: { nextCursor }, error }`), and an anti-enumeration rule (`404 NOT_FOUND` for both non-existent and foreign-owned resources, reserving `403 FORBIDDEN` strictly for policy refusals on resources the caller does own).
+- **What was implemented:** Created `backend/shared/errors/index.ts` (`ERROR_CATALOGUE`, `AppError`, `isAppError`, `createSuccessEnvelope`, `mapErrorToHttpResponse`), re-exported it from `backend/shared/index.ts`, and added `backend/shared/tests/errors.test.ts`.
+- **Important terms and how they apply here:**
+  - **Anti-enumeration (`404` vs `403`):** Returning `403` when User B requests User A's `conversationId` confirms to an attacker that the UUID exists. Returning `404 NOT_FOUND` makes a foreign resource indistinguishable from a missing one.
+  - **Error boundary sanitization (`mapErrorToHttpResponse`):** Only explicit `AppError` instances expose their `.code` and `.message` to the caller. Any unexpected runtime `Error` (e.g. a `pg` connection failure or upstream SDK exception) is converted to `500 INTERNAL_ERROR` with a safe message and the request's `traceId`.
+  - **`Retry-After` header contract:** When `RATE_LIMITED` (`429`) is thrown with `retryAfterSeconds`, `mapErrorToHttpResponse` automatically populates the HTTP `Retry-After` header.
+- **Problem encountered and why the fix worked:** Earlier when extracting `.zip` archives on Windows, extracted files retained archive timestamps older than the local `tsconfig.tsbuildinfo`, causing `tsc -b` to skip compiling new test files. Switching `"build"` and `"test"` in `backend/shared/package.json` to `tsc -b --force` guarantees deterministic compilation across zip extractions.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`8/8` passing tests across 3 suites) and inspect `backend/shared/tests/errors.test.ts`.
+- **What remains unclear or deferred:** Implementing `backend/shared/logger` (`1.4.a`) next.
+
+
 
