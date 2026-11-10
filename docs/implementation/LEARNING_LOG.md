@@ -112,5 +112,20 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`8/8` passing tests across 3 suites) and inspect `backend/shared/tests/errors.test.ts`.
 - **What remains unclear or deferred:** Implementing `backend/shared/logger` (`1.4.a`) next.
 
+---
+
+### Phase 1 / 1.4.a — Structured JSON logger & recursive secret redaction (`@kartik/shared/logger`)
+- **Date:** 2026-11-10
+- **Concept learned:** How structured JSON logs with `.child({ traceId, requestId })` bindings let you grep a single request across Gateway, Auth, Chat, Agent, and Billing, and how recursive field + value redaction enforces Readiness Gate G9 (Log Hygiene) even when a developer accidentally passes raw request headers or provider objects into a log call.
+- **What was implemented:** Created `backend/shared/logger/index.ts` (`createLogger`, `redactLogValue`), re-exported it from `backend/shared/index.ts`, and added `backend/shared/tests/logger.test.ts`.
+- **Important terms and how they apply here:**
+  - **Child logger bindings (`logger.child({ traceId, requestId })`):** Created once per incoming HTTP request in middleware so every downstream log line automatically includes `traceId` (correlation) and `requestId` (run identity) without manual repetition.
+  - **Two-layer redaction (Key name + Value pattern):** `redactLogValue` masks any property matching `/(secret|credential|private_key|api_key|password|token|cookie|set-cookie|authorization|x-internal-token|x-razorpay-signature|signedurl|signed_url)/i` AND scans string values for inline `Bearer ...`, `kartik_session=...`, `gsk_...`, `sk-or-...`, `tvly-...`, and `rzp_...` patterns.
+  - **Circular reference guard (`WeakSet`):** Prevents `JSON.stringify` from throwing `TypeError: Converting circular structure to JSON` if an object with circular references is logged.
+- **Problem encountered and why the fix worked:** None — pure TypeScript implementation compiled and passed on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`10/10` passing tests across 4 suites) and inspect `backend/shared/tests/logger.test.ts`.
+- **What remains unclear or deferred:** Implementing `backend/shared/redis` key builders (`1.5.a`) next.
+
+
 
 

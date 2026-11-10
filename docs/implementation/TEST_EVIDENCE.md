@@ -18,6 +18,8 @@ Chronological record of test commands and their real results. Never invent a res
 | 2026-11-10 | AI Studio Linux (`linux x64`) | `e816fa7` | `tsc -b backend/shared/tsconfig.json && node --test backend/shared/dist/tests/*.test.js` (`1.2.a`) | PASS | Ran by AI: `config.test.js` (3/3) and `index.test.js` (1/1) passed; verified `ConfigValidationError` names offending keys (`DATABASE_URL`, `DATABASE_SCHEMA`, `REDIS_URL`, `GATEWAY_CALLER_CREDENTIAL`) and never prints raw secret values (Phase 1 Exit Gate). |
 | 2026-11-10 | Windows 10 (`win32 x64`), PowerShell | `1.2.a` | `pnpm --filter @kartik/shared test` (`tsc -b --force && node --test "./dist/tests/*.test.js"`) | PASS | Confirmed by owner on host after adding `--force` to prevent stale `.tsbuildinfo` skipping extracted `.zip` files. |
 | 2026-11-10 | AI Studio Linux (`linux x64`) | `1.3.a` | `tsc -b --force && node --test "./dist/tests/*.test.js"` (`1.3.a`) | PASS | Ran by AI: 3 suites, 8/8 tests passing (`index.test.js`, `config.test.js`, `errors.test.js`); verified all 19 error codes, `Retry-After` header, and raw DB error redaction. |
+| 2026-11-10 | Windows 10 (`win32 x64`), PowerShell | `1.3.a` | `pnpm --filter @kartik/shared test` | PASS | Confirmed by owner on host: 3 suites, 8/8 tests passing in 80.17ms. |
+| 2026-11-10 | AI Studio Linux (`linux x64`) | `1.4.a` | `tsc -b --force && node --test "./dist/tests/*.test.js"` (`1.4.a`) | PASS | Ran by AI: 4 suites, 10/10 tests passing (`logger.test.js` verified `.child({ traceId, requestId })` correlation and Gate G9 redaction of cookies, Bearer tokens, signed URLs, and Razorpay secrets). |
 
 **Rules**
 - One row per run, in order.
