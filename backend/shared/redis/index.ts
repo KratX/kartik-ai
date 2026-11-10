@@ -72,7 +72,7 @@ export const RedisKeys = {
   /**
    * `sess:{sessionId}` — hash, 7 days sliding TTL, written by Auth.
    */
-  session(sessionId: string, ttlSeconds = REDIS_TTL_SECONDS.SESSION_SLIDING): RedisKeySpec {
+  session(sessionId: string, ttlSeconds: number = REDIS_TTL_SECONDS.SESSION_SLIDING): RedisKeySpec {
     const cleanId = assertSafeKeySegment('sessionId', sessionId);
     return {
       key: `sess:${cleanId}`,
@@ -88,7 +88,7 @@ export const RedisKeys = {
     scope: RateLimitScope,
     userId: string,
     windowBucket: string,
-    windowTtlSeconds = REDIS_TTL_SECONDS.DEFAULT_RATE_LIMIT_WINDOW
+    windowTtlSeconds: number = REDIS_TTL_SECONDS.DEFAULT_RATE_LIMIT_WINDOW
   ): RedisKeySpec {
     const cleanUser = assertSafeKeySegment('userId', userId);
     const cleanWindow = assertSafeKeySegment('windowBucket', windowBucket);
@@ -106,7 +106,7 @@ export const RedisKeys = {
   ipRateLimit(
     ipAddress: string,
     windowBucket: string,
-    windowTtlSeconds = REDIS_TTL_SECONDS.DEFAULT_RATE_LIMIT_WINDOW
+    windowTtlSeconds: number = REDIS_TTL_SECONDS.DEFAULT_RATE_LIMIT_WINDOW
   ): RedisKeySpec {
     const normalizedIp = ipAddress.trim().replace(/:/g, '_');
     const cleanIp = assertSafeKeySegment('ipAddress', normalizedIp);

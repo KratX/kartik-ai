@@ -27,6 +27,6 @@ Tick an item only when evidence exists in `TEST_EVIDENCE.md` or `BUILD_STATE.md`
 - [x] 1.6 `shared/redis` — Redis key builders (§5.2) with TTL enforcement (`1.5.a`)
 - [x] 1.7 `shared/database` — Postgres pool (`idleTimeoutMillis: 10_000`), transaction helper, and migration runner (§5.1) (`1.8.a`)
 - [x] 1.8 `shared/auth` — Ed25519 user-context assertion sign/verify (§6.4) + constant-time caller credential check (§6.3) (`1.6.a`)
-- [ ] 1.9 `shared/middleware` & `shared/storage` — request context, validation, rate-limit factory, object storage interface
+- [x] 1.9 `shared/middleware` & `shared/storage` — request context, validation, rate-limit factory, object storage interface (`1.8.a`, `1.9.a`)
 
-**Phase 1 exit gate:** Unit tests for the error mapper, the assertion round-trip, a wrong-`aud` rejection, and the Redis key builder pass; a deliberately invalid env configuration fails startup naming the offending variable without printing its value.
+**Phase 1 exit gate (PASSED — 9 suites / 29 tests):** Unit tests for the error mapper, the assertion round-trip, a wrong-`aud` rejection, and the Redis key builder pass; a deliberately invalid env configuration fails startup naming the offending variable without printing its value.

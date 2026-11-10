@@ -182,3 +182,17 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **Problem encountered and why the fix worked:** None — compiled and passed on the first run.
 - **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`25/25` passing tests across 8 suites) and inspect `backend/shared/tests/database-storage.test.ts`.
 - **What remains unclear or deferred:** Implementing `backend/shared/middleware` (`1.9.a`) and closing the Phase 1 Exit Gate next.
+
+---
+
+### Phase 1 / 1.9.a — Middleware pipeline & Phase 1 Exit Gate closure (`@kartik/shared/middleware`)
+- **Date:** 2026-11-10
+- **Concept learned:** How request middleware enforces architectural invariants before controller code ever runs: the Gateway mints a fresh `traceId` (`trc_<uuid>`) while forwarding the client's `Idempotency-Key` unchanged as `requestId`, `DEMO_READ_ONLY` blocks mutating verbs with `403` during public portfolio spikes, and rate limiters fail closed (`503 LIMITER_UNAVAILABLE`) when protecting paid/quota-bound endpoints.
+- **What was implemented:** Created `backend/shared/middleware/index.ts` (`createRequestContextMiddleware`, `createDemoReadOnlyMiddleware`, `createRateLimitMiddleware`, `InMemoryRateLimitStore`, `createInternalAuthMiddleware`, `createErrorBoundaryMiddleware`), re-exported it from `backend/shared/index.ts`, and added `backend/shared/tests/middleware.test.ts`.
+- **Important terms and how they apply here:**
+  - **Run identity vs trace identity (`requestId` vs `traceId` — Invariant #15):** `traceId` correlates logs for a single HTTP attempt (regenerated per hop/retry at the Gateway); `requestId` is the client's `Idempotency-Key` identifying the logical business operation across retries so a retry never double-charges or duplicates a message.
+  - **Fail-closed vs fail-open rate limiting (`503 LIMITER_UNAVAILABLE`):** If Redis is unreachable on an AI/billing endpoint (`failOpen: false`), the middleware returns `503 LIMITER_UNAVAILABLE` rather than allowing unlimited unthrottled provider calls.
+  - **`DEMO_READ_ONLY` kill switch (§12):** A single boolean flag that allows `GET`/`HEAD`/`OPTIONS` browsing of seeded conversations while rejecting `POST`/`PUT`/`PATCH`/`DELETE` with `403 DEMO_READ_ONLY`.
+- **Problem encountered and why the fix worked:** None — compiled and passed on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`29/29` passing tests across 9 suites) and inspect `backend/shared/tests/middleware.test.ts`.
+- **What remains unclear or deferred:** Phase 1 is complete; Phase 2 (`@kartik/auth` service & session lifecycle) begins next.
