@@ -19,6 +19,6 @@
     "build": "tsc -b",
     "typecheck": "tsc --noEmit",
     "lint": "node -e \"process.exit(0)\"",
-    "test": "node -e \"process.exit(0)\""
+    "test": "tsc -b && node --test ./dist/tests/*.test.js"
   }
 }

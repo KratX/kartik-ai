@@ -14,6 +14,7 @@ Chronological record of test commands and their real results. Never invent a res
 | 2026-11-09 | AI Studio Linux (`linux x64`) | uncommitted | `.prettierrc.json` & `.github/workflows/ci.yml` validation | PASS | Ran by AI: JSON and CI workflow steps (`single-lockfile`, `pnpm/action-setup@v4`, Node 26/24 matrix, `pnpm toolchain`, `pnpm install --frozen-lockfile`, `typecheck`, `lint`, `test`, `build`) verified. |
 | 2026-11-09 | Windows 10 (`win32 x64`), VS Code PowerShell | uncommitted | `pnpm install --frozen-lockfile` (`0.9.c` closure) | PASS | Ran by owner: `Scope: all 8 workspace projects`, `Lockfile is up to date, resolution step is skipped`, `Done in 51ms using pnpm v12.18.0`. |
 | 2026-11-09 | AI Studio Linux (`linux x64`) | uncommitted | `pnpm install --frozen-lockfile --config.engine-strict=false && pnpm typecheck && pnpm build` (`1.1.a`) | PASS | Ran by AI: `typescript@7.0.2` and `@types/node@26.6.6` passed `minimumReleaseAge` policy (23 entries), `tsc --noEmit` and `tsc -b` compiled `backend/shared/index.ts` -> `dist/index.{js,d.ts,js.map,d.ts.map}` + `tsconfig.tsbuildinfo`. |
+| 2026-11-10 | AI Studio Linux (`linux x64`) | `dd34e0a` | `tsc -b backend/shared/tsconfig.json && node --test backend/shared/dist/tests/*.test.js` (`1.1.b`) | PASS | Ran by AI: compiled `backend/shared/tests/index.test.ts` to `dist/tests/index.test.js` and passed 1/1 `node:test` assertion with zero external test dependencies installed (ADR 0005). |
 
 **Rules**
 - One row per run, in order.

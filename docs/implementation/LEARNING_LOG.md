@@ -70,3 +70,17 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **Problem encountered and why the fix worked:** Running `pnpm add -D -w typescript @types/node` initially wrote caret ranges (`^26.6.6`, `^7.0.2`) into `package.json`. Replacing them with exact versions (`"26.6.6"`, `"7.0.2"`) and syncing `pnpm-lock.yaml` aligned the root manifest with `.npmrc`'s `save-exact=true` policy.
 - **How to inspect the feature:** Run `pnpm typecheck` and `pnpm build`, then inspect `backend/shared/dist/index.js` and `backend/shared/dist/index.d.ts`.
 - **What remains unclear or deferred:** Installing `vitest` and wiring the unit test runner in `1.1.b` (Sprint Step 15).
+
+---
+
+### Phase 1 / 1.1.b — Zero-dependency unit test runner (`node:test` + `tsc -b`) in `@kartik/shared`
+- **Date:** 2026-11-10
+- **Concept learned:** Why Node's built-in test runner (`node:test` + `node:assert/strict`) paired with TypeScript project references (`tsc -b`) eliminates an entire dependency tree (`vitest`, `vite`, `esbuild` sub-trees) and prevents package-manager lockfile crashes across host and cloud-sandbox environments.
+- **What was implemented:** Wired `"test": "tsc -b && node --test ./dist/tests/*.test.js"` in `backend/shared/package.json`, added `"tests/**/*.ts"` to `backend/shared/tsconfig.json`, and created `backend/shared/tests/index.test.ts` testing `SHARED_PACKAGE_NAME` and `SHARED_PACKAGE_VERSION`.
+- **Important terms and how they apply here:**
+  - **`node:test` & `node:assert/strict`:** Built into Node 22, 24, and 26. Provides `describe`, `it`, `test`, and strict deep equality assertions with TAP/spec reporting and zero npm packages.
+  - **Compile-then-test (`tsc -b && node --test ./dist/tests/*.test.js`):** Compiles TypeScript tests under the exact same strict `NodeNext` rules as production code, then executes the emitted `.js` files directly with Node.
+- **Problem encountered and why the fix worked:** Earlier sessions crashed during `1.1.b` when attempting to install `vitest` into the workspace inside the AI Studio container. Using `node:test` + `tsc -b` (recorded in ADR 0005) requires zero package installations and works identically under `pnpm test` on Windows 10 (Node 26.13.0) and `npm test` in the Cloud Sandbox (Node 22.23.2).
+- **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (or `pnpm test`) on Windows 10, or `npm test` in the sandbox, and inspect `backend/shared/dist/tests/index.test.js`.
+- **What remains unclear or deferred:** Implementing `backend/shared/errors` (`1.2.a`) next.
+
