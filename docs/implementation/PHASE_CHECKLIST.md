@@ -19,14 +19,14 @@ Tick an item only when evidence exists in `TEST_EVIDENCE.md` or `BUILD_STATE.md`
 **Phase 0 exit gate:** `pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test` passes on a clean clone, `pnpm-lock.yaml` is the only lockfile, `npm` is rejected by `preinstall`, Compose starts all four dependencies (`postgres`, `redis`, `minio`, `qdrant`) and all four report `healthy`.
 
 ## Phase 1 — Shared libraries (`@kartik/shared`)
-- [ ] 1.1 Toolchain & test runner (`typescript`, `vitest`, `zod`) installed in `@kartik/shared` and `tsc -b` wired
-- [ ] 1.2 `shared/config` — fail-fast env parser printing variable names only (never values)
-- [ ] 1.3 `shared/errors` — `AppError`, stable error-code union (§5.5), Express error mapper
-- [ ] 1.4 `shared/logger` — structured JSON logger with `traceId`, `requestId`, and secret redaction
+- [x] 1.1 Toolchain & test runner (`typescript`, `node:test`) wired in `@kartik/shared` and `tsc -b --force` verified (`1.1.a`, `1.1.b`)
+- [x] 1.2 `shared/config` — fail-fast env parser printing variable names only (never values) (`1.2.a`)
+- [x] 1.3 `shared/errors` — `AppError`, stable error-code union (§5.5), Express error mapper (`1.3.a`)
+- [x] 1.4 `shared/logger` — structured JSON logger with `traceId`, `requestId`, and secret redaction (`1.4.a`)
 - [ ] 1.5 `shared/contracts` — request/response envelope & schemas (§5.4)
-- [ ] 1.6 `shared/redis` — Redis client and key builders (§5.2) with TTL enforcement
+- [x] 1.6 `shared/redis` — Redis key builders (§5.2) with TTL enforcement (`1.5.a`)
 - [ ] 1.7 `shared/database` — Postgres pool (`idleTimeoutMillis: 10_000`), transaction helper, and migration runner (§5.1)
-- [ ] 1.8 `shared/auth` — Ed25519 user-context assertion sign/verify (§6.4) + constant-time caller credential check (§6.3)
+- [x] 1.8 `shared/auth` — Ed25519 user-context assertion sign/verify (§6.4) + constant-time caller credential check (§6.3) (`1.6.a`)
 - [ ] 1.9 `shared/middleware` & `shared/storage` — request context, validation, rate-limit factory, object storage interface
 
 **Phase 1 exit gate:** Unit tests for the error mapper, the assertion round-trip, a wrong-`aud` rejection, and the Redis key builder pass; a deliberately invalid env configuration fails startup naming the offending variable without printing its value.

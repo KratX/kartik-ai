@@ -140,7 +140,18 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`13/13` passing tests across 5 suites) and inspect `backend/shared/tests/redis.test.ts`.
 - **What remains unclear or deferred:** Implementing `backend/shared/auth` (`1.6.a` — Ed25519 user-context assertions and constant-time caller credentials) next.
 
+---
 
-
-
+### Phase 1 / 1.6.a — Ed25519 user-context assertion & constant-time service caller auth (`@kartik/shared/auth`)
+- **Date:** 2026-11-10
+- **Concept learned:** Why the API Gateway signs a short-lived asymmetric Ed25519 user-context assertion (`x-user-context`) after introspecting the browser's opaque session cookie so downstream services (`chat`, `agent`, `billing`) can verify the caller's `userId` (`sub`) and target service (`aud`) using only the public key, why `requestId` is strictly forbidden inside that assertion, and why service-to-service tokens (`x-service-token`) must be compared in constant time.
+- **What was implemented:** Created `backend/shared/auth/index.ts` (`generateEd25519KeyPair`, `signUserContextAssertion`, `verifyUserContextAssertion`, `constantTimeTokenEquals`, `verifyServiceCaller`, `INTERNAL_AUTH_HEADERS`), re-exported it from `backend/shared/index.ts`, and added `backend/shared/tests/auth.test.ts` (Contract Test T14 & Phase 1 Exit Gate).
+- **Important terms and how they apply here:**
+  - **Asymmetric signing (`Ed25519` / `EdDSA`):** Only the Gateway holds `USER_CONTEXT_SIGNING_KEY` (private key). Chat, Agent, and Billing hold only `USER_CONTEXT_VERIFY_KEY` (public key). Even if a downstream service is compromised, it cannot mint fake user assertions for other services.
+  - **Audience binding (`aud: "chat" | "agent" | "billing"`):** Prevents confused-deputy replay where an assertion issued for `chat` is forwarded to `billing` to trigger a direct mutation.
+  - **Run identity vs assertion identity (`requestId` forbidden in assertion — §6.4):** The user-context assertion proves *who* the user is (`sub`) on *which trace hop* (`traceId`). `requestId` is the client's `Idempotency-Key` forwarded in `x-request-id`; forbidding `requestId` inside the JWT prevents accidental divergence between header and token.
+  - **Constant-time token comparison (`timingSafeEqual` on SHA-256 digests):** Hashing both `provided` and `expected` tokens with SHA-256 before `timingSafeEqual` (and checking length equality) ensures an attacker cannot measure nanosecond differences to guess token length or characters one byte at a time.
+- **Problem encountered and why the fix worked:** Multi-line PEM keys in environment files may be passed either with escaped `\n` sequences or base64-encoded into a single string. `normalizePemInput()` supports both raw PEM, `\n`-escaped PEM, and base64-encoded PEM transparently.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`17/17` passing tests across 6 suites) and inspect `backend/shared/tests/auth.test.ts`.
+- **What remains unclear or deferred:** Implementing `backend/shared/contracts` and `backend/shared/validation` (`1.7.a`) next.
 
