@@ -155,3 +155,16 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`17/17` passing tests across 6 suites) and inspect `backend/shared/tests/auth.test.ts`.
 - **What remains unclear or deferred:** Implementing `backend/shared/contracts` and `backend/shared/validation` (`1.7.a`) next.
 
+---
+
+### Phase 1 / 1.7.a — Domain contracts, deterministic payload fingerprinting, and boundary validation (`@kartik/shared/contracts` & `@kartik/shared/validation`)
+- **Date:** 2026-11-10
+- **Concept learned:** How idempotent APIs distinguish a genuine network retry (`200` replay) from an accidental key reuse with a different payload (`409 IDEMPOTENCY_CONFLICT`) using canonical JSON SHA-256 fingerprinting, why keyset pagination cursors must be cryptographically bound to `scope` and `userId`, and how untrusted LLM coding output is validated against path traversal before storage.
+- **What was implemented:** Created `backend/shared/contracts/index.ts` and `backend/shared/validation/index.ts`, re-exported both from `backend/shared/index.ts`, and added `backend/shared/tests/contracts.test.ts`.
+- **Important terms and how they apply here:**
+  - **Canonical JSON fingerprinting (`computePayloadFingerprint`):** Sorts object keys recursively before hashing with SHA-256 so semantically identical JSON bodies always hash to the exact same 64-character hex digest.
+  - **Scoped HMAC pagination cursor (`encodePaginationCursor` / `decodePaginationCursor`):** Encodes `{ scope, userId, createdAt, id }` plus an HMAC-SHA256 tag so a cursor from Conversation A cannot be replayed against Conversation B or tampered with by a client.
+  - **Untrusted model output boundary (`validateArtifactManifest`):** Enforces relative paths, rejects `..`, `/`, `\`, `\0`, hidden dot-files, and non-allowlisted file extensions (`ARTIFACT_INVALID`).
+- **Problem encountered and why the fix worked:** None — compiled and passed on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`21/21` passing tests across 7 suites) and inspect `backend/shared/tests/contracts.test.ts`.
+- **What remains unclear or deferred:** Implementing `backend/shared/database` and `backend/shared/storage` (`1.8.a`) next.

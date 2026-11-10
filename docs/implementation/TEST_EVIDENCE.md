@@ -22,6 +22,7 @@ Chronological record of test commands and their real results. Never invent a res
 | 2026-11-10 | AI Studio Linux (`linux x64`) | `1.4.a` | `tsc -b --force && node --test "./dist/tests/*.test.js"` (`1.4.a`) | PASS | Ran by AI: 4 suites, 10/10 tests passing (`logger.test.js` verified `.child({ traceId, requestId })` correlation and Gate G9 redaction of cookies, Bearer tokens, signed URLs, and Razorpay secrets). |
 | 2026-11-10 | AI Studio Linux (`linux x64`) | `1.5.a` | `tsc -b --force && node --test "./dist/tests/*.test.js"` (`1.5.a`) | PASS | Ran by AI: 5 suites, 13/13 tests passing (`redis.test.js` verified all 7 Redis key builders from §5.2, 24h/30d idempotency TTL split, IPv6 normalization, and PII/JWT rejection). |
 | 2026-11-10 | AI Studio Linux (`linux x64`) | `1.6.a` | `tsc -b --force && node --test "./dist/tests/*.test.js"` (`1.6.a`) | PASS | Ran by AI: 6 suites, 17/17 tests passing (`auth.test.js` verified Ed25519 assertion round-trip, wrong-`aud` rejection, 5s clock-skew tolerance, `requestId` prohibition per §6.4, and constant-time caller verification per §6.3). |
+| 2026-11-10 | AI Studio Linux (`linux x64`) | `1.7.a` | `tsc -b --force && node --test "./dist/tests/*.test.js"` (`1.7.a`) | PASS | Ran by AI: 7 suites, 21/21 tests passing (`contracts.test.js` verified `AgentName`, deterministic payload fingerprinting, `Idempotency-Key` validation, scoped HMAC pagination cursors, and artifact path traversal rejection). |
 
 **Rules**
 - One row per run, in order.
