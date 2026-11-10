@@ -126,6 +126,21 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`10/10` passing tests across 4 suites) and inspect `backend/shared/tests/logger.test.ts`.
 - **What remains unclear or deferred:** Implementing `backend/shared/redis` key builders (`1.5.a`) next.
 
+---
+
+### Phase 1 / 1.5.a — Scoped Redis key builders & TTL contract (`@kartik/shared/redis`)
+- **Date:** 2026-11-10
+- **Concept learned:** Why Redis keys must never be built by ad-hoc string concatenation inside controllers, why every key must carry an explicit TTL (so Redis memory on the free tier never leaks unbounded), and why chat idempotency keys (`24h`) have a different retention window than money idempotency keys (`30d`).
+- **What was implemented:** Created `backend/shared/redis/index.ts` (`RedisKeys`, `REDIS_TTL_SECONDS`, `assertSafeKeySegment`), re-exported it from `backend/shared/index.ts`, and added `backend/shared/tests/redis.test.ts`.
+- **Important terms and how they apply here:**
+  - **Idempotency retention split (`24h` vs `30d` — §5.4):** A retried chat turn happens within minutes or hours (`86_400s`), whereas a delayed payment webhook or settlement reconciliation can arrive days later (`2_592_000s`).
+  - **Key delimiter injection & PII guard (`assertSafeKeySegment`):** Rejects `@` (emails), `:` (delimiter injection that could hop across key namespaces), whitespace, and raw `eyJ...`/`Bearer` tokens.
+  - **IPv6 colon normalization (`ipRateLimit`):** Converts `2001:db8::1` to `2001_db8__1` before building `rl:ip:{ip}:{window}` so `:` always separates logical key segments.
+- **Problem encountered and why the fix worked:** IPv6 addresses naturally contain colons (`:`), which would fail the colon-delimiter guard unless normalized first inside `RedisKeys.ipRateLimit`. Normalizing `:` to `_` on IP inputs preserves unambiguous 4-part key structure (`rl:ip:2001_db8__1:w1`).
+- **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`13/13` passing tests across 5 suites) and inspect `backend/shared/tests/redis.test.ts`.
+- **What remains unclear or deferred:** Implementing `backend/shared/auth` (`1.6.a` — Ed25519 user-context assertions and constant-time caller credentials) next.
+
+
 
 
 

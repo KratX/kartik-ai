@@ -11,6 +11,8 @@ export const SHARED_PACKAGE_VERSION = '0.1.0' as const;
 export * from './config/index.js';
 export * from './errors/index.js';
 export * from './logger/index.js';
+export * from './redis/index.js';
+
 
 
 
