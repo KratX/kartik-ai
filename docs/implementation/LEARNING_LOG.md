@@ -168,3 +168,17 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **Problem encountered and why the fix worked:** None — compiled and passed on the first run.
 - **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`21/21` passing tests across 7 suites) and inspect `backend/shared/tests/contracts.test.ts`.
 - **What remains unclear or deferred:** Implementing `backend/shared/database` and `backend/shared/storage` (`1.8.a`) next.
+
+---
+
+### Phase 1 / 1.8.a — PostgreSQL pool/migration contract & private object storage (`@kartik/shared/database` & `@kartik/shared/storage`)
+- **Date:** 2026-11-10
+- **Concept learned:** Why Neon's free-tier compute allowance (100 CU-hours/month) requires `idleTimeoutMillis: 10_000` (10s) on every PostgreSQL pool so idle connections close and compute scales to zero, why database migrations must use `DIRECT_DATABASE_URL` (rejecting `-pooler` endpoints) and verify SHA-256 checksums of already-applied `.sql` files, and why file uploads must verify actual magic bytes (`%PDF-`, PNG/JPEG/WebP headers) rather than trusting browser-supplied extensions or MIME types.
+- **What was implemented:** Created `backend/shared/database/index.ts` and `backend/shared/storage/index.ts`, re-exported both from `backend/shared/index.ts`, and added `backend/shared/tests/database-storage.test.ts`.
+- **Important terms and how they apply here:**
+  - **Scale-to-zero idle timeout (`idleTimeoutMillis: 10_000` — ADR 0004):** Keeping an idle connection open 24/7 consumes ~730 hours/month, exhausting Neon's 100 CU-hour free allowance in 4 days. Releasing idle connections after 10 seconds lets Neon suspend compute automatically.
+  - **Forward-only migration checksums (`runForwardMigrations`):** Computes the SHA-256 hash of each numbered `.sql` file and compares it against `<schema>.schema_migrations`. If a developer edits an already-applied migration instead of creating a new numbered file, the runner aborts with `409 CONFLICT`.
+  - **Magic-byte signature verification (`validateUploadFile`):** Checks the first bytes of the file buffer (`0x25 0x50 0x44 0x46 0x2d` for `%PDF-`) so an executable renamed to `invoice.pdf` is rejected at the boundary with `415 UNSUPPORTED_FILE_TYPE`.
+- **Problem encountered and why the fix worked:** None — compiled and passed on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/shared test` (`25/25` passing tests across 8 suites) and inspect `backend/shared/tests/database-storage.test.ts`.
+- **What remains unclear or deferred:** Implementing `backend/shared/middleware` (`1.9.a`) and closing the Phase 1 Exit Gate next.

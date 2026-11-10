@@ -25,7 +25,7 @@ Tick an item only when evidence exists in `TEST_EVIDENCE.md` or `BUILD_STATE.md`
 - [x] 1.4 `shared/logger` — structured JSON logger with `traceId`, `requestId`, and secret redaction (`1.4.a`)
 - [x] 1.5 `shared/contracts` & `shared/validation` — request/response contracts, payload fingerprint, `Idempotency-Key`, cursor pagination & artifact manifest validation (`1.7.a`)
 - [x] 1.6 `shared/redis` — Redis key builders (§5.2) with TTL enforcement (`1.5.a`)
-- [ ] 1.7 `shared/database` — Postgres pool (`idleTimeoutMillis: 10_000`), transaction helper, and migration runner (§5.1)
+- [x] 1.7 `shared/database` — Postgres pool (`idleTimeoutMillis: 10_000`), transaction helper, and migration runner (§5.1) (`1.8.a`)
 - [x] 1.8 `shared/auth` — Ed25519 user-context assertion sign/verify (§6.4) + constant-time caller credential check (§6.3) (`1.6.a`)
 - [ ] 1.9 `shared/middleware` & `shared/storage` — request context, validation, rate-limit factory, object storage interface
 
