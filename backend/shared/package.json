@@ -3,9 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*/index.d.ts",
+      "default": "./dist/*/index.js"
+    }
+  },
   "scripts": {
-    "build": "node -e \"process.exit(0)\"",
-    "typecheck": "node -e \"process.exit(0)\"",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
     "lint": "node -e \"process.exit(0)\"",
     "test": "node -e \"process.exit(0)\""
   }

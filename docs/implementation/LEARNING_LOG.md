@@ -56,3 +56,17 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **Problem encountered and why the fix worked:** `START-HERE.md` explicitly stipulates that Phase 0 adds no npm dependencies (`typescript`, `vitest`, `zod` arrive in Phase 1). Wiring `.github/workflows/ci.yml` against our zero-dependency Phase 0 workspace scripts (`pnpm toolchain`, `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`) makes CI green and functional on day one without violating the Phase 0 no-dependency boundary.
 - **How to inspect the feature:** Inspect `.github/workflows/ci.yml`, `.prettierrc.json`, and `docs/implementation/PHASE_CHECKLIST.md`.
 - **What remains unclear or deferred:** Phase 1 (`1.1.a`) installs `typescript`, `@types/node`, and `vitest` and replaces the Phase 0 placeholder workspace scripts with `tsc -b` and `vitest run`.
+
+---
+
+### Phase 1 / 1.1.a — TypeScript 7 (`typescript@7.0.2`), `@types/node@26.6.6`, and `@kartik/shared` composite build wiring
+- **Date:** 2026-11-09
+- **Concept learned:** How TypeScript composite project references (`composite: true` + `tsc -b`) and Node.js ESM `exports` maps (`"types"` before `"default"`) allow downstream services (`@kartik/gateway`, `@kartik/auth`, etc.) to resolve both compile-time `.d.ts` declarations and runtime `.js` files from `@kartik/shared`.
+- **What was implemented:** Installed and exact-pinned `typescript@7.0.2` and `@types/node@26.6.6` in root `package.json` and `pnpm-lock.yaml`, created `backend/shared/index.ts`, updated `backend/shared/tsconfig.json`, and wired `"build": "tsc -b"`, `"typecheck": "tsc --noEmit"`, and the `"exports"` field in `backend/shared/package.json`.
+- **Important terms and how they apply here:**
+  - **`composite: true` & `tsc -b`:** Enables incremental project-reference builds that emit `.d.ts`, `.d.ts.map` (so "Go to Definition" in VS Code jumps to the `.ts` source rather than the `.d.ts` file), and `tsconfig.tsbuildinfo`.
+  - **Conditional `exports` key order (`"types"` first):** Under `moduleResolution: "NodeNext"`, TypeScript reads the `exports` map in `package.json` top-to-bottom. Placing `"types"` before `"default"` ensures `tsc` resolves `.d.ts` declarations while Node.js resolves `.js` at runtime.
+  - **`minimumReleaseAge: 1440` supply-chain check:** `pnpm install --frozen-lockfile` verified all 23 lockfile entries (`typescript@7.0.2` platform binaries + `@types/node@26.6.6` + `undici-types@8.9.0`) against the 24-hour release age gate in `pnpm-workspace.yaml`.
+- **Problem encountered and why the fix worked:** Running `pnpm add -D -w typescript @types/node` initially wrote caret ranges (`^26.6.6`, `^7.0.2`) into `package.json`. Replacing them with exact versions (`"26.6.6"`, `"7.0.2"`) and syncing `pnpm-lock.yaml` aligned the root manifest with `.npmrc`'s `save-exact=true` policy.
+- **How to inspect the feature:** Run `pnpm typecheck` and `pnpm build`, then inspect `backend/shared/dist/index.js` and `backend/shared/dist/index.d.ts`.
+- **What remains unclear or deferred:** Installing `vitest` and wiring the unit test runner in `1.1.b` (Sprint Step 15).

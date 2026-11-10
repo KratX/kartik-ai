@@ -5,6 +5,7 @@
     "outDir": "./dist"
   },
   "include": [
+    "index.ts",
     "auth/**/*.ts",
     "config/**/*.ts",
     "contracts/**/*.ts",
@@ -15,5 +16,6 @@
     "redis/**/*.ts",
     "storage/**/*.ts",
     "validation/**/*.ts"
-  ]
+  ],
+  "exclude": ["dist", "node_modules"]
 }
