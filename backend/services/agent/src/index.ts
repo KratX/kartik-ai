@@ -66,3 +66,22 @@ export {
   type CascadeDeletionStep,
   type PurgeExecutionReport,
 } from './rag/index.js';
+
+export {
+  readSingleHeader,
+  requireAgentUserContext,
+  requireAgentServiceAuth,
+  type HttpHeaderMap,
+} from './middleware/index.js';
+
+export {
+  AgentController,
+  type AgentControllerDependencies,
+} from './controllers/index.js';
+
+export {
+  createAgentRouter,
+  type AgentHttpRequest,
+  type AgentHttpResponse,
+  type AgentRouterDependencies,
+} from './routes/index.js';

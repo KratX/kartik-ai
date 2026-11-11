@@ -66,7 +66,13 @@ Track every phase and every exit gate from `kartik_ai_blueprint.md` (Section 7).
 - [x] `5.1.a` Agent config (`MOCK_AI=true` default), `0001_agent_core.sql` migration, provider interfaces & `userId`-filtered `InMemoryVectorStore`
 - [x] `5.2.a` Router & specialist graph execution (`chat`, `search`, `coding`, `rag`, `vision`, `image`) + daily Redis budget counters with graceful mock fallback
 - [x] `5.3.a` File upload validation (magic bytes, server keys), PDF chunking/embedding, `userId`+`fileId` RAG retrieval, and coding artifact manifest validation
-- [ ] `5.4.a` Agent HTTP routes (`/files`, `/artifacts`, `/internal/agent/execute`, `/internal/agent/purge`) & Phase 5 Exit Gate
+- [x] `5.4.a` Agent HTTP routes (`/files`, `/artifacts`, `/internal/agent/execute`, `/internal/agent/purge`) & Phase 5 Exit Gate
+
+### Phase 5 Exit Gate
+- [x] `MOCK_AI=true` and `IMAGE_PROVIDER=mock` are the defaults; live calls are gated by daily Redis budget counters (`quota:{userId}:{day}`) that degrade gracefully to mock mode on exhaustion (§12, Invariant #19).
+- [x] Vector retrieval in RAG is strictly filtered by authenticated `userId` and `fileIds` before similarity scoring so another user's chunks are never returned (Invariant #9).
+- [x] Untrusted coding model JSON output is validated via `validateArtifactManifest`, rejecting path traversal (`..`), absolute paths, null bytes, or disallowed extensions with `502 ARTIFACT_INVALID` (Invariant #12).
+- [x] Uploaded files validate magic-byte signatures, use server-generated storage keys, return `404 NOT_FOUND` on foreign lookups, and cascade deletion in strict `vectors -> objects -> metadata` order (Invariants #10, #18, #20).
 
 ## Phase 6 — Chat Service (`backend/services/chat`)
 - [ ] Pending Phase 5 completion

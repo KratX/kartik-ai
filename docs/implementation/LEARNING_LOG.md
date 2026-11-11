@@ -2,17 +2,18 @@
 
 ---
 
-## Entry 20 — Phase 5 / Step 5.3 (Micro-step 5.3.a): File Upload Magic-Byte Validation, PDF Chunking & Ordered Cascade Purge (`vectors -> objects -> metadata`)
+## Entry 21 — Phase 5 / Step 5.4 (Micro-step 5.4.a): Agent HTTP Routes & Phase 5 Exit Gate Closure
 
 ### 1. Concept learned
-- **Soft Delete vs Purge & Cascade Order (`vectors -> objects -> metadata`, Invariant #18):**
-  - **Soft delete vs purge:** *Soft delete* marks a conversation or file as `deleted` / `purging` so it disappears from user queries immediately while background cleanup runs. *Purge* permanently removes the underlying storage resources.
-  - **Why deletion must cascade `vectors -> objects -> metadata` (Invariant #18):** If you delete the database metadata row *first* and the process crashes before deleting the Qdrant vectors or R2/MinIO objects, you lose the `fileId` and `storageKey` pointers—leaving orphaned vectors in Qdrant (which could still surface in `userId`-wide RAG searches!) and orphaned billable blobs in R2/MinIO forever. Deleting **vectors first**, **objects second**, and **metadata last** guarantees that if any earlier step fails, the metadata record still exists so a retry can finish the cleanup cleanly!
+- **Two-Boundary HTTP Separation in Agent (`aud="agent"` Public Routes vs Chat-Only Internal Routes, Invariants #6, #10, #14, #18, #20):**
+  - **Public File & Artifact Routes (`POST /files`, `GET /files`, `GET /files/:fileId`, `GET /artifacts/:artifactId`):** Forwarded by the API Gateway with an Ed25519 `x-user-context` assertion bound strictly to `aud === "agent"`. If an assertion minted for `chat` or `billing` is replayed against Agent, `requireAgentUserContext` rejects it with `401 UNAUTHENTICATED`. When a user requests a file or artifact owned by someone else, Agent returns `404 NOT_FOUND` (never `403 FORBIDDEN`, Invariant #20).
+  - **Internal Execution & Purge Routes (`POST /internal/agent/execute`, `POST /internal/agent/purge`):** Never exposed in the Gateway public route table (Invariant #14) and callable strictly by `@kartik/chat` (`x-service-caller: chat` + `x-service-token`). Chat coordinates credit reservation/settlement with Billing around `/internal/agent/execute`, and coordinates conversation deletion via `/internal/agent/purge`.
 
 ### 2. What was implemented
-- `backend/services/agent/src/repositories/index.ts` (`InMemoryAgentRepository`, `PostgresAgentRepository`)
-- `backend/services/agent/src/rag/index.ts` (`chunkPdfPages`, `FileIngestionAndArtifactService`)
-- `backend/services/agent/tests/agent-ingestion-purge.test.ts` (4 unit tests)
+- `backend/services/agent/src/middleware/index.ts` (`requireAgentUserContext`, `requireAgentServiceAuth`)
+- `backend/services/agent/src/controllers/index.ts` (`AgentController`)
+- `backend/services/agent/src/routes/index.ts` (`createAgentRouter`)
+- `backend/services/agent/tests/agent-routes.test.ts` (4 integration tests closing Phase 5 Exit Gate)
 
 ### 3. How to inspect the feature
-- Run `pnpm test` and inspect the `@kartik/agent File Upload Validation, PDF RAG Ingestion & Cascade Purge (5.3.a)` suite.
+- Run `pnpm test` and inspect the `@kartik/agent HTTP Routes & Phase 5 Exit Gate Closure (5.4.a)` suite.
