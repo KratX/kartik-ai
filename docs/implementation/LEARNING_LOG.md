@@ -253,4 +253,18 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **How to inspect the feature:** Run `pnpm --filter @kartik/auth test` (`16/16` passing tests across 4 suites) and inspect `backend/services/auth/tests/auth-routes.test.ts`.
 - **What remains unclear or deferred:** Phase 2 is complete; Phase 3 (`@kartik/gateway` API Gateway) begins next.
 
+---
+
+### Phase 3 / 3.1.a — API Gateway configuration, Ed25519 signing key boot check, and upstream service directory (`@kartik/gateway/config`)
+- **Date:** 2026-11-11
+- **Concept learned:** Why the API Gateway validates its asymmetric Ed25519 private key (`USER_CONTEXT_SIGNING_KEY`) at startup before accepting browser traffic, why wildcard `*` in `CORS_ALLOWED_ORIGINS` is forbidden when `HttpOnly` credentialed session cookies are used (§11), and how the Gateway maps logical service targets (`auth`, `chat`, `agent`, `billing`) to internal service URLs (Invariant #1).
+- **What was implemented:** Wired `backend/gateway/package.json` and `tsconfig.json` (`tsc -b`), created `backend/gateway/src/config/index.ts` and `backend/gateway/src/index.ts`, and added `backend/gateway/tests/gateway-config.test.ts` (`4/4` tests).
+- **Important terms and how they apply here:**
+  - **Fail-fast asymmetric key validation (`isValidEd25519PrivateKey`):** Instead of discovering on the first authenticated browser request that `USER_CONTEXT_SIGNING_KEY` is malformed or an RSA key, `loadGatewayConfig` parses the key with `node:crypto` `createPrivateKey` at boot and verifies `asymmetricKeyType === 'ed25519'`, throwing `ConfigValidationError` naming only `USER_CONTEXT_SIGNING_KEY` (never printing the secret).
+  - **Credentialed CORS origin allowlist (`parseCorsAllowedOrigins`):** Browsers reject `Access-Control-Allow-Origin: *` when `Access-Control-Allow-Credentials: true` is set, and echoing arbitrary `Origin` headers enables cross-origin session riding. Parsing an explicit allowlist at boot enforces strict origin matching.
+- **Problem encountered and why the fix worked:** None — compiled and passed all 4 unit tests (`49/49` workspace tests across 14 suites) on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/gateway test` (`4/4` passing tests) and inspect `backend/gateway/tests/gateway-config.test.ts`.
+- **What remains unclear or deferred:** Implementing the Gateway session-cookie introspection client, Ed25519 `x-user-context` assertion minting, cookie stripping, and upstream proxy adapter in `3.2.a`.
+
+
 

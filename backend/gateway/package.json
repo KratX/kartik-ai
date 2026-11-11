@@ -7,9 +7,9 @@
     "@kartik/shared": "workspace:*"
   },
   "scripts": {
-    "build": "node -e \"process.exit(0)\"",
-    "typecheck": "node -e \"process.exit(0)\"",
-    "lint": "node -e \"process.exit(0)\"",
-    "test": "node -e \"process.exit(0)\""
+    "build": "tsc -b --force",
+    "typecheck": "tsc -b",
+    "lint": "tsc -b",
+    "test": "tsc -b --force && node --test \"./dist/tests/*.test.js\""
   }
 }

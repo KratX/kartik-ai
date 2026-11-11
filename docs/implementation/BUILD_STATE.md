@@ -1,43 +1,43 @@
 # Kartik.ai Build State
 
-- Current phase: Phase 2 — Auth Service & Session Lifecycle (`@kartik/auth`) — **COMPLETE (Exit Gate Passed)**
-- Current blueprint item: 2.4 — Auth HTTP routes (`POST /auth/google`, `GET /auth/me`, `POST /auth/logout`, `POST /internal/sessions/introspect`) & Phase 2 Exit Gate closure
-- Current micro-step: 2.4.a — implement `AuthController`, `createAuthRouter`, and Auth middleware (`backend/services/auth/src/{controllers,routes,middleware}/index.ts`) + Phase 2 Exit Gate integration tests (`backend/services/auth/tests/auth-routes.test.ts`)
+- Current phase: Phase 3 — API Gateway (`@kartik/gateway`)
+- Current blueprint item: 3.1 — Gateway config, composite build/test wiring, Ed25519 signing key validation & upstream service directory (`backend/gateway/src/config/index.ts`)
+- Current micro-step: 3.1.a — wire `backend/gateway/package.json` & `tsconfig.json` (`tsc -b`), implement `loadGatewayConfig`, `parseCorsAllowedOrigins`, and `resolveUpstreamServiceUrl` (`backend/gateway/src/config/index.ts`), and verify with `backend/gateway/tests/gateway-config.test.ts`
 - Status: verification pending on owner's host
-- Last completed micro-step: 2.4.a — completed `@kartik/auth` HTTP routes & Phase 2 Exit Gate (`16/16` Auth tests passing across 4 suites; `45/45` total workspace tests passing across 13 suites)
-- Next micro-step: 3.1.a — begin Phase 3 (`@kartik/gateway` — API Gateway config, session-cookie-to-Ed25519 user-context assertion exchange, `traceId` + `Idempotency-Key` -> `requestId` forwarding, and downstream proxy routing)
+- Last completed micro-step: 3.1.a — implemented `@kartik/gateway` config & upstream service directory (`4/4` Gateway tests passing; `49/49` total workspace tests passing across 14 suites)
+- Next micro-step: 3.2.a — implement the Gateway session-introspection client (`POST /internal/sessions/introspect` on Auth), audience-scoped Ed25519 `x-user-context` assertion minting (`aud: 'chat' | 'agent' | 'billing'`), cookie stripping, and upstream proxy client (`backend/gateway/src/middleware/index.ts` & `backend/gateway/src/proxy/index.ts`) + unit tests
 - Current branch: `main`
-- Last known commit: `2.3.a` completed
+- Last known commit: `2.4.a` (Phase 2 complete)
 
 ## Current objective
-Implement `backend/services/auth/src/controllers/index.ts`, `backend/services/auth/src/middleware/index.ts`, and `backend/services/auth/src/routes/index.ts` (Blueprint §2.1, §5.4, §5.5, §6.3, §7.2 Phase 2 Exit Gate, ADR 0002), and verify the full `POST /auth/google` -> `GET /auth/me` -> `POST /auth/logout` -> `401 UNAUTHENTICATED` replay lifecycle plus Gateway-only `POST /internal/sessions/introspect` caller enforcement (`16/16` Auth tests passing).
+Implement `backend/gateway/src/config/index.ts` (Blueprint §2.1, §6.1–§6.4, §11, §12 & Invariant #1): fail-fast Gateway startup configuration validating the Ed25519 `USER_CONTEXT_SIGNING_KEY` (PEM or base64), rejecting wildcard `*` in `CORS_ALLOWED_ORIGINS` when `HttpOnly` cookies are active, and resolving upstream base URLs for `auth`, `chat`, `agent`, and `billing`.
 
 ## Completed work
 - **Phase 0:** Monorepo baseline, ADRs 0000–0005, Compose v5 stack (4/4 healthy on host), CI workflow.
 - **Phase 1 (`@kartik/shared` — 9 suites / 29 tests PASS):** `config`, `errors`, `logger`, `redis`, `auth`, `contracts`, `validation`, `database`, `storage`, `middleware`.
-- **Phase 2 (`@kartik/auth` — 4 suites / 16 tests PASS — Phase 2 Exit Gate Complete):**
-  - **2.1.a:** Auth service config, `0001_auth_users.sql` migration, and `UserRepository` (`4/4` tests).
-  - **2.2.a:** Firebase ID-token verification adapter (`MockFirebaseTokenVerifier` & `JwtFirebaseTokenVerifier`, `4/4` tests).
-  - **2.3.a:** Opaque Redis session lifecycle (`SessionService`, `RedisHashSessionStore`, `InMemorySessionStore`, `HttpOnly` cookie helpers, `4/4` tests) + CI composite `tsc -b` typecheck fix.
-  - **2.4.a:** Auth HTTP controllers, middleware, and router (`POST /auth/google`, `GET /auth/me`, `POST /auth/logout`, `POST /internal/sessions/introspect`, `/healthz`, `/readyz`) + Phase 2 Exit Gate integration tests (`4/4` tests).
+- **Phase 2 (`@kartik/auth` — 4 suites / 16 tests PASS — Exit Gate Complete):** `config`, `models`, `repositories`, `firebase-verifier`, `session-service`, `middleware`, `controllers`, `routes`.
+- **Phase 3 / Micro-step 3.1.a (`@kartik/gateway`):**
+  - Wired `backend/gateway/package.json` and `backend/gateway/tsconfig.json` with composite `tsc -b` build, typecheck, lint, and `node:test`.
+  - Created `backend/gateway/src/config/index.ts` (`GATEWAY_CONFIG_SCHEMA`, `loadGatewayConfig`, `parseCorsAllowedOrigins`, `resolveUpstreamServiceUrl`) and `backend/gateway/src/index.ts`.
+  - Created `backend/gateway/tests/gateway-config.test.ts` (`4/4` tests passing).
 
 ## Changed files
-- `backend/services/auth/src/middleware/index.ts` — Auth request context, IP rate limiter, and Gateway-only internal guard
-- `backend/services/auth/src/controllers/index.ts` — `AuthController` and `toPublicAuthUser` DTO projection
-- `backend/services/auth/src/routes/index.ts` — `createAuthRouter` and programmatic test dispatcher
-- `backend/services/auth/src/index.ts` — re-exported `controllers`, `middleware`, and `routes`
-- `backend/services/auth/tests/auth-routes.test.ts` — 4 integration tests closing the Phase 2 Exit Gate
-- `docs/implementation/{BUILD_STATE.md,TEST_EVIDENCE.md,LEARNING_LOG.md,PHASE_CHECKLIST.md}` — updated records for `2.4.a` & Phase 2 completion
+- `backend/gateway/package.json` — wired `build`, `typecheck`, `lint` (`tsc -b`), and `test` (`tsc -b --force && node --test "./dist/tests/*.test.js"`)
+- `backend/gateway/tsconfig.json` — composite project reference to `../shared` and `tests/**/*.ts` inclusion
+- `backend/gateway/src/config/index.ts` — Gateway config validator, Ed25519 key check, CORS allowlist parser, and service directory
+- `backend/gateway/src/index.ts` — package barrel export
+- `backend/gateway/tests/gateway-config.test.ts` — 4 unit tests for Gateway config
+- `docs/implementation/{BUILD_STATE.md,TEST_EVIDENCE.md,LEARNING_LOG.md,PHASE_CHECKLIST.md}` — updated records for `3.1.a`
 
 ## Verification evidence
-- `npm test` (`tsc -b` + `node --test`) — PASS — 13 suites, 45 tests passing (29 in `@kartik/shared` + 16 in `@kartik/auth`).
+- `npm test` (`tsc -b` + `node --test`) — PASS — 14 suites, 49 tests passing (29 in `@kartik/shared` + 16 in `@kartik/auth` + 4 in `@kartik/gateway`).
 - `npm run lint` (`tsc --noEmit`) — PASS — 0 TypeScript errors.
 
 ## Open issues / blockers
 - None.
 
 ## Decisions requiring owner approval
-- None blocking; download `step-2.4.a.zip`, extract into your repo root, run `pnpm --filter @kartik/auth test` (`16/16` tests across 4 suites), and reply **"continue"** to begin **Phase 3 / Micro-step `3.1.a`** (`@kartik/gateway` API Gateway).
+- None blocking; download `step-3.1.a.zip`, extract into your repo root, run `pnpm --filter @kartik/gateway test` (`4/4` tests), and reply **"continue"** for Micro-step `3.2.a` (Session cookie introspection client, Ed25519 `x-user-context` assertion minting, cookie stripping, and upstream proxy adapter).
 
 ## Safe resume instruction
-Phase 2 (`@kartik/auth`) is complete. Proceed to **Phase 3 / micro-step `3.1.a`**: wire `backend/gateway` composite build & test scripts, implement Gateway environment configuration (`loadGatewayConfig`), and verify with unit tests.
+Micro-step `3.1.a` is complete. Proceed to **micro-step `3.2.a`**: implement `backend/gateway/src/middleware/index.ts` and `backend/gateway/src/proxy/index.ts` with unit tests in `backend/gateway/tests/gateway-proxy.test.ts`.
