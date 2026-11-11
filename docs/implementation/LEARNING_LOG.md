@@ -2,18 +2,20 @@
 
 ---
 
-## Entry 21 — Phase 5 / Step 5.4 (Micro-step 5.4.a): Agent HTTP Routes & Phase 5 Exit Gate Closure
+## Entry 22 — Phase 6 / Step 6.1 (Micro-step 6.1.a): Chat Config, `0001_chat_core.sql` Schema & Keyset Cursor Pagination
 
 ### 1. Concept learned
-- **Two-Boundary HTTP Separation in Agent (`aud="agent"` Public Routes vs Chat-Only Internal Routes, Invariants #6, #10, #14, #18, #20):**
-  - **Public File & Artifact Routes (`POST /files`, `GET /files`, `GET /files/:fileId`, `GET /artifacts/:artifactId`):** Forwarded by the API Gateway with an Ed25519 `x-user-context` assertion bound strictly to `aud === "agent"`. If an assertion minted for `chat` or `billing` is replayed against Agent, `requireAgentUserContext` rejects it with `401 UNAUTHENTICATED`. When a user requests a file or artifact owned by someone else, Agent returns `404 NOT_FOUND` (never `403 FORBIDDEN`, Invariant #20).
-  - **Internal Execution & Purge Routes (`POST /internal/agent/execute`, `POST /internal/agent/purge`):** Never exposed in the Gateway public route table (Invariant #14) and callable strictly by `@kartik/chat` (`x-service-caller: chat` + `x-service-token`). Chat coordinates credit reservation/settlement with Billing around `/internal/agent/execute`, and coordinates conversation deletion via `/internal/agent/purge`.
+- **Keyset Cursor Pagination vs Offset Pagination & Scope-Bound Cursors (Blueprint §5.4):**
+  - **Why Keyset (`(createdAt, id)`) instead of `OFFSET`:** In SQL, `OFFSET 1000 LIMIT 30` forces PostgreSQL to scan and discard 1,000 rows on every request, and if a new message is inserted while the user scrolls, rows shift and duplicate across pages. Keyset pagination (`WHERE (created_at, id) < ($1, $2)`) jumps directly to the B-Tree index position in $O(\log N)$ time with zero row drift.
+  - **Scope & Owner Binding (`encodePaginationCursor` / `parsePaginationQuery`):** Every pagination cursor is HMAC-signed and embeds `{ scope, userId, createdAt, id }`. If User B tries to replay User A's cursor, or replays a `conversations:list` cursor on `messages:conv_1`, `parsePaginationQuery` rejects it with `400 VALIDATION_FAILED`.
+- **Durable Run Record (`chat.agent_runs`, Invariants #3, #6, #15):**
+  - Chat owns `chat.agent_runs` keyed by the client's `requestId` (`Idempotency-Key`) with states `'pending' | 'reserved' | 'executing' | 'completed' | 'execution_unknown' | 'failed' | 'released'` so interrupted turns can be reconciled without double-charging.
 
 ### 2. What was implemented
-- `backend/services/agent/src/middleware/index.ts` (`requireAgentUserContext`, `requireAgentServiceAuth`)
-- `backend/services/agent/src/controllers/index.ts` (`AgentController`)
-- `backend/services/agent/src/routes/index.ts` (`createAgentRouter`)
-- `backend/services/agent/tests/agent-routes.test.ts` (4 integration tests closing Phase 5 Exit Gate)
+- `backend/services/chat/src/config/index.ts` (`loadChatConfig`)
+- `backend/services/chat/src/models/index.ts` (`CHAT_INITIAL_MIGRATION` `0001_chat_core.sql` + domain models)
+- `backend/services/chat/src/repositories/index.ts` (`InMemoryChatRepository`, `PostgresChatRepository`)
+- `backend/services/chat/tests/chat-repository.test.ts` (4 unit tests)
 
 ### 3. How to inspect the feature
-- Run `pnpm test` and inspect the `@kartik/agent HTTP Routes & Phase 5 Exit Gate Closure (5.4.a)` suite.
+- Run `pnpm test` and inspect the `@kartik/chat config, 0001_chat_core migration & ChatRepository cursor pagination (6.1.a)` suite.

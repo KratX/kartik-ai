@@ -75,7 +75,9 @@ Track every phase and every exit gate from `kartik_ai_blueprint.md` (Section 7).
 - [x] Uploaded files validate magic-byte signatures, use server-generated storage keys, return `404 NOT_FOUND` on foreign lookups, and cascade deletion in strict `vectors -> objects -> metadata` order (Invariants #10, #18, #20).
 
 ## Phase 6 — Chat Service (`backend/services/chat`)
-- [ ] Pending Phase 5 completion
+- [x] `6.1.a` Chat config, `0001_chat_core.sql` migration (`conversations`, `messages`, `agent_runs`) & `ChatRepository` with keyset cursor pagination
+- [ ] `6.2.a` Chat Run Orchestrator (`Reserve -> Execute -> Settle/Release`), 24h chat idempotency (`idem:{userId}:{requestId}`), `execution_unknown` recovery & conversation deletion coordinator (`lock:cleanup:{conversationId}`)
+- [ ] `6.3.a` Chat HTTP routes (`/conversations`, `/conversations/:id/messages`, `DELETE /conversations/:id`) & Phase 6 Exit Gate
 
 ## Phase 7 — Frontend Application (`frontend`)
 - [ ] Pending Phase 6 completion
