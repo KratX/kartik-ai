@@ -52,3 +52,17 @@ export {
   type AgentMetadataStore,
   type AgentGraphDependencies,
 } from './graph/index.js';
+
+export {
+  InMemoryAgentRepository,
+  PostgresAgentRepository,
+  type AgentRepository,
+} from './repositories/index.js';
+
+export {
+  chunkPdfPages,
+  FileIngestionAndArtifactService,
+  type PdfPageText,
+  type CascadeDeletionStep,
+  type PurgeExecutionReport,
+} from './rag/index.js';
