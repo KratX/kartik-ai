@@ -280,6 +280,20 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **How to inspect the feature:** Run `pnpm --filter @kartik/gateway test` (`8/8` passing tests across 2 suites) and inspect `backend/gateway/tests/gateway-proxy.test.ts`.
 - **What remains unclear or deferred:** Implementing the Gateway public route table and closing the Phase 3 Exit Gate in `3.3.a`.
 
+---
+
+### Phase 3 / 3.3.a — Gateway public route table, `/internal/*` blocking, run-identity forwarding, and Phase 3 Exit Gate closure (`@kartik/gateway/routes`)
+- **Date:** 2026-11-11
+- **Concept learned:** Why the API Gateway resolves the public route table **before** running idempotency or session middleware (so any browser request targeting `/internal/*` or an unknown path immediately receives `404 NOT_FOUND` per Invariants #14 and #20 without touching Redis or Auth), how the Gateway enforces the Run-Identity contract (generating a fresh `traceId` per HTTP attempt while forwarding the client's `Idempotency-Key` unchanged as `x-request-id` per Invariant #15), and why `/api/v1/webhooks/razorpay` must preserve the raw unparsed request body for HMAC-SHA256 verification (§11).
+- **What was implemented:** Created `backend/gateway/src/routes/index.ts` (`resolvePublicGatewayRoute`, `createGatewayRouter`), updated `backend/gateway/src/index.ts`, and added `backend/gateway/tests/gateway-routes.test.ts` closing the Phase 3 Exit Gate.
+- **Important terms and how they apply here:**
+  - **Public-to-Internal route mapping (`resolvePublicGatewayRoute`):** Maps `/api/v1/auth/*` -> `auth`, `/api/v1/conversations*` -> `chat`, `/api/v1/{agents,files,artifacts}*` -> `agent`, and `/api/v1/{billing,webhooks/razorpay}*` -> `billing`, while rejecting any path containing `/internal/` with `404 NOT_FOUND`.
+  - **Raw body preservation (`preserveRawBody: true`):** Re-serializing parsed JSON (`JSON.stringify(req.body)`) can alter whitespace or key formatting and break Razorpay's `X-Razorpay-Signature` HMAC over the raw bytes. Forwarding `req.rawBody` untouched preserves byte-for-byte integrity.
+- **Problem encountered and why the fix worked:** None — compiled and passed all 4 integration tests (`12/12` Gateway tests, `57/57` total workspace tests across 16 suites) on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/gateway test` (`12/12` passing tests across 3 suites) and inspect `backend/gateway/tests/gateway-routes.test.ts`.
+- **What remains unclear or deferred:** Phase 3 is complete; Phase 4 (`@kartik/billing` Credit & Payment Ledger Service) begins next.
+
+
 
 
 

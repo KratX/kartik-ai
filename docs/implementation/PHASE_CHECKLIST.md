@@ -42,4 +42,12 @@ Tick an item only when evidence exists in `TEST_EVIDENCE.md` or `BUILD_STATE.md`
 ## Phase 3 — API Gateway (`@kartik/gateway`)
 - [x] 3.1 Gateway config, composite build/test wiring, and upstream service directory (`3.1.a`)
 - [x] 3.2 Session cookie introspection client & Ed25519 `x-user-context` assertion minting per target audience (`3.2.a`)
-- [ ] 3.3 Gateway public route table, `traceId` generation, `Idempotency-Key` -> `requestId` forwarding, and Phase 3 exit gate (`3.3.a`)
+- [x] 3.3 Gateway public route table, `traceId` generation, `Idempotency-Key` -> `requestId` forwarding, and Phase 3 exit gate (`3.3.a`)
+
+**Phase 3 exit gate (PASSED — 3 suites / 12 tests in `@kartik/gateway`, 16 suites / 57 tests total):** Browser requests to `/api/v1/*` introspect the opaque session cookie via Auth, strip `Cookie`, mint an audience-scoped Ed25519 `x-user-context` assertion (`aud: 'chat' | 'agent' | 'billing'`), generate a fresh `traceId`, and forward `Idempotency-Key` unchanged as `x-request-id`; any browser attempt to reach `/internal/*` returns `404 NOT_FOUND`; `/api/v1/webhooks/razorpay` preserves exact raw body bytes.
+
+## Phase 4 — Billing service, credit reservations & Razorpay verification (`@kartik/billing`)
+- [ ] 4.1 Billing config, `0001_billing_core.sql` migration, and `SELECT ... FOR UPDATE` credit account & ledger repository (`4.1.a`)
+- [ ] 4.2 Reserve / settle / release transactional state machine & concurrency no-overdraw proof (`4.2.a`)
+- [ ] 4.3 Razorpay order creation, checkout HMAC (`order_id|payment_id`) & raw-body webhook HMAC verification (`4.3.a`)
+- [ ] 4.4 Billing public & internal HTTP routes and Phase 4 exit gate (`4.4.a`)
