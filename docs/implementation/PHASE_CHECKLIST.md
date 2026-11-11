@@ -49,5 +49,5 @@ Tick an item only when evidence exists in `TEST_EVIDENCE.md` or `BUILD_STATE.md`
 ## Phase 4 — Billing service, credit reservations & Razorpay verification (`@kartik/billing`)
 - [x] 4.1 Billing config, `0001_billing_core.sql` migration, and `SELECT ... FOR UPDATE` credit account & ledger repository (`4.1.a`)
 - [x] 4.2 Reserve / settle / release transactional state machine & concurrency no-overdraw proof (`4.2.a`)
-- [ ] 4.3 Razorpay order creation, checkout HMAC (`order_id|payment_id`) & raw-body webhook HMAC verification (`4.3.a`)
+- [x] 4.3 Razorpay order creation, checkout HMAC (`order_id|payment_id`) & raw-body webhook HMAC verification (`4.3.a`)
 - [ ] 4.4 Billing public & internal HTTP routes and Phase 4 exit gate (`4.4.a`)

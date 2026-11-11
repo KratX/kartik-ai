@@ -1,8 +1,9 @@
 /**
- * @kartik/billing — Package Barrel (Micro-step 4.2.a).
+ * @kartik/billing — Package Barrel (Micro-step 4.3.a).
  */
 
 export * from './config/index.js';
 export * from './models/index.js';
 export * from './repositories/index.js';
 export * from './services/index.js';
+export * from './webhooks/index.js';

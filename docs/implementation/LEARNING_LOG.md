@@ -318,3 +318,16 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **Problem encountered and why the fix worked:** None — compiled and passed all 4 unit & concurrency tests (`65/65` workspace tests across 18 suites) on the first run.
 - **How to inspect the feature:** Run `pnpm --filter @kartik/billing test` (`8/8` passing tests across 2 suites) and inspect `backend/services/billing/tests/credit-service.test.ts`.
 - **What remains unclear or deferred:** Implementing Razorpay order creation, checkout HMAC (`order_id|payment_id`), and raw-body webhook HMAC verification in `4.3.a`.
+
+---
+
+### Phase 4 / 4.3.a — Razorpay order creation, checkout HMAC (`order_id|payment_id`), raw-body webhook HMAC, and delayed-webhook idempotency (`@kartik/billing/webhooks` & `payment-service`)
+- **Date:** 2026-11-11
+- **Concept learned:** Why Razorpay checkout verification and Razorpay webhook verification use **two different secrets over two different payloads** (§11: `RAZORPAY_KEY_SECRET` over `${order_id}|${payment_id}` vs `RAZORPAY_WEBHOOK_SECRET` over the exact unparsed `rawBody`), why amount-mismatch validation (`expectedAmountPaise === order.amountPaise`) is mandatory, and how locking the user's account row (`SELECT ... FOR UPDATE`) and checking `order.status === 'PAID'` ensures that when browser checkout verification and an asynchronous webhook both arrive for the same payment, credits are granted **exactly once**.
+- **What was implemented:** Created `backend/services/billing/src/webhooks/index.ts` and `backend/services/billing/src/services/payment-service.ts`, updated `src/services/index.ts` and `src/index.ts`, and added `backend/services/billing/tests/payment-service.test.ts` (`4/4` tests).
+- **Important terms and how they apply here:**
+  - **Webhook Signature vs Checkout Signature (§5 & §11):** Checkout signature is returned to the browser by Razorpay Checkout JS and verified synchronously over `order_id|payment_id` with `RAZORPAY_KEY_SECRET`. Webhook signature is sent server-to-server by Razorpay in `X-Razorpay-Signature` and verified over the raw HTTP request bytes with `RAZORPAY_WEBHOOK_SECRET`.
+  - **Delayed-Webhook & Duplicate Replay Race:** In real life, a user's browser often calls `POST /billing/verify` immediately, and Razorpay's webhook arrives 3–30 seconds later (or retries if a proxy times out). Checking `order.status === 'PAID'` inside `withLockedAccount` makes the second arrival a safe no-op (`newlyCredited: false`).
+- **Problem encountered and why the fix worked:** None — compiled and passed all 4 unit tests (`69/69` workspace tests across 19 suites) on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/billing test` (`12/12` passing tests across 3 suites) and inspect `backend/services/billing/tests/payment-service.test.ts`.
+- **What remains unclear or deferred:** Implementing the Billing public & internal HTTP routes in `4.4.a` to close the Phase 4 Exit Gate.
