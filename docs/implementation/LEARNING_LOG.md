@@ -293,7 +293,15 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **How to inspect the feature:** Run `pnpm --filter @kartik/gateway test` (`12/12` passing tests across 3 suites) and inspect `backend/gateway/tests/gateway-routes.test.ts`.
 - **What remains unclear or deferred:** Phase 3 is complete; Phase 4 (`@kartik/billing` Credit & Payment Ledger Service) begins next.
 
+---
 
-
-
-
+### Phase 4 / 4.1.a — Billing configuration, integer paise plan catalogue, `0001_billing_core.sql` migration, and `SELECT ... FOR UPDATE` row-locking repository (`@kartik/billing`)
+- **Date:** 2026-11-11
+- **Concept learned:** Why monetary values in INR must be stored and calculated in integer **paise** (`49900` = ₹499.00) rather than floating-point rupees (§11), why credit balances (`available_credits`, `reserved_credits`) are protected at two layers (PostgreSQL `CHECK (available_credits >= 0)` constraints + `SELECT ... FOR UPDATE` pessimistic row locks inside a single transaction per Invariant #17), and why `BILLING_MODE=mock` is the default so local development and automated tests never hit live payment APIs.
+- **What was implemented:** Configured `backend/services/billing/{package.json,tsconfig.json}` (`tsc -b`), created `backend/services/billing/src/config/index.ts` (`loadBillingConfig`), `backend/services/billing/src/models/index.ts` (`DEFAULT_BILLING_PLANS`, `BILLING_INITIAL_MIGRATION`), `backend/services/billing/src/repositories/index.ts` (`PostgresBillingRepository`, `InMemoryBillingRepository`), `backend/services/billing/src/index.ts`, and `backend/services/billing/tests/billing-repository.test.ts` (`4/4` tests).
+- **Important terms and how they apply here:**
+  - **Integer Paise vs Floating-Point Rupees (§11):** IEEE-754 floats cannot represent `0.1 + 0.2` exactly (`0.30000000000000004`). Storing prices in integer paise (`pricePaise: 49_900` for ₹499.00) guarantees exact arithmetic and matches Razorpay's native smallest-currency-unit API.
+  - **`SELECT ... FOR UPDATE` Pessimistic Row Lock (Invariant #17):** Without row locking, two concurrent requests reading `available_credits = 100` at the same millisecond can both pass an application-level `if (balance >= 60)` check and write back `40`, losing a deduction or overdrawing the account. Locking the `billing.credit_accounts` row with `SELECT ... FOR UPDATE` inside `BEGIN ... COMMIT` serializes concurrent transactions for the same user at the database row level.
+- **Problem encountered and why the fix worked:** None — compiled cleanly with `tsc -b` and passed all 4 unit tests (`61/61` workspace tests across 17 suites) on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/billing test` (`4/4` passing tests) and inspect `backend/services/billing/tests/billing-repository.test.ts`.
+- **What remains unclear or deferred:** Implementing the transactional `reserve` / `settle` / `release` credit state machine and 10-way concurrent no-overdraw proof test in `4.2.a`.
