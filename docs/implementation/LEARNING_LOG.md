@@ -266,5 +266,20 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **How to inspect the feature:** Run `pnpm --filter @kartik/gateway test` (`4/4` passing tests) and inspect `backend/gateway/tests/gateway-config.test.ts`.
 - **What remains unclear or deferred:** Implementing the Gateway session-cookie introspection client, Ed25519 `x-user-context` assertion minting, cookie stripping, and upstream proxy adapter in `3.2.a`.
 
+---
+
+### Phase 3 / 3.2.a — Gateway session introspection, Ed25519 `x-user-context` assertion minting, cookie stripping, and CORS/CSRF middleware (`@kartik/gateway/proxy` & `@kartik/gateway/middleware`)
+- **Date:** 2026-11-11
+- **Concept learned:** How the API Gateway bridges two authentication models (ADR 0002): the browser authenticates to the Gateway with an opaque `HttpOnly` session cookie (`kartik_session`), the Gateway introspects that cookie once via `@kartik/auth` (`POST /internal/sessions/introspect`), strips the `Cookie` header, and mints a short-lived (60s) Ed25519 `x-user-context` assertion bound to the exact target service (`aud: 'chat' | 'agent' | 'billing'`).
+- **What was implemented:** Created `backend/gateway/src/proxy/index.ts` (`buildDownstreamProxyHeaders`, `FetchUpstreamHttpClient`, `InMemoryUpstreamHttpClient`), created `backend/gateway/src/middleware/index.ts` (`GatewaySessionIntrospector`, `createGatewaySessionMiddleware`, `createGatewayCorsAndCsrfMiddleware`), updated `backend/gateway/src/index.ts`, and added `backend/gateway/tests/gateway-proxy.test.ts` (`4/4` tests).
+- **Important terms and how they apply here:**
+  - **Header sanitization & cookie stripping (`HOP_BY_HOP_OR_SPOOFABLE_HEADERS`):** If a malicious client sends a forged `x-user-context` or `x-service-token` header from the browser, `buildDownstreamProxyHeaders` strips it before attaching the Gateway's own signed headers. And stripping `cookie` before calling `chat`, `agent`, or `billing` ensures downstream services never handle raw browser session tokens.
+  - **Origin-header CSRF protection (`createGatewayCorsAndCsrfMiddleware` — §11):** Even with `SameSite=Lax` cookies, verifying that mutating (`POST`/`PUT`/`PATCH`/`DELETE`) cookie-authenticated requests carry an `Origin` header matching `config.allowedOrigins` provides defense-in-depth against cross-site request forgery.
+  - **Upstream error code differentiation (`BILLING_UNAVAILABLE` vs `PROVIDER_UNAVAILABLE` — §5.5):** When `billing` is unreachable, the client action is *"Retry with the same key"*; when another upstream fails, `503 PROVIDER_UNAVAILABLE` is returned.
+- **Problem encountered and why the fix worked:** None — compiled and passed all 4 unit tests (`53/53` workspace tests across 15 suites) on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/gateway test` (`8/8` passing tests across 2 suites) and inspect `backend/gateway/tests/gateway-proxy.test.ts`.
+- **What remains unclear or deferred:** Implementing the Gateway public route table and closing the Phase 3 Exit Gate in `3.3.a`.
+
+
 
 

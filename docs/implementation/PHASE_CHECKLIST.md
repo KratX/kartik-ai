@@ -41,5 +41,5 @@ Tick an item only when evidence exists in `TEST_EVIDENCE.md` or `BUILD_STATE.md`
 
 ## Phase 3 — API Gateway (`@kartik/gateway`)
 - [x] 3.1 Gateway config, composite build/test wiring, and upstream service directory (`3.1.a`)
-- [ ] 3.2 Session cookie introspection client & Ed25519 `x-user-context` assertion minting per target audience (`3.2.a`)
+- [x] 3.2 Session cookie introspection client & Ed25519 `x-user-context` assertion minting per target audience (`3.2.a`)
 - [ ] 3.3 Gateway public route table, `traceId` generation, `Idempotency-Key` -> `requestId` forwarding, and Phase 3 exit gate (`3.3.a`)
