@@ -10,15 +10,51 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./*": {
-      "types": "./dist/*/index.d.ts",
-      "default": "./dist/*/index.js"
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "default": "./dist/config/index.js"
+    },
+    "./errors": {
+      "types": "./dist/errors/index.d.ts",
+      "default": "./dist/errors/index.js"
+    },
+    "./logger": {
+      "types": "./dist/logger/index.d.ts",
+      "default": "./dist/logger/index.js"
+    },
+    "./redis": {
+      "types": "./dist/redis/index.d.ts",
+      "default": "./dist/redis/index.js"
+    },
+    "./auth": {
+      "types": "./dist/auth/index.d.ts",
+      "default": "./dist/auth/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts/index.d.ts",
+      "default": "./dist/contracts/index.js"
+    },
+    "./validation": {
+      "types": "./dist/validation/index.d.ts",
+      "default": "./dist/validation/index.js"
+    },
+    "./database": {
+      "types": "./dist/database/index.d.ts",
+      "default": "./dist/database/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage/index.d.ts",
+      "default": "./dist/storage/index.js"
+    },
+    "./middleware": {
+      "types": "./dist/middleware/index.d.ts",
+      "default": "./dist/middleware/index.js"
     }
   },
   "scripts": {
-    "build": "tsc -b",
-    "typecheck": "tsc -b",
-    "lint": "tsc -b",
-    "test": "tsc -b && node --test \"./dist/tests/*.test.js\""
+    "build": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc",
+    "typecheck": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc",
+    "lint": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc",
+    "test": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc && node --test \"./dist/tests/*.test.js\""
   }
 }

@@ -7,9 +7,9 @@
     "@kartik/shared": "workspace:*"
   },
   "scripts": {
-    "build": "tsc -b",
-    "typecheck": "tsc -b",
-    "lint": "tsc -b",
-    "test": "tsc -b && node --test \"./dist/tests/*.test.js\""
+    "build": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc",
+    "typecheck": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc",
+    "lint": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc",
+    "test": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc && node --test \"./dist/tests/*.test.js\""
   }
 }
