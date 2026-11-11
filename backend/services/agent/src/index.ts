@@ -38,3 +38,17 @@ export {
   computeDeterministicEmbedding,
   cosineSimilarity,
 } from './services/mock-providers.js';
+
+export {
+  DailyLiveBudgetGuard,
+  InMemoryDailyBudgetStore,
+  type DailyBudgetStore,
+  type BudgetCheckDecision,
+} from './services/budget-guard.js';
+
+export {
+  AgentGraphExecutor,
+  routePromptToSpecialist,
+  type AgentMetadataStore,
+  type AgentGraphDependencies,
+} from './graph/index.js';

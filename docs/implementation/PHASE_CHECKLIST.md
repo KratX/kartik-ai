@@ -64,7 +64,7 @@ Track every phase and every exit gate from `kartik_ai_blueprint.md` (Section 7).
 
 ## Phase 5 — Agent Service (`backend/services/agent`)
 - [x] `5.1.a` Agent config (`MOCK_AI=true` default), `0001_agent_core.sql` migration, provider interfaces & `userId`-filtered `InMemoryVectorStore`
-- [ ] `5.2.a` Router & specialist graph execution (`chat`, `search`, `coding`, `rag`, `vision`, `image`) + daily Redis budget counters with graceful mock fallback
+- [x] `5.2.a` Router & specialist graph execution (`chat`, `search`, `coding`, `rag`, `vision`, `image`) + daily Redis budget counters with graceful mock fallback
 - [ ] `5.3.a` File upload validation (magic bytes, server keys), PDF chunking/embedding, `userId`+`fileId` RAG retrieval, and coding artifact manifest validation
 - [ ] `5.4.a` Agent HTTP routes (`/files`, `/artifacts`, `/internal/agent/execute`, `/internal/agent/purge`) & Phase 5 Exit Gate
 

@@ -58,26 +58,36 @@ export class MockCodingModelProvider implements CodingModelProvider {
     readonly tokensUsed: number;
   }> {
     const cleanTitle = input.prompt.trim().slice(0, 60) || 'Generated Sandbox App';
+    const rawFiles = [
+      {
+        path: 'index.html',
+        mimeType: 'text/html',
+        content: `<!doctype html><html><head><meta charset="utf-8"><title>${cleanTitle}</title><link rel="stylesheet" href="styles.css"></head><body><main id="app"><h1>${cleanTitle}</h1></main><script src="app.js"></script></body></html>`,
+      },
+      {
+        path: 'styles.css',
+        mimeType: 'text/css',
+        content: 'body { font-family: system-ui, sans-serif; margin: 2rem; background: #0f172a; color: #f8fafc; }',
+      },
+      {
+        path: 'app.js',
+        mimeType: 'application/javascript',
+        content: 'console.log("Kartik.ai isolated sandbox preview ready");',
+      },
+    ];
+
+    const files = rawFiles.map((f) => ({
+      path: f.path,
+      mimeType: f.mimeType,
+      sizeBytes: Buffer.byteLength(f.content, 'utf8'),
+      sha256: crypto.createHash('sha256').update(f.content, 'utf8').digest('hex'),
+      content: f.content,
+    }));
+
     const manifest = {
       title: cleanTitle,
       entryFile: 'index.html',
-      files: [
-        {
-          path: 'index.html',
-          mimeType: 'text/html',
-          content: `<!doctype html><html><head><meta charset="utf-8"><title>${cleanTitle}</title><link rel="stylesheet" href="styles.css"></head><body><main id="app"><h1>${cleanTitle}</h1></main><script src="app.js"></script></body></html>`,
-        },
-        {
-          path: 'styles.css',
-          mimeType: 'text/css',
-          content: 'body { font-family: system-ui, sans-serif; margin: 2rem; background: #0f172a; color: #f8fafc; }',
-        },
-        {
-          path: 'app.js',
-          mimeType: 'application/javascript',
-          content: 'console.log("Kartik.ai isolated sandbox preview ready");',
-        },
-      ],
+      files,
     };
 
     const rawManifestJson = JSON.stringify(manifest);

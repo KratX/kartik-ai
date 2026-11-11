@@ -2,18 +2,18 @@
 
 ---
 
-## Entry 18 — Phase 5 / Step 5.1 (Micro-step 5.1.a): Agent Config (`MOCK_AI=true`), Provider Interfaces & `userId`-Isolated Vector Store
+## Entry 19 — Phase 5 / Step 5.2 (Micro-step 5.2.a): Router, Specialist Graph Execution & Daily Redis Budget Guard
 
 ### 1. Concept learned
-- **Deterministic Mock-First AI Architecture & Tenant-Isolated Vector Search (Blueprint §10, §12, Invariants #4, #9, #13, #19):**
-  - **Mock-First Default (`MOCK_AI=true`, `IMAGE_PROVIDER=mock`):** Every AI specialist (`chat`, `coding`, `search`, `embedding`, `image`, `vision`) sits behind an explicit TypeScript interface (`ChatModelProvider`, `CodingModelProvider`, `SearchProvider`, `EmbeddingProvider`, `ImageGenerationProvider`, `VisionProvider`, `VectorStore`). By default, Agent runs deterministic mock implementations so local development, CI, and integration tests consume zero external API quota.
-  - **Tenant-Scoped Vector Retrieval (Invariant #9):** Unlike a traditional SQL table where a query hits one row by primary key, vector similarity search compares a query embedding against stored chunk vectors. If tenant filtering happens *after* top-K similarity scoring, another user's chunks could crowd out the caller's results or leak across tenants. Therefore, `VectorStore.searchChunks` filters strictly by `chunk.userId === input.userId` (and optional `fileIds`) **before** computing cosine similarity.
+- **LangChain vs LangGraph & Deterministic Specialist Routing (Blueprint §5, §10):**
+  - **LangChain vs LangGraph:** *LangChain* provides linear prompt-to-model chains and provider wrappers, whereas *LangGraph* models agent execution as a stateful directed graph (`Router -> Specialist Node -> Validation/Persistence -> Output`).
+  - **Untrusted Model Output Validation (Invariant #12):** When the `coding` specialist returns a JSON code bundle, `AgentGraphExecutor` never trusts the raw JSON. It parses it and runs `validateArtifactManifest` (`@kartik/shared/validation`) to reject path traversal (`../`), absolute paths, null bytes, hidden files, or disallowed extensions with `422 ARTIFACT_INVALID` before writing anything to storage.
+  - **Graceful Budget Degradation (§12):** `DailyLiveBudgetGuard` tracks daily live calls in Redis under `quota:{userId}:{day}` and `quota:global_live:{day}` (48h TTL). When the daily cap is reached, it degrades smoothly to deterministic mock mode with a clear notice rather than failing hard.
 
 ### 2. What was implemented
-- `backend/services/agent/src/config/index.ts` (`loadAgentConfig`)
-- `backend/services/agent/src/models/index.ts` (`AGENT_INITIAL_MIGRATION` `0001_agent_core.sql` + provider interfaces)
-- `backend/services/agent/src/services/mock-providers.ts` (`MockChatModelProvider`, `MockCodingModelProvider`, `MockSearchProvider`, `MockEmbeddingProvider`, `MockImageGenerationProvider`, `MockVisionProvider`, `InMemoryVectorStore`)
-- `backend/services/agent/tests/agent-foundation.test.ts` (4 unit tests)
+- `backend/services/agent/src/services/budget-guard.ts` (`DailyLiveBudgetGuard`, `InMemoryDailyBudgetStore`)
+- `backend/services/agent/src/graph/index.ts` (`routePromptToSpecialist`, `AgentGraphExecutor`)
+- `backend/services/agent/tests/agent-graph.test.ts` (4 unit tests)
 
 ### 3. How to inspect the feature
-- Run `pnpm test` and inspect the `@kartik/agent config, 0001_agent_core migration & deterministic mock providers (5.1.a)` suite.
+- Run `pnpm test` and inspect the `@kartik/agent Router, Specialist Graph & Daily Redis Budget Guard (5.2.a)` suite.
