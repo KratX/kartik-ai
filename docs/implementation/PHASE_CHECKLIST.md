@@ -76,7 +76,7 @@ Track every phase and every exit gate from `kartik_ai_blueprint.md` (Section 7).
 
 ## Phase 6 — Chat Service (`backend/services/chat`)
 - [x] `6.1.a` Chat config, `0001_chat_core.sql` migration (`conversations`, `messages`, `agent_runs`) & `ChatRepository` with keyset cursor pagination
-- [ ] `6.2.a` Chat Run Orchestrator (`Reserve -> Execute -> Settle/Release`), 24h chat idempotency (`idem:{userId}:{requestId}`), `execution_unknown` recovery & conversation deletion coordinator (`lock:cleanup:{conversationId}`)
+- [x] `6.2.a` Chat Run Orchestrator (`Reserve -> Execute -> Settle/Release`), 24h chat idempotency (`idem:{userId}:{requestId}`), `execution_unknown` recovery & conversation deletion coordinator (`lock:cleanup:{conversationId}`)
 - [ ] `6.3.a` Chat HTTP routes (`/conversations`, `/conversations/:id/messages`, `DELETE /conversations/:id`) & Phase 6 Exit Gate
 
 ## Phase 7 — Frontend Application (`frontend`)

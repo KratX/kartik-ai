@@ -20,3 +20,23 @@ export {
   PostgresChatRepository,
   type ChatRepository,
 } from './repositories/index.js';
+
+export {
+  AGENT_TO_BILLING_OPERATION,
+  DEFAULT_OPERATION_UNITS,
+  resolveTargetSpecialist,
+  InMemoryChatIdempotencyStore,
+  InMemoryChatLockStore,
+  ChatOrchestratorService,
+  type ChatTurnResult,
+  type ChatIdempotencyEntry,
+  type ChatIdempotencyStore,
+  type ChatLockStore,
+  type BillingSettleResult,
+  type BillingReleaseResult,
+  type BillingServiceClient,
+  type AgentPurgeCascadeResult,
+  type AgentServiceClient,
+  type SendMessageInput,
+  type DeleteConversationResult,
+} from './services/index.js';
