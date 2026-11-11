@@ -50,4 +50,12 @@ Tick an item only when evidence exists in `TEST_EVIDENCE.md` or `BUILD_STATE.md`
 - [x] 4.1 Billing config, `0001_billing_core.sql` migration, and `SELECT ... FOR UPDATE` credit account & ledger repository (`4.1.a`)
 - [x] 4.2 Reserve / settle / release transactional state machine & concurrency no-overdraw proof (`4.2.a`)
 - [x] 4.3 Razorpay order creation, checkout HMAC (`order_id|payment_id`) & raw-body webhook HMAC verification (`4.3.a`)
-- [ ] 4.4 Billing public & internal HTTP routes and Phase 4 exit gate (`4.4.a`)
+- [x] 4.4 Billing public & internal HTTP routes and Phase 4 exit gate (`4.4.a`)
+
+**Phase 4 exit gate (PASSED — 4 suites / 16 tests in `@kartik/billing`, 20 suites / 73 tests total):** All credit and payment mutations run inside `SELECT ... FOR UPDATE` transactions with integer paise pricing; 10 concurrent 30-credit reservations against a 100-credit balance prove zero overdraw (3 succeed, 7 reject with `402 QUOTA_EXHAUSTED`); checkout HMAC (`order_id|payment_id`) and raw-body webhook HMAC use distinct secrets and guarantee single-credit idempotency across delayed/duplicate webhooks; `/internal/credits/{reserve,settle,release}` is restricted strictly to `@kartik/chat`.
+
+## Phase 5 — Agent service, specialist LangGraph nodes, RAG & code artifacts (`@kartik/agent`)
+- [ ] 5.1 Agent config (`MOCK_AI=true` default), `0001_agent_core.sql` migration, and provider interfaces + deterministic mocks (`5.1.a`)
+- [ ] 5.2 Router & specialist graph execution (`chat`, `search`, `coding`, `rag`, `vision`, `image`) + daily Redis budget counters (`5.2.a`)
+- [ ] 5.3 File upload validation, PDF chunking/embedding/userId-filtered Qdrant retrieval & artifact manifest validation (`5.3.a`)
+- [ ] 5.4 Agent public (`/files`, `/artifacts`) & internal (`/internal/agent/execute`, `/internal/agent/purge`) routes and Phase 5 exit gate (`5.4.a`)

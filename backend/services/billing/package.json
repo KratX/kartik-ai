@@ -15,9 +15,9 @@
     "@kartik/shared": "workspace:*"
   },
   "scripts": {
-    "build": "tsc -b --force",
+    "build": "tsc -b",
     "typecheck": "tsc -b",
     "lint": "tsc -b",
-    "test": "tsc -b --force && node --test \"./dist/tests/*.test.js\""
+    "test": "tsc -b && node --test \"./dist/tests/*.test.js\""
   }
 }
