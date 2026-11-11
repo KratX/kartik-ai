@@ -305,3 +305,16 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **Problem encountered and why the fix worked:** None — compiled cleanly with `tsc -b` and passed all 4 unit tests (`61/61` workspace tests across 17 suites) on the first run.
 - **How to inspect the feature:** Run `pnpm --filter @kartik/billing test` (`4/4` passing tests) and inspect `backend/services/billing/tests/billing-repository.test.ts`.
 - **What remains unclear or deferred:** Implementing the transactional `reserve` / `settle` / `release` credit state machine and 10-way concurrent no-overdraw proof test in `4.2.a`.
+
+---
+
+### Phase 4 / 4.2.a — Transactional `reserve` / `settle` / `release` credit state machine & 10-way concurrent no-overdraw proof (`@kartik/billing/services/credit-service`)
+- **Date:** 2026-11-11
+- **Concept learned:** Why expensive AI operations use a two-phase **Reservation $\rightarrow$ Settle / Release** credit pattern instead of charging before or after execution, how 30-day money idempotency (`idem:{userId}:{requestId}`) + SHA-256 payload fingerprinting prevent duplicate charges on network retries while rejecting mutated payloads (`409 IDEMPOTENCY_CONFLICT`), and how `SELECT ... FOR UPDATE` guarantees zero overdraw under 10 simultaneous reservations.
+- **What was implemented:** Created `backend/services/billing/src/services/credit-service.ts` (`CreditReservationService`, `OPERATION_CREDIT_COSTS`, `InMemoryMoneyIdempotencyStore`), exported it via `src/services/index.ts` and `src/index.ts`, and added `backend/services/billing/tests/credit-service.test.ts` (`4/4` tests).
+- **Important terms and how they apply here:**
+  - **Reservation vs Charge (§5 & §11):** Charging upfront before an LLM call risks taking credits when a provider times out; charging only after execution lets a user launch 10 parallel requests that exceed their balance. Reserving holds `reservedCredits` upfront inside a locked transaction, and Chat settles the actual debit after storing the response (or releases the hold on confirmed failure).
+  - **10-way Concurrency No-Overdraw Proof (Invariant #17):** When 10 parallel 30-credit `image_generation` reservations hit a 100-credit account simultaneously, per-user row locking serializes them so exactly 3 succeed (`90` reserved, `10` available) and 7 fail with `402 QUOTA_EXHAUSTED`.
+- **Problem encountered and why the fix worked:** None — compiled and passed all 4 unit & concurrency tests (`65/65` workspace tests across 18 suites) on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/billing test` (`8/8` passing tests across 2 suites) and inspect `backend/services/billing/tests/credit-service.test.ts`.
+- **What remains unclear or deferred:** Implementing Razorpay order creation, checkout HMAC (`order_id|payment_id`), and raw-body webhook HMAC verification in `4.3.a`.
