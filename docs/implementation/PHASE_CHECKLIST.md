@@ -34,5 +34,5 @@ Tick an item only when evidence exists in `TEST_EVIDENCE.md` or `BUILD_STATE.md`
 ## Phase 2 — Auth service & session lifecycle (`@kartik/auth`)
 - [x] 2.1 Auth config, `0001_auth_users.sql` migration, and `UserRepository` (`PostgresUserRepository` + `InMemoryUserRepository`) (`2.1.a`)
 - [x] 2.2 Firebase ID-token verification adapter (`MockFirebaseTokenVerifier` + live RS256 `JwtFirebaseTokenVerifier`) (`2.2.a`)
-- [ ] 2.3 Opaque Redis session store (`sess:{sessionId}`, 256-bit CSPRNG ID, 7d sliding TTL, immediate revocation) (`2.3.a`)
+- [x] 2.3 Opaque Redis session store (`session:{sessionId}`, 256-bit CSPRNG ID, 7d sliding TTL, immediate revocation) (`2.3.a`)
 - [ ] 2.4 Auth HTTP routes (`POST /auth/google`, `GET /auth/me`, `POST /auth/logout`, `POST /internal/sessions/introspect`) & Phase 2 exit gate (`2.4.a`)

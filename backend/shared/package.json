@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build": "tsc -b --force",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -b",
     "lint": "node -e \"process.exit(0)\"",
     "test": "tsc -b --force && node --test \"./dist/tests/*.test.js\""
   }

@@ -224,3 +224,18 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **Problem encountered and why the fix worked:** None — compiled and passed all 4 unit tests on the first run.
 - **How to inspect the feature:** Run `pnpm --filter @kartik/auth test` (`8/8` passing tests across 2 suites) and inspect `backend/services/auth/tests/firebase-verifier.test.ts`.
 - **What remains unclear or deferred:** Implementing the opaque Redis session service (`2.3.a`) next.
+
+---
+
+### Phase 2 / 2.3.a — Opaque Redis session lifecycle, HttpOnly cookies, and CI composite `tsc -b` typecheck fix (`@kartik/auth/services/session-service`)
+- **Date:** 2026-11-11
+- **Concept learned:** Why Kartik.ai stores browser sessions as opaque 256-bit random tokens in `HttpOnly` cookies backed by Redis hashes (`session:{sessionId}`) with a 7-day sliding TTL instead of stateless browser JWTs (ADR 0002), and why TypeScript composite workspaces (`"composite": true` + `"references"`) must use `tsc -b` rather than `tsc --noEmit` for `pnpm typecheck` in CI.
+- **What was implemented:** Created `backend/services/auth/src/services/session-service.ts` (`SessionService`, `InMemorySessionStore`, `RedisHashSessionStore`, `generateOpaqueSessionId`, `serializeSessionCookie`, `serializeClearSessionCookie`, `extractSessionIdFromCookieHeader`), exported it from `src/services/index.ts`, added `backend/services/auth/tests/session-service.test.ts`, and updated `"typecheck"` in `backend/shared/package.json` and `backend/services/auth/package.json` to `tsc -b`.
+- **Important terms and how they apply here:**
+  - **Opaque session vs stateless JWT (ADR 0002):** A stateless JWT stored in a browser cookie cannot be revoked before its `exp` timestamp without building a server-side blocklist anyway. An opaque 256-bit CSPRNG ID (`randomBytes(32).toString('base64url')`) carries zero PII, is meaningless if intercepted outside Redis, and revokes instantaneously via `DEL session:{sessionId}` on logout.
+  - **Sliding 7-day TTL (`REDIS_TTL_SECONDS.SESSION = 604800`s):** Each authenticated session introspection updates `lastSeenAt` and resets the Redis key's TTL (`EXPIRE session:{sessionId} 604800`), keeping active users signed in while expiring inactive sessions after 7 days.
+  - **Composite `tsc -b` vs `tsc --noEmit` in CI:** In `.github/workflows/ci.yml`, `pnpm typecheck` runs immediately after `pnpm install --frozen-lockfile`, before `pnpm build`. Because `@kartik/shared` maps `"types": "./dist/index.d.ts"` in `package.json`, running `tsc --noEmit` in `backend/shared` suppressed emitting `dist/index.d.ts`, causing `backend/services/auth` to fail with `TS2307: Cannot find module '@kartik/shared'`. Switching `"typecheck"` to `tsc -b` builds the project reference graph in topological order on clean CI checkouts.
+- **Problem encountered and why the fix worked:** GitHub Actions failed on `pnpm typecheck` with `TS2307: Cannot find module '@kartik/shared'` because `backend/shared/dist/` did not exist yet when `tsc --noEmit` ran. Reproducing via `rm -rf backend/shared/dist && npx tsc -p backend/services/auth/tsconfig.json --noEmit` confirmed the root cause, and replacing `tsc --noEmit` with `tsc -b` in `backend/shared/package.json` and `backend/services/auth/package.json` resolved both sequential and standalone workspace typechecks.
+- **How to inspect the feature:** Run `pnpm typecheck` and `pnpm --filter @kartik/auth test` (`12/12` passing tests across 3 suites).
+- **What remains unclear or deferred:** Implementing the Auth HTTP controllers/routes (`POST /auth/google`, `GET /auth/me`, `POST /auth/logout`, `POST /internal/sessions/introspect`) in `2.4.a` to close Phase 2.
+
