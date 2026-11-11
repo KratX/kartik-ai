@@ -239,3 +239,18 @@ One entry per completed micro-step. Written for the owner, not as an AI memory d
 - **How to inspect the feature:** Run `pnpm typecheck` and `pnpm --filter @kartik/auth test` (`12/12` passing tests across 3 suites).
 - **What remains unclear or deferred:** Implementing the Auth HTTP controllers/routes (`POST /auth/google`, `GET /auth/me`, `POST /auth/logout`, `POST /internal/sessions/introspect`) in `2.4.a` to close Phase 2.
 
+---
+
+### Phase 2 / 2.4.a — Auth HTTP routes, internal Gateway session introspection, and Phase 2 Exit Gate closure (`@kartik/auth/routes`)
+- **Date:** 2026-11-11
+- **Concept learned:** How public authentication endpoints (`POST /auth/google`, `GET /auth/me`, `POST /auth/logout`) and private service-to-service endpoints (`POST /internal/sessions/introspect`) coexist inside `@kartik/auth` with distinct security boundaries, why `toPublicAuthUser` strips internal `firebaseUid` before returning user profiles to the browser, and how the Gateway validates an opaque session cookie via `/internal/sessions/introspect` before minting downstream Ed25519 user-context assertions.
+- **What was implemented:** Created `backend/services/auth/src/middleware/index.ts`, `backend/services/auth/src/controllers/index.ts`, `backend/services/auth/src/routes/index.ts`, updated `backend/services/auth/src/index.ts`, and added `backend/services/auth/tests/auth-routes.test.ts` closing the Phase 2 Exit Gate.
+- **Important terms and how they apply here:**
+  - **Public vs. Internal route separation (Invariant #14):** Browser requests only reach `/auth/google`, `/auth/me`, and `/auth/logout` via the Gateway. `/internal/sessions/introspect` is never in the Gateway's public route table and still requires `x-service-caller: gateway` + constant-time `x-service-token` verification (`401` on bad token, `403` if called by `chat`, `agent`, or `billing`).
+  - **DTO projection (`toPublicAuthUser`):** Internal database columns such as `firebaseUid` are provider implementation details; stripping them at the controller boundary keeps the public contract clean.
+  - **Account-status revalidation on introspection:** Even if a Redis session key (`sess:{sessionId}`) has not expired yet, both `GET /auth/me` and `POST /internal/sessions/introspect` verify the user row in `UserRepository`. If an admin disables the user (`status = 'disabled'`), the Redis session is revoked immediately and `403 FORBIDDEN` is returned.
+- **Problem encountered and why the fix worked:** None — compiled and passed all 4 integration tests (`16/16` Auth tests, `45/45` total workspace tests) on the first run.
+- **How to inspect the feature:** Run `pnpm --filter @kartik/auth test` (`16/16` passing tests across 4 suites) and inspect `backend/services/auth/tests/auth-routes.test.ts`.
+- **What remains unclear or deferred:** Phase 2 is complete; Phase 3 (`@kartik/gateway` API Gateway) begins next.
+
+

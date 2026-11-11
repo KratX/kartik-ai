@@ -35,4 +35,11 @@ Tick an item only when evidence exists in `TEST_EVIDENCE.md` or `BUILD_STATE.md`
 - [x] 2.1 Auth config, `0001_auth_users.sql` migration, and `UserRepository` (`PostgresUserRepository` + `InMemoryUserRepository`) (`2.1.a`)
 - [x] 2.2 Firebase ID-token verification adapter (`MockFirebaseTokenVerifier` + live RS256 `JwtFirebaseTokenVerifier`) (`2.2.a`)
 - [x] 2.3 Opaque Redis session store (`session:{sessionId}`, 256-bit CSPRNG ID, 7d sliding TTL, immediate revocation) (`2.3.a`)
-- [ ] 2.4 Auth HTTP routes (`POST /auth/google`, `GET /auth/me`, `POST /auth/logout`, `POST /internal/sessions/introspect`) & Phase 2 exit gate (`2.4.a`)
+- [x] 2.4 Auth HTTP routes (`POST /auth/google`, `GET /auth/me`, `POST /auth/logout`, `POST /internal/sessions/introspect`) & Phase 2 exit gate (`2.4.a`)
+
+**Phase 2 exit gate (PASSED — 4 suites / 16 tests in `@kartik/auth`, 13 suites / 45 tests total):** Mock and RS256 Firebase ID tokens verify cleanly; `POST /auth/google` sets an `HttpOnly` opaque session cookie backed by `sess:{sessionId}` in Redis; `GET /auth/me` returns the user profile and slides the 7-day TTL; `POST /auth/logout` deletes the Redis key so replaying the cookie returns `401 UNAUTHENTICATED`; `POST /internal/sessions/introspect` enforces `x-service-caller: gateway` + constant-time `x-service-token`.
+
+## Phase 3 — API Gateway (`@kartik/gateway`)
+- [ ] 3.1 Gateway config, composite build/test wiring, and upstream service directory (`3.1.a`)
+- [ ] 3.2 Session cookie introspection client & Ed25519 `x-user-context` assertion minting per target audience (`3.2.a`)
+- [ ] 3.3 Gateway public route table, `traceId` generation, `Idempotency-Key` -> `requestId` forwarding, and Phase 3 exit gate (`3.3.a`)
