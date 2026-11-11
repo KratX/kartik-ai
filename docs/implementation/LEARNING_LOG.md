@@ -2,6 +2,27 @@
 
 ---
 
+## Entry 24 — Phase 6 / Step 6.3 (Micro-step 6.3.a): Chat HTTP Routes, Ed25519 `aud="chat"` Verification & Phase 6 Exit Gate Closure
+
+### 1. Concept learned
+- **Audience-Scoped Ed25519 Assertions Across Services (`Blueprint §6.4`):**
+  - Even inside the private backend network, an `x-user-context` assertion minted by the Gateway for `/api/v1/files` (`aud: 'agent'`) or `/api/v1/billing/balance` (`aud: 'billing'`) is rejected with `401 UNAUTHENTICATED` if replayed against `/api/v1/conversations` on the Chat Service (`requireChatUserContext` enforces `expectedAudience: 'chat'`).
+- **Idempotent Turn Status Codes (`201 Created` vs `200 OK` Replay):**
+  - When `POST /conversations/:id/messages` executes a fresh turn, it returns `201 Created`. When a network retry arrives within 24 hours with the same `Idempotency-Key` (`requestId`) and matching payload fingerprint, `ChatOrchestratorService` returns the cached turn (`idempotentReplay: true`) and the router responds with `200 OK` without re-invoking Billing or Agent.
+- **Read-Only Kill Switch (`DEMO_READ_ONLY`, `Blueprint §12`):**
+  - When `DEMO_READ_ONLY=true`, `GET /conversations` and `GET /conversations/:id/messages` continue serving seeded conversations normally (`200 OK`), while mutating routes (`POST`, `DELETE`) return `403 DEMO_READ_ONLY`.
+
+### 2. What was implemented
+- `backend/services/chat/src/middleware/index.ts` (`requireChatUserContext`, `enforceChatDemoReadOnly`)
+- `backend/services/chat/src/controllers/index.ts` (`ChatController`)
+- `backend/services/chat/src/routes/index.ts` (`createChatRouter`)
+- `backend/services/chat/tests/chat-routes.test.ts` (4 unit & integration tests closing the Phase 6 Exit Gate)
+
+### 3. How to inspect the feature
+- Run `pnpm test` and inspect `@kartik/chat HTTP routes & Phase 6 Exit Gate closure (6.3.a)` (`27` suites, `101` tests passing).
+
+---
+
 ## Entry 23 — Phase 6 / Step 6.2 (Micro-step 6.2.a): Chat Run Orchestrator (`Reserve -> Execute -> Settle / Release`), Ambiguous Timeout Reconciliation & Cascade Deletion
 
 ### 1. Concept learned
@@ -26,23 +47,3 @@
 
 ### 3. How to inspect the feature
 - Run `pnpm test` and inspect the `@kartik/chat ChatOrchestratorService reserve/execute/settle & cascade purge (6.2.a)` suite.
-
----
-
-## Entry 22 — Phase 6 / Step 6.1 (Micro-step 6.1.a): Chat Config, `0001_chat_core.sql` Schema & Keyset Cursor Pagination
-
-### 1. Concept learned
-- **Keyset Cursor Pagination vs Offset Pagination & Scope-Bound Cursors (Blueprint §5.4):**
-  - **Why Keyset (`(createdAt, id)`) instead of `OFFSET`:** In SQL, `OFFSET 1000 LIMIT 30` forces PostgreSQL to scan and discard 1,000 rows on every request, and if a new message is inserted while the user scrolls, rows shift and duplicate across pages. Keyset pagination (`WHERE (created_at, id) < ($1, $2)`) jumps directly to the B-Tree index position in $O(\log N)$ time with zero row drift.
-  - **Scope & Owner Binding (`encodePaginationCursor` / `parsePaginationQuery`):** Every pagination cursor is HMAC-signed and embeds `{ scope, userId, createdAt, id }`. If User B tries to replay User A's cursor, or replays a `conversations:list` cursor on `messages:conv_1`, `parsePaginationQuery` rejects it with `400 VALIDATION_FAILED`.
-- **Durable Run Record (`chat.agent_runs`, Invariants #3, #6, #15):**
-  - Chat owns `chat.agent_runs` keyed by the client's `requestId` (`Idempotency-Key`) with states `'pending' | 'reserved' | 'executing' | 'completed' | 'execution_unknown' | 'failed' | 'released'` so interrupted turns can be reconciled without double-charging.
-
-### 2. What was implemented
-- `backend/services/chat/src/config/index.ts` (`loadChatConfig`)
-- `backend/services/chat/src/models/index.ts` (`CHAT_INITIAL_MIGRATION` `0001_chat_core.sql` + domain models)
-- `backend/services/chat/src/repositories/index.ts` (`InMemoryChatRepository`, `PostgresChatRepository`)
-- `backend/services/chat/tests/chat-repository.test.ts` (4 unit tests)
-
-### 3. How to inspect the feature
-- Run `pnpm test` and inspect the `@kartik/chat config, 0001_chat_core migration & ChatRepository cursor pagination (6.1.a)` suite.

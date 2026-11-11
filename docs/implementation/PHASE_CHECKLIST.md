@@ -77,10 +77,16 @@ Track every phase and every exit gate from `kartik_ai_blueprint.md` (Section 7).
 ## Phase 6 — Chat Service (`backend/services/chat`)
 - [x] `6.1.a` Chat config, `0001_chat_core.sql` migration (`conversations`, `messages`, `agent_runs`) & `ChatRepository` with keyset cursor pagination
 - [x] `6.2.a` Chat Run Orchestrator (`Reserve -> Execute -> Settle/Release`), 24h chat idempotency (`idem:{userId}:{requestId}`), `execution_unknown` recovery & conversation deletion coordinator (`lock:cleanup:{conversationId}`)
-- [ ] `6.3.a` Chat HTTP routes (`/conversations`, `/conversations/:id/messages`, `DELETE /conversations/:id`) & Phase 6 Exit Gate
+- [x] `6.3.a` Chat HTTP routes (`/conversations`, `/conversations/:id/messages`, `DELETE /conversations/:id`) & Phase 6 Exit Gate
+
+### Phase 6 Exit Gate
+- [x] Sending a message reserves credits in Billing, executes the specialist turn in Agent, persists user + assistant messages in `chat.messages`, settles actual credits in Billing, and caches the turn under `idem:{userId}:{requestId}` (24h TTL).
+- [x] Replaying the same `Idempotency-Key` returns the cached turn (`200 OK`) without re-charging; reusing the same `Idempotency-Key` with a mutated payload fails with `409 IDEMPOTENCY_CONFLICT`.
+- [x] Confirmed Agent failure releases the credit reservation immediately; ambiguous timeout (`EXECUTION_UNKNOWN`) transitions the run to `execution_unknown` and reconciles under `lock:settle:{reservationId}`.
+- [x] `DELETE /conversations/:id` acquires `lock:cleanup:{conversationId}`, purges `vectors -> objects -> metadata` via Agent, and marks the conversation `purged` only upon Agent confirmation; subsequent lookups or foreign user lookups return `404 NOT_FOUND`.
 
 ## Phase 7 — Frontend Application (`frontend`)
-- [ ] Pending Phase 6 completion
+- [ ] `7.1.a` Pending start
 
 ## Phase 8 — End-to-End Integration, Evaluation & Hardening
 - [ ] Pending Phase 7 completion

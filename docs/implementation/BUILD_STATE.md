@@ -1,15 +1,15 @@
 # Kartik.ai Build State
 
-- Current phase: Phase 6 — Chat Service (`backend/services/chat`)
-- Current step / micro-step: 6.2.a
+- Current phase: Phase 6 — Chat Service (`backend/services/chat`) — **COMPLETE**
+- Current step / micro-step: 6.3.a (Phase 6 Exit Gate Closed)
 - Status: complete
-- Last completed micro-step: 6.2.a (`ChatOrchestratorService`: Reserve -> Execute -> Settle/Release coordination, 24h chat idempotency `idem:{userId}:{requestId}`, `execution_unknown` reconciliation under `lock:settle:{reservationId}`, and conversation deletion coordinator under `lock:cleanup:{conversationId}`)
-- Next micro-step: 6.3.a (Chat HTTP routes `/conversations`, `/conversations/:id/messages`, `DELETE /conversations/:id`, Ed25519 `aud="chat"` verification, and Phase 6 Exit Gate closure)
+- Last completed micro-step: 6.3.a (Chat HTTP routes `/conversations`, `/conversations/:id/messages`, `DELETE /conversations/:id`, Ed25519 `aud="chat"` verification, `DEMO_READ_ONLY` kill switch, per-user rate limiting & Phase 6 Exit Gate closure)
+- Next micro-step: 7.1.a (Phase 7 — Frontend Application `frontend`: workspace setup, typed API client with `Idempotency-Key` generator, and auth/conversation state store)
 - Current branch: main
-- Last known commit: Phase 6 micro-step 6.2.a complete
+- Last known commit: Phase 6 micro-step 6.3.a complete (Phase 6 Exit Gate passed)
 
 ## Current objective
-Phase 6 (`@kartik/chat`) implements the Chat Service owning conversations, messages, the durable agent run record (`chat.agent_runs`), credit coordination around Agent execution, and the conversation deletion lifecycle (Invariants #3, #6, #15, #18, #20). Micro-step `6.2.a` implements `ChatOrchestratorService` (`src/services/index.ts`), enforcing 24-hour chat idempotency (`idem:{userId}:{requestId}`), `Reserve -> Execute -> Settle / Release` orchestration, `execution_unknown` timeout reconciliation (`lock:settle:{reservationId}`), and cascade conversation deletion (`lock:cleanup:{conversationId}`).
+Phase 6 (`@kartik/chat`) is now **100% complete (`3/3` Chat suites, `12/12` Chat tests passing, `27` suites / `101` tests cumulative)**. Micro-step `6.3.a` implements `requireChatUserContext` (`aud === "chat"`), `enforceChatDemoReadOnly`, `ChatController`, `createChatRouter`, and `tests/chat-routes.test.ts`, closing the **Phase 6 Exit Gate**.
 
 ## Completed work
 - Phase 0: Repository & Toolchain Baseline (Complete)
@@ -18,21 +18,24 @@ Phase 6 (`@kartik/chat`) implements the Chat Service owning conversations, messa
 - Phase 3: API Gateway (`backend/gateway` — Complete, 3/3 Gateway suites, 12/12 Gateway tests passing, 57/57 cumulative)
 - Phase 4: Billing Service (`backend/services/billing` — Complete, 4/4 Billing suites, 16/16 Billing tests passing, 73/73 cumulative)
 - Phase 5: Agent Service (`backend/services/agent` — Complete, 4/4 Agent suites, 16/16 Agent tests passing, 89/89 cumulative)
-- Phase 6: Chat Service (`backend/services/chat`):
+- Phase 6: Chat Service (`backend/services/chat` — **Complete**, 3/3 Chat suites, 12/12 Chat tests passing, 101/101 cumulative):
   - `6.1.a`: Wired `backend/services/chat/package.json` & `tsconfig.json`, implemented `loadChatConfig`, `0001_chat_core.sql`, and `ChatRepository` (`4/4` tests passing).
-  - `6.2.a`: Implemented `ChatOrchestratorService`, `InMemoryChatIdempotencyStore`, `InMemoryChatLockStore` (`src/services/index.ts`), and `tests/chat-orchestrator.test.ts` (`4/4` tests passing, `8/8` Chat tests, `97/97` cumulative).
+  - `6.2.a`: Implemented `ChatOrchestratorService`, `InMemoryChatIdempotencyStore`, `InMemoryChatLockStore` (`src/services/index.ts`), and `tests/chat-orchestrator.test.ts` (`4/4` tests passing).
+  - `6.3.a`: Implemented `requireChatUserContext` & `enforceChatDemoReadOnly` (`src/middleware/index.ts`), `ChatController` (`src/controllers/index.ts`), `createChatRouter` (`src/routes/index.ts`), and `tests/chat-routes.test.ts` (`4/4` tests passing — **Phase 6 Exit Gate closed**).
 
-## Changed files (Micro-step 6.2.a)
-- `backend/services/chat/src/services/index.ts` (created)
+## Changed files (Micro-step 6.3.a)
+- `backend/services/chat/src/middleware/index.ts` (created)
+- `backend/services/chat/src/controllers/index.ts` (created)
+- `backend/services/chat/src/routes/index.ts` (created)
 - `backend/services/chat/src/index.ts` (modified)
-- `backend/services/chat/tests/chat-orchestrator.test.ts` (created)
+- `backend/services/chat/tests/chat-routes.test.ts` (created)
 - `docs/implementation/BUILD_STATE.md` (updated)
 - `docs/implementation/TEST_EVIDENCE.md` (updated)
 - `docs/implementation/LEARNING_LOG.md` (updated)
 - `docs/implementation/PHASE_CHECKLIST.md` (updated)
 
 ## Verification evidence
-- `pnpm test` (`node --test --test-reporter=spec "backend/**/dist/tests/*.test.js"`) — **PASS** (`26` suites, `97` tests passing: `29` in `@kartik/shared` + `16` in `@kartik/auth` + `12` in `@kartik/gateway` + `16` in `@kartik/billing` + `16` in `@kartik/agent` + `8` in `@kartik/chat`, `0` failures)
+- `pnpm test` (`node --test --test-reporter=spec "backend/**/dist/tests/*.test.js"`) — **PASS** (`27` suites, `101` tests passing: `29` in `@kartik/shared` + `16` in `@kartik/auth` + `12` in `@kartik/gateway` + `16` in `@kartik/billing` + `16` in `@kartik/agent` + `12` in `@kartik/chat`, `0` failures)
 
 ## Open issues / blockers
 - None.
@@ -41,4 +44,4 @@ Phase 6 (`@kartik/chat`) implements the Chat Service owning conversations, messa
 - None.
 
 ## Safe resume instruction
-Wait for owner review of **Micro-step `6.2.a`**. On `"continue"` / `"go"`, proceed to **Phase 6 — Chat Service (`backend/services/chat`), Micro-step `6.3.a`** (`requireChatUserContext` with `aud="chat"`, `ChatController`, `createChatRouter`, and `chat-routes.test.ts` closing the Phase 6 Exit Gate).
+Wait for owner review of **Micro-step `6.3.a` (Phase 6 Exit Gate)**. On `"continue"` / `"go"`, begin **Phase 7 — Frontend Application (`frontend`), Micro-step `7.1.a`**.

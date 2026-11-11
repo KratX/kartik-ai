@@ -40,3 +40,22 @@ export {
   type SendMessageInput,
   type DeleteConversationResult,
 } from './services/index.js';
+
+export {
+  readSingleHeader,
+  requireChatUserContext,
+  enforceChatDemoReadOnly,
+  type HttpHeaderMap,
+} from './middleware/index.js';
+
+export {
+  ChatController,
+  type ChatControllerDependencies,
+} from './controllers/index.js';
+
+export {
+  createChatRouter,
+  type ChatHttpRequest,
+  type ChatHttpResponse,
+  type ChatRouterDependencies,
+} from './routes/index.js';
