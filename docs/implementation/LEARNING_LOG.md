@@ -2,20 +2,19 @@
 
 ---
 
-## Entry 32 — Phase 8 / Step 8.5 (Micro-step 8.5.a): Local Full-Stack HTTP Runner (`scripts/start-local-stack.mjs`), Profile P Nginx Edge Config & Runbook Completion
+## Entry 33 — Phase 8 / Step 8.6 (Micro-step 8.6.a): Interactive Multi-Agent Demo Harness (`@kartik/frontend/app/interactive-demo-harness`) & Live Workbench
 
 ### 1. Concept learned
-- **Single-Command Zero-Cost Local Stack (`scripts/start-local-stack.mjs`):**
-  - By combining `createGatewayRouter`, `InMemoryUpstreamHttpClient`, and `createManagedHttpServer`, developers can boot the entire 5-service API surface (`Gateway`, `Auth`, `Chat`, `Agent`, `Billing`) on `http://127.0.0.1:8000` with a pre-seeded session cookie (`kartik_session=sess_demo_local_001`) and 200 starter credits — allowing immediate `curl` or browser testing without cloud keys or running containers.
-- **Single-Origin Reverse Proxy (`infra/nginx/default.conf`, Blueprint §2.1 & Invariant #1):**
-  - Serving the React SPA at `/` and proxying `/api/*` to `http://gateway:8000` on the same origin ensures `HttpOnly; SameSite=Lax` session cookies work naturally without third-party cookie restrictions, while internal services (`auth`, `chat`, `agent`, `billing`) stay unreachable from the public internet.
+- **Pluggable `HttpTransport` Enables Zero-Backend Interactive Portfolio Demos (`Blueprint §12`):**
+  - Because `KartikGatewayClient` (`@kartik/frontend/lib/api-client`) accepts an injected `HttpTransport`, `createInteractiveDemoHarness()` can simulate the entire API Gateway (`/api/v1/*`) in browser memory while still exercising the real `KartikWorkspaceShellController`, `WorkspaceStore`, `BillingCheckoutController`, `validateClientUploadCandidate`, `formatGroundedCitations`, and `buildSandboxedPreviewDocument` code paths.
+  - This allows portfolio reviewers to test specialist routing (`coding`, `rag`, `search`, `chat`, `vision`, `image`), `Idempotency-Key` 0-charge replay (Invariant #15), `DEMO_READ_ONLY` freeze toggling (§12), and opaque-origin `<iframe sandbox="allow-scripts">` execution directly in the browser with zero cloud cost.
 
 ### 2. What was implemented
-- `scripts/start-local-stack.mjs` (`startLocalStackServer` programmatic + CLI entrypoint)
-- `backend/gateway/tests/local-stack-runner.test.ts` (TCP integration test over ephemeral port)
-- `infra/scripts/local-up.sh` & `infra/nginx/default.conf` (upgraded from Phase 0 placeholders)
-- `.github/workflows/deploy-demo-vm.yml`, `docs/runbooks/*`, and `docs/architecture/*` (completed all remaining Phase 0 placeholder files)
+- `frontend/src/app/interactive-demo-harness.ts` (`createInteractiveDemoHarness`, `inferSpecialistFromPrompt`, `buildDemoCodingArtifactBundle`)
+- `frontend/src/index.ts` (re-exported `interactive-demo-harness`)
+- `frontend/tests/interactive-demo-harness.test.ts` (`3/3` tests covering specialist turns, 0-charge idempotent replay, and `DEMO_READ_ONLY` enforcement)
+- `src/App.tsx` (upgraded preview UI to the interactive Kartik.ai Multi-Agent Workbench)
 
 ### 3. How to inspect the feature
-- Run `pnpm test` (`35` suites, `127` tests passing).
-- Run `node scripts/start-local-stack.mjs` to start the local HTTP server on `:8000`.
+- Run `pnpm test` (`36` suites, `130` tests passing).
+- Interact with the live Workbench in the preview window (send specialist prompts, click **Replay Last Idempotency-Key**, toggle **DEMO_READ_ONLY**, or click **Simulate Token Counter (+1)** inside the sandboxed iframe).

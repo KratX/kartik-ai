@@ -6,3 +6,4 @@ export * from './features/citations/index.js';
 export * from './features/billing/index.js';
 export * from './features/files/index.js';
 export * from './app/workspace-shell.js';
+export * from './app/interactive-demo-harness.js';

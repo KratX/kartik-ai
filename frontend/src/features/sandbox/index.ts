@@ -127,7 +127,7 @@ export function validateFrontendArtifactBundle(
     if (typeof file.content !== 'string' || file.content.includes('\0')) {
       throw new Error(`Artifact file "${file.path}" contains invalid content`);
     }
-    totalBytes += Buffer.byteLength(file.content, 'utf8');
+    totalBytes += new TextEncoder().encode(file.content).byteLength;
     if (totalBytes > MAX_TOTAL_BYTES) {
       throw new Error(
         `Artifact bundle exceeds maximum preview size (${MAX_TOTAL_BYTES} bytes)`,
