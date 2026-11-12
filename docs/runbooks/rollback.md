@@ -1,19 +1,23 @@
 # Rollback runbook
 
-Placeholder — becomes operational in Phase 16.
+Operational rollback procedure for **Kartik.ai** (Blueprint v4.4 §8.5 & §16).
 
 ## Principle
 
-A rollback that has never been executed is not a rollback. Rehearse it once during Phase 16 and record the result in `TEST_EVIDENCE.md`.
+A rollback that has never been rehearsed is not a rollback. Every deployment records the previous known-good Git SHA in `docs/implementation/BUILD_STATE.md` so recovery is deterministic.
 
-## Procedure
+## Application Rollback Procedure
 
-1. Identify the last known-good image tag (recorded in `BUILD_STATE.md` and the deployment log).
-2. Re-deploy that tag with the same Compose file.
-3. Wait for `/health/ready` on every service.
-4. Smoke test: sign in, send a mock chat message, download an artifact.
-5. Record the rollback in `BUILD_STATE.md` with the reason and the timestamp.
+1. Identify the last known-good commit SHA or immutable image tag recorded in `docs/implementation/BUILD_STATE.md`.
+2. If an immediate traffic freeze is needed while investigating, set `DEMO_READ_ONLY=true` on the API Gateway — all mutating routes (`POST`, `PUT`, `PATCH`, `DELETE`) immediately return `403 FORBIDDEN` while read-only browsing and health probes stay up (Blueprint §12).
+3. Checkout or redeploy the last known-good tag and run `pnpm install --frozen-lockfile && pnpm build`.
+4. Verify `/healthz` and `/readyz` across all five services (`gateway`, `auth`, `chat`, `agent`, `billing`).
+5. Smoke test: sign in, send an idempotent mock chat message (`Idempotency-Key`), and verify credit balance.
+6. Record the rollback timestamp, commit SHA, and root cause in `docs/implementation/BUILD_STATE.md` and `docs/implementation/TEST_EVIDENCE.md`.
 
-## If the failure is in the database
+## If the Failure is in the Database
 
-Re-deploying images will not fix a bad migration. Stop, restore from the last verified backup, and record the incident. This is why the restore drill is part of the deployment gate.
+Re-deploying application code will not undo a destructive schema change:
+1. Enable `DEMO_READ_ONLY=true` at the Gateway edge to halt writes immediately.
+2. Restore from the last verified `pg_dump --format=custom` backup into a clean target database.
+3. Run `node scripts/migrate.mjs` in dry-run mode to verify schema alignment (`auth`, `chat`, `agent`, `billing`) before switching traffic back.

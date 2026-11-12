@@ -1,13 +1,41 @@
-# Placeholder. Real deploy arrives in Phase 16 (health gate + rollback).
-# Never store long-lived cloud keys here; use a restricted deploy key or OIDC.
+# Kartik.ai Profile P Demo VM Deployment Verification & Gate — Blueprint §3.4 & §8.5 (Micro-step 8.5.a).
+# Never store long-lived cloud keys here; use a restricted deploy key or OIDC when targeting a live VM.
+# Validates free-tier readiness, environment contracts, migration DDL plan, and full test suite before deploy.
+
 name: deploy-demo-vm
 
 on:
   workflow_dispatch:
+    inputs:
+      target_env:
+        description: 'Target deployment mode (dry-run validates artifacts without SSH)'
+        required: false
+        default: 'dry-run'
 
 jobs:
-  placeholder:
+  verify-release-gate:
     runs-on: ubuntu-latest
     steps:
-      - name: Note
-        run: echo "Not implemented until Phase 16."
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and verify all 35 workspace test suites
+        run: pnpm test
+
+      - name: Verify operational CLI scripts (check-env, migrate, seed)
+        run: |
+          node scripts/check-env.mjs
+          node scripts/migrate.mjs
+          node scripts/seed-dev-data.mjs

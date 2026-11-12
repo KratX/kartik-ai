@@ -1,31 +1,55 @@
-# Local development
+# Local development runbook
 
-Placeholder — completed in Phase 2 when Docker Compose exists.
+Authoritative local development workflow for **Kartik.ai** (Blueprint v4.4 §4.6, §4.7, §8.5).
 
 ## Prerequisites
 
-- Node **26** (see `.nvmrc`; Active LTS since 28 October 2026). Node 24 is admitted by `engines` as a fallback but is not the target.
-- pnpm **12.18.0** exactly. The pin does not switch itself — run `pnpm -v` and compare.
-- Docker Engine **29+** and Compose **v5+** (v5 rejects `secrets.*.driver` / `configs.*.driver`).
-- Git **2.39+**.
+- **Node 26** (see `.nvmrc`; Active LTS since 28 October 2026). Node 24 is admitted by `engines` as an advisory fallback.
+- **pnpm 12.18.0** pinned in `package.json#packageManager`. Run `pnpm -v` to confirm.
+- **Docker Engine 29+** and **Docker Compose v5+** (required only when running external containers; all 35 automated test suites and `scripts/start-local-stack.mjs` run zero-cost in-memory without Docker).
+- **Git 2.39+**.
 
-Run `node scripts/check-toolchain.mjs` first — it checks all five against Blueprint §4.7 and prints a table.
+Run `pnpm toolchain` first — it verifies your local toolchain against Blueprint §4.7 and prints a status table.
 
-## Planned workflow
+## Option A — Instant In-Memory Local Stack (Zero External Dependencies)
 
-1. Copy `.env.example` → `.env` and fill placeholders.
-2. `docker compose -f infra/compose/docker-compose.yml up -d` (Phase 2) — PostgreSQL 17, Redis, Qdrant, MinIO. Then run `pnpm db:migrate` to create the four schemas and their roles.
-3. Start the app you are working on with its own dev script.
-4. Inspect: `docker compose ps`, `psql -h localhost -U kartik kartik -c '\dn'` (lists the four schemas), `redis-cli`, the Qdrant dashboard at :6333/dashboard, the MinIO console at :9001.
+You can build, verify all 35 test suites, and run the complete 5-service HTTP stack on `:8000` with zero Docker containers or API keys:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm test
+node scripts/start-local-stack.mjs
+```
+
+Once started, test the live endpoints:
+
+```bash
+curl -s http://127.0.0.1:8000/healthz
+curl -s -H "Cookie: kartik_session=sess_demo_local_001" http://127.0.0.1:8000/api/v1/conversations
+curl -s -H "Cookie: kartik_session=sess_demo_local_001" http://127.0.0.1:8000/api/v1/billing/balance
+```
+
+## Option B — Full Docker Compose Dependency Stack
+
+1. Copy `.env.example` → `.env` and review the local defaults (`MOCK_AI=true`, `IMAGE_PROVIDER=mock`, `BILLING_MODE=mock`).
+2. Start PostgreSQL 17, Redis 7.4, `pgsty/silo` (MinIO-compatible S3), and Qdrant v1.20:
+   ```bash
+   sh infra/scripts/local-up.sh
+   ```
+3. Inspect running containers and schemas:
+   - `docker compose -f infra/compose/docker-compose.yml ps`
+   - `node scripts/check-env.mjs`
+   - `node scripts/migrate.mjs`
+   - `node scripts/seed-dev-data.mjs`
 
 ## Reset
 
-Removing volumes destroys local data. Do it deliberately:
+Removing volumes destroys local container data. Do it deliberately:
 
 ```bash
-docker compose -f infra/compose/compose.yaml down -v
+docker compose -f infra/compose/docker-compose.yml down -v
 ```
 
 ## Provider mode
 
-`AI_PROVIDER_MODE=mock` is the default. Never set it to `live` for routine development — it spends quota.
+`MOCK_AI=true`, `IMAGE_PROVIDER=mock`, and `BILLING_MODE=mock` are the defaults. Never set live credentials for routine development — live calls consume daily budget counters (`DAILY_LIVE_CALL_BUDGET`).

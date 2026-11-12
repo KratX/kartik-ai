@@ -1,28 +1,41 @@
-# Deployment runbook — Profile P (free ARM VM)
+# Deployment runbook — Profile P (ARM VM + Single-Origin Reverse Proxy)
 
-Placeholder. The authoritative 15-step procedure is Phase 16 of the Blueprint. This file becomes the operational version, with the real hostnames, paths and commands, once the deployment exists.
+Operational deployment procedure for **Kartik.ai** under Profile P (Blueprint v4.4 §3.4 & Free-Tier Portfolio Addendum). Designed to stay within available free allowances, subject to current eligibility and usage.
 
-## Outline
+## Pre-deployment Verification Gate
 
-1. Provision an Always Free A1 instance (2 OCPU / 12 GB), home region, Ubuntu LTS.
-2. Security list: 22 from your IP only; 80/443 from the internet. Nothing else.
-3. Host firewall must agree with the security list.
-4. Docker Engine + Compose plugin from Docker's repository.
-5. Clone the repo; create the environment file with `chmod 600`.
-6. Images: build on the host, or pull immutable SHA tags. **ARM64 either way.**
-7. Set `DIRECT_DATABASE_URL` (unpooled) and `DATABASE_URL` (pooled) against the Neon project; run the migration runner; then start Redis, Qdrant, MinIO.
-8. Start the five services with no published host ports; check `/health/ready` inside the network.
-9. Reverse proxy: frontend for non-`/api` paths, `/api/*` to the Gateway. One origin.
-10. Cloudflare DNS + TLS; confirm the session cookie is `Secure`.
-11. Smoke test, including one deliberate failure.
-12. Record SHA, timestamp and result in `BUILD_STATE.md`.
-13. Nightly `pg_dump --format=custom` to private R2. **Test the restore.** Neon's own 6-hour restore window does not cover a weekend.
-14. Rehearse rollback to the previous image tag.
-15. Confirm the keep-alive workflow is green.
+Before deploying to any target host, run the automated release checks locally or via `.github/workflows/deploy-demo-vm.yml`:
 
-## Known traps
+```bash
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm lint
+pnpm test
+node scripts/check-env.mjs
+node scripts/migrate.mjs
+```
 
-- **`exec format error`** — you built x86 images for an ARM host.
-- **Health check times out** — cloud security list and host firewall disagree.
-- **Instance reclaimed as idle** — keep-alive not running.
-- **Cookies not set** — proxy not forwarding `Set-Cookie`, or origin mismatch between the proxied frontend and API.
+## 15-Step Procedure
+
+1. Provision an Always Free ARM64 VM instance (2 OCPU / 12 GB RAM), home region, Ubuntu LTS.
+2. Security list: TCP `22` from your admin IP only; TCP `80`/`443` from the internet. No internal service ports (`8001–8004`, `5432`, `6379`, `6333`, `9000`) are ever published.
+3. Confirm host firewall (`ufw` / `nftables`) matches the cloud security list.
+4. Install Docker Engine 29+ and Docker Compose v5+ from Docker's official apt repository.
+5. Clone the repository and create `.env` with `chmod 600`. Ensure `MOCK_AI=true`, `IMAGE_PROVIDER=mock`, and `BILLING_MODE=mock` (never use `rzp_live_*` keys on a public deployment).
+6. Build ARM64 images on the host or pull immutable SHA tags.
+7. Run `node scripts/check-env.mjs` and `node scripts/migrate.mjs` to validate the ordered 4-schema PostgreSQL DDL (`auth`, `chat`, `agent`, `billing`).
+8. Start the internal services (`auth`, `chat`, `agent`, `billing`) and `gateway` on the private Compose network; verify `/readyz` inside the network.
+9. Mount `infra/nginx/default.conf` in the edge Nginx container so `/` serves the SPA and `/api/*` + `/healthz` + `/readyz` proxy exclusively to `http://gateway:8000`.
+10. Configure Cloudflare DNS + TLS in Strict mode; confirm the `kartik_session` cookie carries `HttpOnly`, `Secure`, and `SameSite=Lax`.
+11. Run smoke tests: `/healthz`, `/readyz`, mock Google sign-in, idempotent chat turn, and credit balance check.
+12. Record the deployed Git SHA, timestamp, and verification output in `docs/implementation/BUILD_STATE.md`.
+13. Configure nightly `pg_dump --format=custom` backup and test restoration in a disposable database.
+14. Rehearse rollback to the previous image tag using `docs/runbooks/rollback.md`.
+15. Enable `.github/workflows/keepalive.yml` with `vars.DEMO_URL` set so `/health/live` is pinged every 10 minutes.
+
+## Known Operational Traps
+
+- **`exec format error`** — x86_64 images deployed onto an ARM64 host. Always build for `linux/arm64` on Profile P.
+- **Health check times out** — cloud security list and host firewall (`ufw`) disagree.
+- **Instance reclaimed as idle** — keep-alive workflow not enabled or `DEMO_URL` variable unset.
+- **Cookies not set** — Nginx missing `proxy_pass_header Set-Cookie;` or origin mismatch (see `infra/nginx/default.conf`).

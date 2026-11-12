@@ -1,15 +1,14 @@
-# Threat model (initial)
+# Threat model & security controls
 
-Placeholder — expanded in Phase 17. Structure: asset, threat, mitigation, residual risk.
+Authoritative threat model and verified mitigations for **Kartik.ai** (Blueprint v4.4 §9, §10, §11, §12).
 
-| Asset | Threat | Mitigation | Residual risk |
+| Asset | Threat | Verified Mitigation in Codebase | Verification Suite |
 |---|---|---|---|
-| User conversations | Cross-user read via a guessed ID | Every query filters by `userId`; foreign IDs return 404 | Accepted, tested |
-| Uploaded documents | Cross-user retrieval through the vector store | Qdrant filter on `userId` + document; isolation tests | Depends on filter correctness |
-| Generated code | Backend compromise by executing model output | Browser sandbox only, no `allow-same-origin`, `connect-src 'none'` | Preview escape via browser bug |
-| Credits and payments | Free credits by replay | Signature verification, idempotency keys, unique provider IDs, ledger | Provider-side disputes |
-| Provider API keys | Quota theft on a public demo | Mock default, global budget caps, read-only kill switch, separate keys | A determined abuser before caps trigger |
-| Session cookies | Theft via XSS | HttpOnly, no token in JS, CSP, sanitised markdown | XSS in a dependency |
-| Internal services | Direct access bypassing the gateway | No published ports, service credentials, signed user context | Host compromise |
-| Webhook endpoint | Forged credit grants | HMAC over the raw body with a separate secret, constant-time compare | — |
-| Prompt injection | Retrieved text steering the model | System/user/retrieved separation, tool allow-list, output validation | Partial, by nature |
+| **User conversations & files** | Cross-user read or mutation via guessed resource IDs | Every query filters by authenticated `userId`; foreign or missing IDs both return `404 NOT_FOUND` (Invariant #20). | `chat-ownership-orchestration.test.ts`, `agent-rag-files-artifacts.test.ts` |
+| **Uploaded documents (RAG)** | Cross-user chunk leakage through vector similarity search | `InMemoryVectorStore` / Qdrant filter strictly enforces `userId` + `fileId` on every query (Invariant #9). | `agent-rag-files-artifacts.test.ts` |
+| **Untrusted retrieved text** | Indirect prompt injection inside PDFs or web search snippets | `sanitizeUntrustedRetrievedData()` neutralizes instruction-override directives and wraps retrieved text in `<untrusted_retrieved_data data_only="true">` delimiters (§10). | `agent-evaluation-suite.test.ts` |
+| **Generated code artifacts** | XSS, path traversal, or host execution from LLM code output | Strict manifest validation rejects `../`, absolute paths, null bytes, and executables; preview runs inside an isolated `<iframe sandbox="allow-scripts">` without `allow-same-origin` and with `connect-src 'none'` (Invariant #11 & #12). | `agent-rag-files-artifacts.test.ts`, `artifact-sandbox-uploads.test.ts` |
+| **Credits & payments** | Double-charging on network retry or forged credit grants via replay | Sticky client `Idempotency-Key` (`requestId`), atomic `SELECT … FOR UPDATE` ledger lock, separate secrets & payloads for Razorpay checkout (`order_id\|payment_id`) vs webhook (`rawBody` HMAC), and live-key (`rzp_live_*`) rejection (Invariant #15 & #17). | `credit-concurrency.test.ts`, `razorpay-DualSignature.test.ts`, `http-server.test.ts` |
+| **Provider API quotas** | Quota exhaustion or surprise cloud bills on public portfolio demo | `MOCK_AI=true`, `IMAGE_PROVIDER=mock`, and `BILLING_MODE=mock` by default; `DailyLiveBudgetGuard` degrades to deterministic mock mode when daily live calls hit `DAILY_LIVE_CALL_BUDGET`; `DEMO_READ_ONLY=true` edge kill switch (Invariant #19). | `agent-evaluation-suite.test.ts`, `e2e-readiness.test.ts`, `gateway-edge-hardening.test.ts` |
+| **Session cookies** | Session theft via XSS or cross-site request forgery | Opaque high-entropy session IDs stored in `HttpOnly`, `SameSite=Lax`, `Secure` cookies backed by Redis TTL; Origin/CSRF check on mutating Gateway requests (§11). | `session-store.test.ts`, `gateway-edge-hardening.test.ts` |
+| **Internal service endpoints** | Direct call bypassing API Gateway authentication | Internal routes (`/internal/*`) are excluded from the Gateway public table and require both `x-service-token` and an Ed25519-signed `x-user-context` assertion (Invariant #1 & #14). | `internal-auth.test.ts`, `e2e-readiness.test.ts` |

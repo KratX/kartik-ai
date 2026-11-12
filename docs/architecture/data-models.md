@@ -1,20 +1,20 @@
-# Data models
+# Data models & schema ownership
 
-Placeholder. Authoritative schemas: Blueprint Section 5.1; API: `docs/api/openapi.yaml`.
+Authoritative data model and schema isolation reference for **Kartik.ai** (Blueprint v4.4 §5.1, ADR 0004, and `scripts/migrate.mjs`).
 
-## Ownership
+## Service Schema Ownership (`postgres:17-alpine` / database `kartik`)
 
-| Collection | Owner | Key rule |
-|---|---|---|
-| `User` | Auth | No plan or balance fields |
-| `Conversation`, `Message`, `AgentRun` | Chat | Every query filtered by `userId`; soft-delete via `deletionState` |
-| `Artifact`, `UploadedFile`, `AgentExecution` | Agent | Unique `{ userId, requestId }` on executions |
-| `PlanEntitlement`, `CreditAccount`, `CreditReservation`, `CreditLedger`, payments | Billing | Atomic, idempotent, append-only ledger |
+| Schema | Owning Service | Tables | Key Invariants |
+|---|---|---|---|
+| `auth` | `@kartik/auth` | `auth.users` | Owns identity (`user_id`, `firebase_uid`, `email`, `display_name`). Contains zero plan, credit, or payment columns (Invariant #2). |
+| `chat` | `@kartik/chat` | `chat.conversations`, `chat.messages`, `chat.agent_runs` | Every query filtered by `user_id`; soft-delete lifecycle (`active` $\rightarrow$ `deleting` $\rightarrow$ `purged`); unique `(user_id, request_id)` on `chat.agent_runs` (Invariant #3 & #15). |
+| `agent` | `@kartik/agent` | `agent.uploaded_files`, `agent.artifacts`, `agent.executions` | Unique `(user_id, request_id)` on `agent.executions`; server-generated object storage keys; vector retrieval strictly filtered by `userId` and `fileId` (Invariant #4 & #9). |
+| `billing` | `@kartik/billing` | `billing.credit_accounts`, `billing.credit_reservations`, `billing.credit_ledger`, `billing.payment_orders` | Atomic `BEGIN … SELECT … FOR UPDATE … COMMIT` mutations; integer `amount_paise` only; append-only `credit_ledger`; unique idempotency keys (Invariant #5, #6, #17). |
 
-One PostgreSQL database, `kartik`, with four schemas (`auth`, `chat`, `agent`, `billing`) — one login role per service, granted exactly one schema. Sharing the instance is a cost decision; it is not permission to cross-write. See ADR 0004 and Blueprint §5.1 for the DDL.
+One PostgreSQL database (`kartik`) hosts the four isolated schemas (`auth`, `chat`, `agent`, `billing`) with least-privilege roles (`kartik_auth_role`, `kartik_chat_role`, `kartik_agent_role`, `kartik_billing_role`). Services never read or write another service's schema (Invariant #7). Inspect or execute the DDL migration plan via `node scripts/migrate.mjs`.
 
-## Rules that bite
+## Rules That Protect Financial & Tenant Integrity
 
-- Credit mutations need a transaction → every balance change runs inside `BEGIN … COMMIT` with the balance row locked by `SELECT … FOR UPDATE`. Transactions are the floor here, not a mode to enable.
-- Never put a TTL index on financial records.
-- Never add a plain unique index on a nullable field (`requestId`, `providerPaymentId`) — use a partial index or keep uniqueness in the parent record.
+1. **Row-level locking for credit mutations**: Every credit reservation, settlement, release, or grant locks the `billing.credit_accounts` row (`SELECT … FOR UPDATE`) inside a transaction and enforces `CHECK (available_credits >= 0 AND reserved_credits >= 0)`.
+2. **No TTL on financial records**: `billing.credit_ledger`, `billing.credit_reservations`, and `billing.payment_orders` are permanent audit trails; Redis is never the authoritative store for balances (Invariant #16).
+3. **Cross-tenant `404 NOT_FOUND` masking**: Looking up a resource that does not exist or belongs to another `user_id` returns `404 NOT_FOUND` (`403 FORBIDDEN` is reserved for actions refused on a resource the caller does own — Invariant #20).
