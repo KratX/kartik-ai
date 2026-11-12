@@ -2,31 +2,19 @@
 
 ---
 
-## Entry 29 — Phase 8 / Step 8.2 (Micro-step 8.2.a): Cross-Service E2E Pipeline, Free-Tier Portfolio Readiness & Phase 8 Final Exit Gate
+## Entry 30 — Phase 8 / Step 8.3 (Micro-step 8.3.a): Operational CLI Scripts (`check-env.mjs`, `migrate.mjs`, `seed-dev-data.mjs`)
 
 ### 1. Concept learned
-- **Free-Tier Portfolio Safety Posture (`Blueprint §11 & §12`):**
-  - A publicly reachable portfolio deployment with real API keys or live payment credentials is an immediate abuse and billing target.
-  - `verifyPortfolioFreeTierReadiness` enforces at startup:
-    1. `MOCK_AI=true`, `IMAGE_PROVIDER=mock`, and `BILLING_MODE=mock` by default.
-    2. Live Razorpay keys (`rzp_live_*`) are strictly rejected (`Blueprint §11: "Never enable live payments on a publicly reachable deployment."`).
-    3. Opting into live AI providers (`MOCK_AI=false`) requires a bounded positive integer `DAILY_LIVE_CALL_BUDGET` (`1..500`) in Redis so daily exhaustion degrades gracefully to mock mode rather than incurring unexpected charges.
-- **Liveness (`/healthz`) vs. Cluster Readiness (`/readyz`) (`Blueprint §5`):**
-  - Liveness (`/healthz`) checks whether the Gateway process itself is running.
-  - Readiness (`/readyz` via `CrossServiceHealthAggregator`) probes `/readyz` across `auth`, `chat`, `agent`, and `billing` to confirm the cluster can actually serve requests before routing traffic.
+- **Why Operational CLI Scripts Must Enforce the Same Architectural Boundaries as Services (`ADR 0004 & Blueprint §11`):**
+  1. `scripts/check-env.mjs` (`pnpm check:env`): Validates required environment keys before boot, enforces `PGPOOL_IDLE_TIMEOUT_MS <= 10000` so Neon compute scales to zero, rejects `-pooler` hosts in `DIRECT_DATABASE_URL`, blocks live Razorpay keys (`rzp_live_*`), and redacts database/Redis URLs in output.
+  2. `scripts/migrate.mjs` (`pnpm db:migrate`): Rejects `-pooler` endpoints (which break session-level advisory locks and DDL transactions) and builds the deterministic 4-schema migration plan (`auth -> billing -> agent -> chat`) with SHA-256 checksums.
+  3. `scripts/seed-dev-data.mjs` (`pnpm db:seed`): Seeds `billing.plans` in integer paise using `ON CONFLICT (plan_id) DO NOTHING` so re-running the seed script is 100% idempotent.
 
 ### 2. What was implemented
-- `backend/gateway/src/readiness/index.ts` (`ARCHITECTURE_INVARIANTS_REGISTRY`, `verifyPortfolioFreeTierReadiness`, `CrossServiceHealthAggregator`)
-- `backend/gateway/src/index.ts` (exported readiness symbols)
-- `backend/gateway/tests/e2e-readiness.test.ts` (4 tests closing the **Phase 8 Final Exit Gate**)
+- `scripts/check-env.mjs` (`validateOperationalEnvironment`)
+- `scripts/migrate.mjs` (`buildOrderedSchemaMigrationPlan`)
+- `scripts/seed-dev-data.mjs` (`buildIdempotentDevSeedManifest`)
+- `backend/gateway/tests/operational-scripts.test.ts` (3 unit tests)
 
 ### 3. How to inspect the feature
-- Run `pnpm test` and inspect `@kartik/gateway Cross-Service E2E Pipeline, Free-Tier Readiness & Phase 8 Final Exit Gate (8.2.a)` (`32` suites, `121` tests passing).
-
----
-
-## Entry 28 — Phase 8 / Step 8.1 (Micro-step 8.1.a): Specialist Evaluation Suite (`SPECIALIST_EVALUATION_DATASET`) & Prompt-Injection Data Sanitization
-
-### 1. Concept learned
-- **Evaluating Structure, Routing, Grounding, and Safety — Never Brittle Exact Strings (`Blueprint §10`):**
-  - `SpecialistEvaluationRunner` evaluates routing, structure, citations, and artifact manifest safety across `SPECIALIST_EVALUATION_DATASET` (8 prompts covering `chat`, `search`, `coding`, `rag`, `vision`, `image`).
+- Run `pnpm test` (`33` suites, `124` tests passing).
