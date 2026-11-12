@@ -8,3 +8,4 @@ export * from './middleware/index.js';
 export * from './proxy/index.js';
 export * from './routes/index.js';
 export * from './readiness/index.js';
+export * from './server/index.js';

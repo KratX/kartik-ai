@@ -2,19 +2,20 @@
 
 ---
 
-## Entry 30 — Phase 8 / Step 8.3 (Micro-step 8.3.a): Operational CLI Scripts (`check-env.mjs`, `migrate.mjs`, `seed-dev-data.mjs`)
+## Entry 31 — Phase 8 / Step 8.4 (Micro-step 8.4.a): Live `node:http` Server Adapter (`createManagedHttpServer`), Raw-Body Stream Buffering & Graceful Shutdown
 
 ### 1. Concept learned
-- **Why Operational CLI Scripts Must Enforce the Same Architectural Boundaries as Services (`ADR 0004 & Blueprint §11`):**
-  1. `scripts/check-env.mjs` (`pnpm check:env`): Validates required environment keys before boot, enforces `PGPOOL_IDLE_TIMEOUT_MS <= 10000` so Neon compute scales to zero, rejects `-pooler` hosts in `DIRECT_DATABASE_URL`, blocks live Razorpay keys (`rzp_live_*`), and redacts database/Redis URLs in output.
-  2. `scripts/migrate.mjs` (`pnpm db:migrate`): Rejects `-pooler` endpoints (which break session-level advisory locks and DDL transactions) and builds the deterministic 4-schema migration plan (`auth -> billing -> agent -> chat`) with SHA-256 checksums.
-  3. `scripts/seed-dev-data.mjs` (`pnpm db:seed`): Seeds `billing.plans` in integer paise using `ON CONFLICT (plan_id) DO NOTHING` so re-running the seed script is 100% idempotent.
+- **Why Raw Stream Buffering Before `JSON.parse` Is Mandatory for Webhooks (`Blueprint §11`):**
+  - If an HTTP server parses JSON first and re-serializes it with `JSON.stringify(body)` to verify a webhook signature, any key reordering or whitespace difference changes the HMAC-SHA256 digest and breaks legitimate Razorpay webhooks.
+  - `createManagedHttpServer` reads the incoming Node stream once into a `Buffer` (enforcing `maxBodyBytes`), preserves the exact `rawBodyString`, and passes both `rawBody` and parsed `body` into `router.execute()`.
+- **Graceful Shutdown (`Blueprint §8.3`):**
+  - Calling `managed.close()` immediately marks `isShuttingDown = true` (rejecting new arrivals with `503`), waits for `server.close()` to drain in-flight requests, and invokes `onShutdown()` to close PostgreSQL pools and Redis connections cleanly.
 
 ### 2. What was implemented
-- `scripts/check-env.mjs` (`validateOperationalEnvironment`)
-- `scripts/migrate.mjs` (`buildOrderedSchemaMigrationPlan`)
-- `scripts/seed-dev-data.mjs` (`buildIdempotentDevSeedManifest`)
-- `backend/gateway/tests/operational-scripts.test.ts` (3 unit tests)
+- `backend/gateway/src/server/index.ts` (`createManagedHttpServer`)
+- `backend/gateway/src/index.ts` (exported `createManagedHttpServer`)
+- `backend/gateway/tests/http-server.test.ts` (2 live TCP socket tests)
+- `README.md` (updated status from Phase 0 to All Phases 0–8 Complete)
 
 ### 3. How to inspect the feature
-- Run `pnpm test` (`33` suites, `124` tests passing).
+- Run `pnpm test` (`34` suites, `126` tests passing).
