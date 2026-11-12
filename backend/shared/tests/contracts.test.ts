@@ -14,8 +14,20 @@ import {
 
 describe('@kartik/shared/contracts & @kartik/shared/validation (1.7.a)', () => {
   it('validates the closed AgentName union and computes key-order-independent payload fingerprints (§5.3 & §5.4)', () => {
-    assert.deepEqual(AGENT_NAMES, ['router', 'chat', 'search', 'coding', 'rag', 'vision', 'image']);
+    assert.deepEqual(AGENT_NAMES, [
+      'router',
+      'chat',
+      'search',
+      'coding',
+      'pdf',
+      'ppt',
+      'rag',
+      'vision',
+      'image',
+    ]);
     assert.equal(assertAgentName('coding'), 'coding');
+    assert.equal(assertAgentName('pdf'), 'pdf');
+    assert.equal(assertAgentName('ppt'), 'ppt');
 
     assert.throws(
       () => assertAgentName('unknown_agent'),

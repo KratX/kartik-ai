@@ -18,3 +18,5 @@ Chronological record of test commands and real execution results across micro-st
 | 2026-11-12 | Phase 8 / `8.4.a` | Linux / Node v22.23.2 | `pnpm test` (Live `node:http` Server Adapter & Graceful Shutdown + `README.md`) | **PASS** | `34` suites, `126` tests passing (`2/2` in `http-server.test.ts` over real TCP sockets) | AI + Owner |
 | 2026-11-12 | Phase 8 / `8.5.a` | Linux / Node v22.23.2 | `pnpm test` (`scripts/start-local-stack.mjs` + Infra & Docs Finalization) | **PASS** | `35` suites, `127` tests passing (`1/1` in `local-stack-runner.test.ts`, zero repo placeholders remaining) | AI + Owner |
 | 2026-11-12 | Phase 8 / `8.6.a` | Linux / Node v22.23.2 | `pnpm test` (`@kartik/frontend` Interactive Multi-Agent Demo Harness) | **PASS** | `36` suites, `130` tests passing (`3/3` in `interactive-demo-harness.test.ts`) | AI |
+| 2026-11-12 | Phase 9 / `9.1.a` | Linux / Node v22.23.2 | `pnpm test` (Phase 10 PDF 1.4 & OpenXML `.pptx` Generators & 7-Agent Contract) | **PASS** | `37` suites, `135` tests passing (`5/5` in `pdf-ppt-generators.test.ts`) | AI |
+

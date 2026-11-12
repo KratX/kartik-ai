@@ -9,6 +9,8 @@ export type SpecialistAgentName =
   | 'chat'
   | 'search'
   | 'coding'
+  | 'pdf'
+  | 'ppt'
   | 'rag'
   | 'vision'
   | 'image';

@@ -95,3 +95,34 @@ export {
   type EvaluationSuiteReport,
   type SpecialistEvaluationRunnerInput,
 } from './eval/index.js';
+
+export {
+  MAX_PDF_TITLE_CHARS,
+  MAX_PDF_SUBTITLE_CHARS,
+  MAX_PDF_SECTIONS,
+  MAX_PPT_TITLE_CHARS,
+  MAX_PPT_SLIDES,
+  stripMarkdownJsonFences,
+  validatePdfDocumentSpec,
+  validatePptPresentationSpec,
+  type PdfSectionSpec,
+  type PdfDocumentSpec,
+  type PptSlideSpec,
+  type PptPresentationSpec,
+} from './schemas/index.js';
+
+export {
+  buildPdfBinaryBuffer,
+  formatPdfSummaryMarkdown,
+  MockPdfDocumentProvider,
+  type PdfDocumentGenerationResult,
+  type PdfDocumentProvider,
+} from './agents/pdf/index.js';
+
+export {
+  buildPptxBinaryBuffer,
+  formatPptSummaryMarkdown,
+  MockPptPresentationProvider,
+  type PptPresentationGenerationResult,
+  type PptPresentationProvider,
+} from './agents/ppt/index.js';

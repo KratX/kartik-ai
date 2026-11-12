@@ -30,7 +30,11 @@ export interface AgentCitation {
   readonly urlOrPage: string;
 }
 
-export type ArtifactType = 'code_bundle' | 'generated_image';
+export type ArtifactType =
+  | 'code_bundle'
+  | 'generated_image'
+  | 'pdf_document'
+  | 'ppt_presentation';
 
 export interface ArtifactRecord {
   readonly artifactId: string;
@@ -202,7 +206,7 @@ CREATE TABLE IF NOT EXISTS agent.artifacts (
   user_id TEXT NOT NULL,
   request_id TEXT NOT NULL UNIQUE,
   conversation_id TEXT NOT NULL,
-  artifact_type TEXT NOT NULL CHECK (artifact_type IN ('code_bundle', 'generated_image')),
+  artifact_type TEXT NOT NULL CHECK (artifact_type IN ('code_bundle', 'generated_image', 'pdf_document', 'ppt_presentation')),
   title TEXT NOT NULL,
   entry_file TEXT NOT NULL,
   storage_key TEXT NOT NULL UNIQUE,

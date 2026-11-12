@@ -59,6 +59,8 @@ const SPECIALIST_CREDIT_COST: Readonly<Record<SpecialistAgentName, number>> =
   Object.freeze({
     chat: 2,
     search: 5,
+    pdf: 8,
+    ppt: 10,
     rag: 6,
     vision: 8,
     coding: 10,
@@ -74,6 +76,24 @@ export function inferSpecialistFromPrompt(
     return requestedAgent;
   }
   const lower = prompt.toLowerCase();
+  if (
+    lower.includes('create a ppt') ||
+    lower.includes('generate a ppt') ||
+    lower.includes('presentation') ||
+    lower.includes('slide deck') ||
+    lower.includes('powerpoint')
+  ) {
+    return 'ppt';
+  }
+  if (
+    !hasAttachments &&
+    (lower.includes('generate a pdf') ||
+      lower.includes('create a pdf') ||
+      lower.includes('pdf report') ||
+      lower.includes('export pdf'))
+  ) {
+    return 'pdf';
+  }
   if (
     lower.includes('build') ||
     lower.includes('code') ||

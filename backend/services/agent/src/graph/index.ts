@@ -22,6 +22,14 @@ import type {
   VectorStore,
   VisionProvider,
 } from '../models/index.js';
+import {
+  MockPdfDocumentProvider,
+  type PdfDocumentProvider,
+} from '../agents/pdf/index.js';
+import {
+  MockPptPresentationProvider,
+  type PptPresentationProvider,
+} from '../agents/ppt/index.js';
 import type { DailyLiveBudgetGuard } from '../services/budget-guard.js';
 
 export interface AgentMetadataStore {
@@ -36,7 +44,7 @@ export interface AgentMetadataStore {
  * Precedence:
  * 1. Explicit `preferredAgent` validated against closed `SpecialistAgentName` union.
  * 2. Uploaded attachment MIME types (`application/pdf` -> `rag`; `image/*` -> `vision`).
- * 3. Deterministic intent classification over prompt keywords (`image`, `coding`, `search`, `rag`, default `chat`).
+ * 3. Deterministic intent classification over prompt keywords (`image`, `ppt`, `pdf`, `coding`, `search`, `rag`, default `chat`).
  */
 export function routePromptToSpecialist(input: {
   readonly prompt: string;
@@ -69,6 +77,12 @@ export function routePromptToSpecialist(input: {
   if (/\b(generate an image|draw|illustration|create an image|render a picture)\b/.test(lower)) {
     return 'image';
   }
+  if (/\b(create a ppt|generate a ppt|presentation|slide deck|powerpoint|slides on)\b/.test(lower)) {
+    return 'ppt';
+  }
+  if (/\b(generate a pdf|create a pdf|pdf report|export pdf|write a pdf)\b/.test(lower)) {
+    return 'pdf';
+  }
   if (/\b(build an app|write code|create a component|html|typescript|react|sandbox|calculator)\b/.test(lower)) {
     return 'coding';
   }
@@ -91,6 +105,8 @@ export interface AgentGraphDependencies {
   readonly embeddingProvider: EmbeddingProvider;
   readonly imageProvider: ImageGenerationProvider;
   readonly visionProvider: VisionProvider;
+  readonly pdfProvider?: PdfDocumentProvider;
+  readonly pptProvider?: PptPresentationProvider;
   readonly vectorStore: VectorStore;
   readonly objectStorage: ObjectStorage;
   readonly metadataStore: AgentMetadataStore;
@@ -103,16 +119,20 @@ export interface AgentGraphDependencies {
  * Enforces:
  * - Invariant #6: Agent never calculates, reserves, settles, or mutates credits.
  * - Invariant #9: Vector retrieval is filtered by authenticated `userId` and `fileIds`.
- * - Invariant #12: All model output is untrusted input; coding manifests are validated via `validateArtifactManifest`.
+ * - Invariant #12: All model output is untrusted input; coding, PDF, and PPT manifests are schema-validated.
  * - §10: Search answers distinguish cited sources from synthesis and report lookup failure honestly.
  * - §10: RAG answers cite document & page and state clearly when retrieval finds nothing useful.
  * - §12: Daily Redis budget counters degrade gracefully to deterministic mock mode on exhaustion.
  */
 export class AgentGraphExecutor {
   private readonly deps: AgentGraphDependencies;
+  private readonly pdfProvider: PdfDocumentProvider;
+  private readonly pptProvider: PptPresentationProvider;
 
   constructor(deps: AgentGraphDependencies) {
     this.deps = deps;
+    this.pdfProvider = deps.pdfProvider ?? new MockPdfDocumentProvider();
+    this.pptProvider = deps.pptProvider ?? new MockPptPresentationProvider();
   }
 
   public async execute(request: AgentExecuteRequest): Promise<AgentExecuteResponse> {
@@ -441,6 +461,206 @@ export class AgentGraphExecutor {
           totalTokens: promptTokens + generated.tokensUsed,
           provider: this.deps.codingProvider.providerName,
           model: this.deps.config.codingModelId,
+          durationMs: Math.max(1, Date.now() - startMs),
+          mock: !budgetDecision.allowLive,
+        },
+      };
+    }
+
+    if (specialist === 'pdf') {
+      const existingPdf = await this.deps.metadataStore.getArtifactByRequestId(
+        request.userId,
+        request.requestId,
+      );
+      if (existingPdf) {
+        return {
+          executionId,
+          requestId: request.requestId,
+          agent: 'pdf',
+          replyContent: `${fallbackNotice}Replayed generated PDF document "${existingPdf.title}".`,
+          artifactIds: [existingPdf.artifactId],
+          usage: {
+            promptTokens,
+            completionTokens: 24,
+            totalTokens: promptTokens + 24,
+            provider: this.pdfProvider.providerName,
+            model: this.deps.config.chatModelId,
+            durationMs: Math.max(1, Date.now() - startMs),
+            mock: !budgetDecision.allowLive,
+          },
+        };
+      }
+
+      const generatedPdf = await this.pdfProvider.generatePdfDocument({
+        prompt: trimmedPrompt,
+        maxOutputTokens: this.deps.config.maxOutputTokens,
+      });
+
+      const artifactId = `art_${crypto.randomBytes(8).toString('hex')}`;
+      const storageKey = buildObjectStorageKey({
+        namespace: 'artifacts',
+        userId: request.userId,
+        resourceId: request.conversationId,
+        fileId: artifactId,
+        extension: '.pdf',
+      });
+      const pdfSha256 = crypto
+        .createHash('sha256')
+        .update(generatedPdf.pdfBytes)
+        .digest('hex');
+
+      await this.deps.objectStorage.putPrivateObject({
+        key: storageKey,
+        ownerUserId: request.userId,
+        mimeType: 'application/pdf',
+        body: generatedPdf.pdfBytes,
+        sha256: pdfSha256,
+      });
+
+      const specJson = JSON.stringify({
+        pageCount: generatedPdf.pageCount,
+        spec: generatedPdf.spec,
+      });
+      const specSha = crypto.createHash('sha256').update(specJson, 'utf8').digest('hex');
+
+      const pdfArtifact: ArtifactRecord = Object.freeze({
+        artifactId,
+        userId: request.userId,
+        requestId: request.requestId,
+        conversationId: request.conversationId,
+        artifactType: 'pdf_document',
+        title: generatedPdf.spec.title,
+        entryFile: 'document.pdf',
+        storageKey,
+        mimeType: 'application/pdf',
+        sizeBytes: generatedPdf.pdfBytes.byteLength,
+        filesManifest: Object.freeze([
+          {
+            path: 'document-spec.json',
+            mimeType: 'application/json',
+            sizeBytes: Buffer.byteLength(specJson, 'utf8'),
+            sha256: specSha,
+            content: specJson,
+          },
+        ]),
+        createdAt: new Date().toISOString(),
+      });
+
+      await this.deps.metadataStore.saveArtifact(pdfArtifact);
+
+      return {
+        executionId,
+        requestId: request.requestId,
+        agent: 'pdf',
+        replyContent: `${fallbackNotice}${generatedPdf.summaryMarkdown}`,
+        artifactIds: [artifactId],
+        usage: {
+          promptTokens,
+          completionTokens: generatedPdf.tokensUsed,
+          totalTokens: promptTokens + generatedPdf.tokensUsed,
+          provider: this.pdfProvider.providerName,
+          model: this.deps.config.chatModelId,
+          durationMs: Math.max(1, Date.now() - startMs),
+          mock: !budgetDecision.allowLive,
+        },
+      };
+    }
+
+    if (specialist === 'ppt') {
+      const existingPpt = await this.deps.metadataStore.getArtifactByRequestId(
+        request.userId,
+        request.requestId,
+      );
+      if (existingPpt) {
+        return {
+          executionId,
+          requestId: request.requestId,
+          agent: 'ppt',
+          replyContent: `${fallbackNotice}Replayed generated PPT presentation "${existingPpt.title}".`,
+          artifactIds: [existingPpt.artifactId],
+          usage: {
+            promptTokens,
+            completionTokens: 24,
+            totalTokens: promptTokens + 24,
+            provider: this.pptProvider.providerName,
+            model: this.deps.config.chatModelId,
+            durationMs: Math.max(1, Date.now() - startMs),
+            mock: !budgetDecision.allowLive,
+          },
+        };
+      }
+
+      const generatedPpt = await this.pptProvider.generatePptPresentation({
+        prompt: trimmedPrompt,
+        maxOutputTokens: this.deps.config.maxOutputTokens,
+      });
+
+      const artifactId = `art_${crypto.randomBytes(8).toString('hex')}`;
+      const storageKey = buildObjectStorageKey({
+        namespace: 'artifacts',
+        userId: request.userId,
+        resourceId: request.conversationId,
+        fileId: artifactId,
+        extension: '.pptx',
+      });
+      const pptSha256 = crypto
+        .createHash('sha256')
+        .update(generatedPpt.pptxBytes)
+        .digest('hex');
+      const pptMimeType =
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
+      await this.deps.objectStorage.putPrivateObject({
+        key: storageKey,
+        ownerUserId: request.userId,
+        mimeType: pptMimeType,
+        body: generatedPpt.pptxBytes,
+        sha256: pptSha256,
+      });
+
+      const deckJson = JSON.stringify({
+        slideCount: generatedPpt.slideCount,
+        spec: generatedPpt.spec,
+      });
+      const deckSha = crypto.createHash('sha256').update(deckJson, 'utf8').digest('hex');
+
+      const pptArtifact: ArtifactRecord = Object.freeze({
+        artifactId,
+        userId: request.userId,
+        requestId: request.requestId,
+        conversationId: request.conversationId,
+        artifactType: 'ppt_presentation',
+        title: generatedPpt.spec.title,
+        entryFile: 'presentation.pptx',
+        storageKey,
+        mimeType: pptMimeType,
+        sizeBytes: generatedPpt.pptxBytes.byteLength,
+        filesManifest: Object.freeze([
+          {
+            path: 'slides-spec.json',
+            mimeType: 'application/json',
+            sizeBytes: Buffer.byteLength(deckJson, 'utf8'),
+            sha256: deckSha,
+            content: deckJson,
+          },
+        ]),
+        createdAt: new Date().toISOString(),
+      });
+
+      await this.deps.metadataStore.saveArtifact(pptArtifact);
+
+      return {
+        executionId,
+        requestId: request.requestId,
+        agent: 'ppt',
+        replyContent: `${fallbackNotice}${generatedPpt.summaryMarkdown}`,
+        artifactIds: [artifactId],
+        usage: {
+          promptTokens,
+          completionTokens: generatedPpt.tokensUsed,
+          totalTokens: promptTokens + generatedPpt.tokensUsed,
+          provider: this.pptProvider.providerName,
+          model: this.deps.config.chatModelId,
           durationMs: Math.max(1, Date.now() - startMs),
           mock: !budgetDecision.allowLive,
         },

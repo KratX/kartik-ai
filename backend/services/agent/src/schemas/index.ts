@@ -1,0 +1,274 @@
+/**
+ * @kartik/agent/schemas — Structured PDF & PPTX Output Schemas & Validators
+ * (Blueprint §4.1, §7.2 Phase 10, §10 & Invariant #12).
+ *
+ * Enforces:
+ * - "All model output is untrusted input. Validate JSON, filenames, MIME types, URLs and artifact manifests."
+ * - "A long input is truncated predictably rather than producing a corrupt file."
+ */
+
+import { AppError } from '@kartik/shared/errors';
+
+export const MAX_PDF_TITLE_CHARS = 140;
+export const MAX_PDF_SUBTITLE_CHARS = 220;
+export const MAX_PDF_SECTIONS = 12;
+export const MAX_PDF_HEADING_CHARS = 120;
+export const MAX_PDF_PARAGRAPH_CHARS = 1600;
+export const MAX_PDF_BULLETS_PER_SECTION = 10;
+export const MAX_PDF_BULLET_CHARS = 240;
+
+export const MAX_PPT_TITLE_CHARS = 120;
+export const MAX_PPT_SUBTITLE_CHARS = 180;
+export const TARGET_PPT_CONTENT_SLIDES = 6;
+export const MAX_PPT_SLIDES = 12;
+export const MAX_PPT_BULLETS_PER_SLIDE = 6;
+export const MAX_PPT_BULLET_CHARS = 180;
+
+export interface PdfSectionSpec {
+  readonly heading: string;
+  readonly content: string;
+  readonly bullets: readonly string[];
+}
+
+export interface PdfDocumentSpec {
+  readonly title: string;
+  readonly subtitle: string;
+  readonly sections: readonly PdfSectionSpec[];
+  readonly footer: string;
+}
+
+export interface PptSlideSpec {
+  readonly slideNumber: number;
+  readonly kind: 'cover' | 'content' | 'thank_you';
+  readonly title: string;
+  readonly subtitle?: string;
+  readonly bullets: readonly string[];
+  readonly speakerNotes?: string;
+}
+
+export interface PptPresentationSpec {
+  readonly title: string;
+  readonly subtitle: string;
+  readonly slides: readonly PptSlideSpec[];
+}
+
+function sanitizePrintableText(raw: unknown, maxChars: number): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
+  const cleaned = raw
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (cleaned.length <= maxChars) {
+    return cleaned;
+  }
+  return `${cleaned.slice(0, Math.max(1, maxChars - 3)).trimEnd()}...`;
+}
+
+/**
+ * Strips optional ```json ... ``` markdown fences emitted by LLMs before JSON parsing.
+ */
+export function stripMarkdownJsonFences(rawText: string): string {
+  const trimmed = rawText.trim();
+  const fencedMatch = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  return fencedMatch ? fencedMatch[1]!.trim() : trimmed;
+}
+
+/**
+ * Validates and normalizes untrusted PDF document JSON or object input into a safe `PdfDocumentSpec`.
+ * Throws `AppError('ARTIFACT_INVALID', ...)` if the structure is missing required fields.
+ */
+export function validatePdfDocumentSpec(rawInput: unknown): PdfDocumentSpec {
+  let parsed: unknown = rawInput;
+  if (typeof rawInput === 'string') {
+    try {
+      parsed = JSON.parse(stripMarkdownJsonFences(rawInput));
+    } catch {
+      throw new AppError(
+        'ARTIFACT_INVALID',
+        'PDF generator returned malformed JSON that could not be parsed',
+      );
+    }
+  }
+
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new AppError('ARTIFACT_INVALID', 'PDF specification must be a JSON object');
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  const title = sanitizePrintableText(obj.title, MAX_PDF_TITLE_CHARS);
+  if (!title) {
+    throw new AppError('ARTIFACT_INVALID', 'PDF specification requires a non-empty title');
+  }
+
+  const subtitle =
+    sanitizePrintableText(obj.subtitle, MAX_PDF_SUBTITLE_CHARS) ||
+    'Comprehensive Technical Reference & Architecture Guide';
+
+  if (!Array.isArray(obj.sections) || obj.sections.length === 0) {
+    throw new AppError(
+      'ARTIFACT_INVALID',
+      'PDF specification requires a non-empty sections array',
+    );
+  }
+
+  const sections: PdfSectionSpec[] = [];
+  for (const rawSection of obj.sections.slice(0, MAX_PDF_SECTIONS)) {
+    if (rawSection === null || typeof rawSection !== 'object' || Array.isArray(rawSection)) {
+      continue;
+    }
+    const sec = rawSection as Record<string, unknown>;
+    const heading = sanitizePrintableText(sec.heading, MAX_PDF_HEADING_CHARS);
+    const content = sanitizePrintableText(sec.content, MAX_PDF_PARAGRAPH_CHARS);
+    const rawBullets = Array.isArray(sec.bullets) ? sec.bullets : [];
+    const bullets = rawBullets
+      .slice(0, MAX_PDF_BULLETS_PER_SECTION)
+      .map((b) => sanitizePrintableText(b, MAX_PDF_BULLET_CHARS))
+      .filter((b) => b.length > 0);
+
+    if (!heading && !content && bullets.length === 0) {
+      continue;
+    }
+
+    sections.push(
+      Object.freeze({
+        heading: heading || `Section ${sections.length + 1}`,
+        content: content || 'Key details and operational considerations for this section.',
+        bullets: Object.freeze(bullets),
+      }),
+    );
+  }
+
+  if (sections.length === 0) {
+    throw new AppError(
+      'ARTIFACT_INVALID',
+      'PDF specification contained no valid sections after sanitization',
+    );
+  }
+
+  const footer =
+    sanitizePrintableText(obj.footer, 100) || 'Generated by Kartik.ai';
+
+  return Object.freeze({
+    title,
+    subtitle,
+    sections: Object.freeze(sections),
+    footer,
+  });
+}
+
+/**
+ * Validates and normalizes untrusted PPT presentation JSON or object input into a safe `PptPresentationSpec`
+ * including Cover Slide, Content Slides, and Thank You Slide (Tutorial Part 2 & Blueprint Phase 10).
+ */
+export function validatePptPresentationSpec(rawInput: unknown): PptPresentationSpec {
+  let parsed: unknown = rawInput;
+  if (typeof rawInput === 'string') {
+    try {
+      parsed = JSON.parse(stripMarkdownJsonFences(rawInput));
+    } catch {
+      throw new AppError(
+        'ARTIFACT_INVALID',
+        'PPT generator returned malformed JSON that could not be parsed',
+      );
+    }
+  }
+
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new AppError('ARTIFACT_INVALID', 'PPT specification must be a JSON object');
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  const title = sanitizePrintableText(obj.title, MAX_PPT_TITLE_CHARS);
+  if (!title) {
+    throw new AppError('ARTIFACT_INVALID', 'PPT specification requires a non-empty title');
+  }
+
+  const subtitle =
+    sanitizePrintableText(obj.subtitle, MAX_PPT_SUBTITLE_CHARS) ||
+    'Executive Briefing & Architecture Presentation';
+
+  if (!Array.isArray(obj.slides) || obj.slides.length === 0) {
+    throw new AppError(
+      'ARTIFACT_INVALID',
+      'PPT specification requires a non-empty slides array',
+    );
+  }
+
+  const contentSlides: PptSlideSpec[] = [];
+  for (const rawSlide of obj.slides.slice(0, MAX_PPT_SLIDES)) {
+    if (rawSlide === null || typeof rawSlide !== 'object' || Array.isArray(rawSlide)) {
+      continue;
+    }
+    const s = rawSlide as Record<string, unknown>;
+    const kindRaw = typeof s.kind === 'string' ? s.kind : 'content';
+    if (kindRaw === 'cover' || kindRaw === 'thank_you') {
+      continue;
+    }
+
+    const slideTitle = sanitizePrintableText(s.title, MAX_PPT_TITLE_CHARS);
+    const slideSubtitle = sanitizePrintableText(s.subtitle, MAX_PPT_SUBTITLE_CHARS);
+    const rawBullets = Array.isArray(s.bullets)
+      ? s.bullets
+      : Array.isArray(s.content)
+        ? s.content
+        : [];
+    const bullets = rawBullets
+      .slice(0, MAX_PPT_BULLETS_PER_SLIDE)
+      .map((b) => sanitizePrintableText(b, MAX_PPT_BULLET_CHARS))
+      .filter((b) => b.length > 0);
+
+    if (!slideTitle && bullets.length === 0) {
+      continue;
+    }
+
+    contentSlides.push(
+      Object.freeze({
+        slideNumber: contentSlides.length + 2,
+        kind: 'content' as const,
+        title: slideTitle || `Slide ${contentSlides.length + 1}`,
+        ...(slideSubtitle ? { subtitle: slideSubtitle } : {}),
+        bullets: Object.freeze(
+          bullets.length > 0
+            ? bullets
+            : ['Core architectural insight and implementation takeaway.'],
+        ),
+        ...(typeof s.speakerNotes === 'string'
+          ? { speakerNotes: sanitizePrintableText(s.speakerNotes, 400) }
+          : {}),
+      }),
+    );
+  }
+
+  if (contentSlides.length === 0) {
+    throw new AppError(
+      'ARTIFACT_INVALID',
+      'PPT specification contained no valid content slides',
+    );
+  }
+
+  const coverSlide: PptSlideSpec = Object.freeze({
+    slideNumber: 1,
+    kind: 'cover',
+    title,
+    subtitle,
+    bullets: Object.freeze(['Generated by Kartik.ai Multi-Agent Workspace']),
+  });
+
+  const thankYouSlide: PptSlideSpec = Object.freeze({
+    slideNumber: contentSlides.length + 2,
+    kind: 'thank_you',
+    title: 'Thank You',
+    subtitle: 'Questions & Discussion',
+    bullets: Object.freeze([`Presentation: ${title}`, 'Generated by Kartik.ai']),
+  });
+
+  const allSlides = Object.freeze([coverSlide, ...contentSlides, thankYouSlide]);
+
+  return Object.freeze({
+    title,
+    subtitle,
+    slides: allSlides,
+  });
+}

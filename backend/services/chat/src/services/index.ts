@@ -31,6 +31,8 @@ export const AGENT_TO_BILLING_OPERATION: Readonly<
   chat: 'chat_turn',
   search: 'web_search',
   coding: 'code_generation',
+  pdf: 'pdf_generation',
+  ppt: 'ppt_generation',
   rag: 'pdf_rag_query',
   vision: 'vision_analysis',
   image: 'image_generation',
@@ -44,6 +46,8 @@ export const DEFAULT_OPERATION_UNITS: Readonly<Record<BillingOperation, number>>
     chat_turn: 10,
     web_search: 15,
     code_generation: 20,
+    pdf_generation: 15,
+    ppt_generation: 20,
     pdf_rag_query: 15,
     vision_analysis: 20,
     image_generation: 30,
@@ -75,6 +79,23 @@ export function resolveTargetSpecialist(input: {
     lower.includes('create an image')
   ) {
     return 'image';
+  }
+  if (
+    lower.includes('create a ppt') ||
+    lower.includes('generate a ppt') ||
+    lower.includes('presentation') ||
+    lower.includes('slide deck') ||
+    lower.includes('powerpoint')
+  ) {
+    return 'ppt';
+  }
+  if (
+    lower.includes('generate a pdf') ||
+    lower.includes('create a pdf') ||
+    lower.includes('pdf report') ||
+    lower.includes('export pdf')
+  ) {
+    return 'pdf';
   }
   if (
     lower.includes('write code') ||

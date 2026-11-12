@@ -40,6 +40,8 @@ export const OPERATION_CREDIT_COSTS: Readonly<Record<BillingOperation, number>> 
   chat_turn: 10,
   web_search: 15,
   code_generation: 20,
+  pdf_generation: 15,
+  ppt_generation: 20,
   pdf_rag_query: 15,
   vision_analysis: 20,
   image_generation: 30,
