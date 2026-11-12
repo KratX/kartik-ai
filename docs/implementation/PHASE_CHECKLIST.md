@@ -87,7 +87,7 @@ Track every phase and every exit gate from `kartik_ai_blueprint.md` (Section 7).
 
 ## Phase 7 — Frontend Application (`frontend`)
 - [x] `7.1.a` Frontend workspace setup, `KartikGatewayClient` (`/api/v1/*`, client-owned `Idempotency-Key`, 19-code error recovery policy) & `WorkspaceStore`
-- [ ] `7.2.a` Sandboxed Code Artifact Preview Engine (`iframe sandbox="allow-scripts"`, CSP & path guards) & Grounded Citation / RAG Source Renderer
+- [x] `7.2.a` Sandboxed Code Artifact Preview Engine (`iframe sandbox="allow-scripts"`, CSP & path guards) & Grounded Citation / RAG Source Renderer
 - [ ] `7.3.a` Full Kartik.ai Workspace Shell (Auth, Conversation Sidebar, Specialist Selector, Credit Balance & Razorpay Top-Up Flow) & Phase 7 Exit Gate
 
 ## Phase 8 — End-to-End Integration, Evaluation & Hardening
