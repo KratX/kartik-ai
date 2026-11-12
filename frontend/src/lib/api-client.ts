@@ -1,12 +1,16 @@
 import type {
   AuthenticatedUserProfile,
+  BillingPlanId,
   ChatMessageItem,
   ClientRecoveryAction,
   ConversationSummary,
   CreditBalanceSnapshot,
   FrontendErrorCode,
+  PaymentOrderSummary,
+  PaymentVerificationResult,
   SendMessageTurnResponse,
   SpecialistAgentName,
+  UploadedFileSummary,
 } from '../types/index.js';
 
 /**
@@ -369,6 +373,65 @@ export class KartikGatewayClient {
     const res = await this.request<CreditBalanceSnapshot>({
       method: 'GET',
       path: '/billing/balance',
+    });
+    return res.data;
+  }
+
+  /**
+   * Sends ONLY `{ planId }` to `POST /api/v1/billing/orders` (§11: "Billing calculates prices
+   * and credits server-side. The browser sends a plan ID — never an authoritative amount").
+   */
+  public async createPaymentOrder(
+    planId: BillingPlanId,
+    idempotencyKey?: string,
+  ): Promise<PaymentOrderSummary> {
+    const res = await this.request<PaymentOrderSummary>({
+      method: 'POST',
+      path: '/billing/orders',
+      body: { planId },
+      idempotencyKey,
+      keyPrefix: 'req_order',
+    });
+    return res.data;
+  }
+
+  public async verifyPaymentCheckout(
+    input: {
+      readonly razorpayOrderId: string;
+      readonly razorpayPaymentId: string;
+      readonly razorpaySignature: string;
+    },
+    idempotencyKey?: string,
+  ): Promise<PaymentVerificationResult> {
+    const res = await this.request<PaymentVerificationResult>({
+      method: 'POST',
+      path: '/billing/verify',
+      body: {
+        razorpayOrderId: input.razorpayOrderId,
+        razorpayPaymentId: input.razorpayPaymentId,
+        razorpaySignature: input.razorpaySignature,
+      },
+      idempotencyKey,
+      keyPrefix: 'req_verify',
+    });
+    return res.data;
+  }
+
+  public async uploadFile(
+    input: {
+      readonly conversationId: string;
+      readonly originalFilename: string;
+      readonly declaredMimeType: string;
+      readonly contentBase64: string;
+    },
+    idempotencyKey?: string,
+  ): Promise<UploadedFileSummary> {
+    const res = await this.request<UploadedFileSummary>({
+      method: 'POST',
+      path: '/files',
+      body: input,
+      idempotencyKey,
+      keyPrefix: 'req_upload',
     });
     return res.data;
   }

@@ -2,30 +2,31 @@
 
 ---
 
+## Entry 27 — Phase 7 / Step 7.3 (Micro-step 7.3.a): Workspace Shell Controller, `planId`-Only Billing Checkout, Upload Boundary Guards & Phase 7 Exit Gate
+
+### 1. Concept learned
+- **Why the Browser Sends `planId` Only — Never an Authoritative Price or Credit Amount (`Blueprint §11`):**
+  - `BillingCheckoutController.startTopUpOrder(planId)` sends `{ planId }` to `POST /api/v1/billing/orders` alongside a fresh client-owned `Idempotency-Key`.
+  - Even though `FRONTEND_PLAN_CATALOGUE_DISPLAY` formats integer paise into `"₹199.00"` or `"₹499.00"` for the UI, the browser never transmits `amountPaise` or `credits` to the backend. Billing looks up the authoritative integer paise price on the server and signs/verifies the Razorpay checkout payload (`order_id|payment_id`).
+- **Retry-Safe Workspace Turn Orchestration (`Blueprint §5.4, §10 & Invariant #15`):**
+  - `KartikWorkspaceShellController.sendMessage(prompt)` checks `store.getOrCreatePendingDraft(conversationId, prompt, selectedAgent, attachmentFileIds)`.
+  - If a transient `503 PROVIDER_UNAVAILABLE` interrupts the first turn, the pending draft stays in `WorkspaceStore` with its original `requestId`. When the user clicks retry, the exact same `Idempotency-Key` is transmitted to the Gateway so Chat can replay or settle without double-charging.
+  - If `409 EXECUTION_UNKNOWN` is returned, the workspace shell transitions to `'reconciling'` (`canAutoRetryWithSameKey: false`) and blocks blind retries while backend settlement reconciliation finishes.
+
+### 2. What was implemented
+- `frontend/src/types/index.ts` & `frontend/src/lib/api-client.ts` (added `createPaymentOrder`, `verifyPaymentCheckout`, `uploadFile`)
+- `frontend/src/features/billing/index.ts` (`BillingCheckoutController`, `formatPaiseToInrLabel`, `FRONTEND_PLAN_CATALOGUE_DISPLAY`)
+- `frontend/src/features/uploads/index.ts` (`validateClientUploadCandidate`, `sanitizeUploadFilename`)
+- `frontend/src/app/workspace-shell.ts` (`KartikWorkspaceShellController`)
+- `frontend/tests/frontend-workspace-shell.test.ts` (4 unit tests closing the **Phase 7 Exit Gate**)
+
+### 3. How to inspect the feature
+- Run `pnpm test` and inspect `@kartik/frontend Workspace Shell, Billing Top-Up & Phase 7 Exit Gate (7.3.a)` (`30` suites, `113` tests passing).
+
+---
+
 ## Entry 26 — Phase 7 / Step 7.2 (Micro-step 7.2.a): Isolated Browser Code Sandbox (`sandbox="allow-scripts"`) & Grounded Citation Sanitizer
 
 ### 1. Concept learned
 - **Why `sandbox="allow-scripts"` Must Never Include `allow-same-origin` (`Blueprint §9 Invariant #11 & §11`):**
   - When an `<iframe>` renders untrusted model-generated code via `srcdoc` with `sandbox="allow-scripts"` (and **without** `allow-same-origin`), the browser places the iframe inside a unique, opaque origin (`null`).
-  - Even though JavaScript runs inside the preview iframe, it cannot read `document.cookie` (though our session cookie is already `HttpOnly`), cannot read `window.parent.document`, cannot touch `localStorage` or `IndexedDB`, and cannot make authenticated requests as the parent origin.
-  - Adding `SANDBOX_CSP_POLICY` (`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'`) inside the `srcdoc` also blocks any outbound network exfiltration (`fetch`, `XMLHttpRequest`, `WebSocket`).
-- **Grounded Citations as Data, Never Executable HTML/Links (`Blueprint §10 & §11`):**
-  - Retrieved PDF chunks and web search titles are untrusted data. `formatGroundedCitations` escapes all HTML entities (`<`, `>`, `&`, `"`, `'`) and `sanitizeExternalCitationUrl` only allows `https://`, `http://`, or PDF page locators (`p. 14`), blocking `javascript:` and `data:` schemes so a malicious search result can never trigger XSS when clicked.
-
-### 2. What was implemented
-- `frontend/src/features/sandbox/index.ts` (`buildSandboxedPreviewDocument`, `validateFrontendArtifactBundle`, `SANDBOX_CSP_POLICY`)
-- `frontend/src/features/citations/index.ts` (`formatGroundedCitations`, `sanitizeExternalCitationUrl`)
-- `frontend/src/index.ts` (updated exports)
-- `frontend/tests/frontend-sandbox-citations.test.ts` (4 unit tests)
-
-### 3. How to inspect the feature
-- Run `pnpm test` and inspect `@kartik/frontend Sandboxed Code Preview & Grounded Citations (7.2.a)` (`29` suites, `109` tests passing).
-
----
-
-## Entry 25 — Phase 7 / Step 7.1 (Micro-step 7.1.a): Frontend Gateway API Client, Client-Owned `Idempotency-Key` & Workspace Store
-
-### 1. Concept learned
-- **Single Entry Point & Cookie Security (`Blueprint §9 Invariants #1, #14 & ADR 0002`):**
-  - The browser never talks directly to Auth (`4001`), Chat (`4002`), Agent (`4003`), or Billing (`4004`), and is strictly forbidden from calling `/internal/*`.
-  - Every request passes through `KartikGatewayClient` to `/api/v1/*` with `credentials: 'include'` so the browser attaches the `HttpOnly` session cookie automatically while client-side JavaScript never sees or stores raw session tokens.

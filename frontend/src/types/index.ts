@@ -1,5 +1,5 @@
 /**
- * @kartik/frontend/types — Frontend Domain & API Envelope Contracts (Micro-step 7.1.a).
+ * @kartik/frontend/types — Frontend Domain & API Envelope Contracts (Micro-steps 7.1.a–7.3.a).
  *
  * Mirrors the public API Gateway (`/api/v1/*`) contracts without importing backend service internals
  * (Invariant #1: The browser talks to the backend only through the API Gateway).
@@ -117,4 +117,35 @@ export interface CreditBalanceSnapshot {
   readonly reservedCredits: number;
   readonly lifetimeCredited: number;
   readonly lifetimeDebited: number;
+}
+
+export type BillingPlanId = 'starter_100' | 'pro_500' | 'scale_2000';
+
+export interface PaymentOrderSummary {
+  readonly orderId: string;
+  readonly razorpayOrderId: string;
+  readonly planId: BillingPlanId;
+  readonly amountPaise: number;
+  readonly creditsGranted: number;
+  readonly currency: 'INR';
+  readonly status: 'CREATED' | 'PAID';
+}
+
+export interface PaymentVerificationResult {
+  readonly orderId: string;
+  readonly razorpayOrderId: string;
+  readonly status: 'PAID';
+  readonly creditsAdded: number;
+  readonly availableCreditsAfter: number;
+  readonly alreadyCredited: boolean;
+}
+
+export interface UploadedFileSummary {
+  readonly fileId: string;
+  readonly userId: string;
+  readonly conversationId: string;
+  readonly originalFilename: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly signedDownloadUrl?: string;
 }

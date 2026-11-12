@@ -88,7 +88,13 @@ Track every phase and every exit gate from `kartik_ai_blueprint.md` (Section 7).
 ## Phase 7 — Frontend Application (`frontend`)
 - [x] `7.1.a` Frontend workspace setup, `KartikGatewayClient` (`/api/v1/*`, client-owned `Idempotency-Key`, 19-code error recovery policy) & `WorkspaceStore`
 - [x] `7.2.a` Sandboxed Code Artifact Preview Engine (`iframe sandbox="allow-scripts"`, CSP & path guards) & Grounded Citation / RAG Source Renderer
-- [ ] `7.3.a` Full Kartik.ai Workspace Shell (Auth, Conversation Sidebar, Specialist Selector, Credit Balance & Razorpay Top-Up Flow) & Phase 7 Exit Gate
+- [x] `7.3.a` Full Kartik.ai Workspace Shell (Auth, Conversation Sidebar, Specialist Selector, Credit Balance & Razorpay Top-Up Flow) & Phase 7 Exit Gate
+
+### Phase 7 Exit Gate
+- [x] All browser requests talk exclusively to the API Gateway (`/api/v1/*`) with `credentials: 'include'`, and any `/internal/*` path is rejected client-side before network dispatch (Invariants #1 & #14).
+- [x] Every mutating chat, billing, and upload request carries a client-generated `Idempotency-Key` that is reused across transient `503` retries and cleared only after durable completion or terminal rejection (Invariant #15).
+- [x] Generated coding artifacts render exclusively inside an isolated `iframe sandbox="allow-scripts"` (never `allow-same-origin`) with CSP `connect-src 'none'`, and untrusted RAG/search citations are HTML-escaped and scheme-validated (`http:`/`https:` only) before rendering (Invariants #11 & #12).
+- [x] Billing top-up orders send `planId` only (never client-computed prices or credits), and `409 EXECUTION_UNKNOWN` places the workspace shell into a non-retrying reconciliation state (§10 & §11).
 
 ## Phase 8 — End-to-End Integration, Evaluation & Hardening
 - [ ] `8.1.a` Cross-service E2E pipeline (`Gateway -> Auth -> Chat -> Billing -> Agent`) & specialist evaluation suite
