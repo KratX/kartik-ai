@@ -97,5 +97,5 @@ Track every phase and every exit gate from `kartik_ai_blueprint.md` (Section 7).
 - [x] Billing top-up orders send `planId` only (never client-computed prices or credits), and `409 EXECUTION_UNKNOWN` places the workspace shell into a non-retrying reconciliation state (§10 & §11).
 
 ## Phase 8 — End-to-End Integration, Evaluation & Hardening
-- [ ] `8.1.a` Cross-service E2E pipeline (`Gateway -> Auth -> Chat -> Billing -> Agent`) & specialist evaluation suite
-- [ ] `8.2.a` Docker Compose / Free-tier deployment verification & Phase 8 Final Exit Gate
+- [x] `8.1.a` Specialist Evaluation Suite (`SPECIALIST_EVALUATION_DATASET` across all 6 specialists, prompt-injection data sanitizer & multi-tenant safety benchmark)
+- [ ] `8.2.a` Full Cross-Service E2E Pipeline (`Frontend -> Gateway -> Auth -> Chat -> Billing -> Agent`), Free-Tier / Docker Compose Readiness Validator & Phase 8 Final Exit Gate

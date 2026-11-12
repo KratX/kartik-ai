@@ -1,15 +1,15 @@
 # Kartik.ai Build State
 
-- Current phase: Phase 7 — Frontend Application (`frontend`)
-- Current step / micro-step: 7.3.a
+- Current phase: Phase 8 — End-to-End Integration, Evaluation & Hardening
+- Current step / micro-step: 8.1.a
 - Status: complete
-- Last completed micro-step: 7.3.a (Full Kartik.ai Workspace Shell Controller, Billing Checkout & Top-Up Flow, Client Upload Boundary Validator, and Phase 7 Exit Gate closure)
-- Next micro-step: 8.1.a (Cross-Service End-to-End Pipeline `Gateway -> Auth -> Chat -> Billing -> Agent` & Specialist Evaluation Suite)
+- Last completed micro-step: 8.1.a (Specialist Evaluation Suite `SPECIALIST_EVALUATION_DATASET` across all 6 specialists, Prompt-Injection Data Sanitizer `sanitizeUntrustedRetrievedData`, and Multi-Tenant RAG/Artifact Safety Benchmark)
+- Next micro-step: 8.2.a (Full Cross-Service End-to-End Integration Pipeline `Frontend -> Gateway -> Auth -> Chat -> Billing -> Agent`, Free-Tier / Docker Compose Readiness Validator, and Phase 8 Final Exit Gate closure)
 - Current branch: main
-- Last known commit: Phase 7 micro-step 7.3.a complete (Phase 7 Exit Gate closed)
+- Last known commit: Phase 8 micro-step 8.1.a complete
 
 ## Current objective
-Phase 7 (`@kartik/frontend`) is now **100% COMPLETE**. Micro-step `7.3.a` implements `BillingCheckoutController` (sending `planId` only so integer paise are computed server-side by Billing, §11), `validateClientUploadCandidate` & `sanitizeUploadFilename` (enforcing client-side extension, MIME, and byte-ceiling checks before Gateway upload, §11), and `KartikWorkspaceShellController` (coordinating Google auth bootstrap, conversation switching, retry-safe message submission reusing the sticky `Idempotency-Key`, grounded citation formatting, isolated code preview generation, and top-up order verification). All `12/12` `@kartik/frontend` tests (`113/113` cumulative across `30` suites) pass.
+Phase 8 (`End-to-End Integration, Evaluation & Hardening`) verifies cross-service behavior, AI specialist evaluation benchmarks (`Blueprint §10`), and zero-recurring-cost deployment safety (`Blueprint §12`). Micro-step `8.1.a` implements `SPECIALIST_EVALUATION_DATASET` (8 canonical evaluation cases across `chat`, `search`, `coding`, `rag`, `vision`, and `image`), `SpecialistEvaluationRunner`, and `sanitizeUntrustedRetrievedData` in `@kartik/agent` (`4/4` tests passing in `agent-evaluation-suite.test.ts`, `31` suites / `117` tests cumulative).
 
 ## Completed work
 - Phase 0: Repository & Toolchain Baseline (Complete)
@@ -19,26 +19,21 @@ Phase 7 (`@kartik/frontend`) is now **100% COMPLETE**. Micro-step `7.3.a` implem
 - Phase 4: Billing Service (`backend/services/billing` — Complete, 4/4 Billing suites, 16/16 Billing tests passing, 73/73 cumulative)
 - Phase 5: Agent Service (`backend/services/agent` — Complete, 4/4 Agent suites, 16/16 Agent tests passing, 89/89 cumulative)
 - Phase 6: Chat Service (`backend/services/chat` — Complete, 3/3 Chat suites, 12/12 Chat tests passing, 101/101 cumulative)
-- Phase 7: Frontend Application (`frontend` — Complete, 3/3 Frontend suites, 12/12 Frontend tests passing, 113/113 cumulative):
-  - `7.1.a`: `KartikGatewayClient`, `ERROR_RECOVERY_POLICY`, and `WorkspaceStore` (`4/4` tests).
-  - `7.2.a`: `buildSandboxedPreviewDocument`, `validateFrontendArtifactBundle`, `formatGroundedCitations`, and `sanitizeExternalCitationUrl` (`4/4` tests).
-  - `7.3.a`: `BillingCheckoutController`, `validateClientUploadCandidate`, `KartikWorkspaceShellController`, and `frontend/tests/frontend-workspace-shell.test.ts` (`4/4` tests — **Phase 7 Exit Gate closed**).
+- Phase 7: Frontend Application (`frontend` — Complete, 3/3 Frontend suites, 12/12 Frontend tests passing, 113/113 cumulative)
+- Phase 8: End-to-End Integration, Evaluation & Hardening (In Progress):
+  - `8.1.a`: Implemented `SPECIALIST_EVALUATION_DATASET`, `SpecialistEvaluationRunner`, and `sanitizeUntrustedRetrievedData` in `backend/services/agent/src/eval/index.ts`, plus `backend/services/agent/tests/agent-evaluation-suite.test.ts` (`4/4` tests passing, `20/20` Agent tests, `117/117` cumulative).
 
-## Changed files (Micro-step 7.3.a)
-- `frontend/src/types/index.ts` (modified)
-- `frontend/src/lib/api-client.ts` (modified)
-- `frontend/src/features/billing/index.ts` (created)
-- `frontend/src/features/uploads/index.ts` (created)
-- `frontend/src/app/workspace-shell.ts` (created)
-- `frontend/src/index.ts` (modified)
-- `frontend/tests/frontend-workspace-shell.test.ts` (created)
+## Changed files (Micro-step 8.1.a)
+- `backend/services/agent/src/eval/index.ts` (created)
+- `backend/services/agent/src/index.ts` (modified)
+- `backend/services/agent/tests/agent-evaluation-suite.test.ts` (created)
 - `docs/implementation/BUILD_STATE.md` (updated)
 - `docs/implementation/TEST_EVIDENCE.md` (updated)
 - `docs/implementation/LEARNING_LOG.md` (updated)
 - `docs/implementation/PHASE_CHECKLIST.md` (updated)
 
 ## Verification evidence
-- `pnpm test` (`node --test --test-reporter=spec "backend/**/dist/tests/*.test.js"`) — **PASS** (`30` suites, `113` tests passing: `29` in `@kartik/shared` + `16` in `@kartik/auth` + `12` in `@kartik/gateway` + `16` in `@kartik/billing` + `16` in `@kartik/agent` + `12` in `@kartik/chat` + `12` in `@kartik/frontend`, `0` failures)
+- `pnpm test` (`node --test --test-reporter=spec "backend/**/dist/tests/*.test.js"`) — **PASS** (`31` suites, `117` tests passing: `29` in `@kartik/shared` + `16` in `@kartik/auth` + `12` in `@kartik/gateway` + `16` in `@kartik/billing` + `20` in `@kartik/agent` + `12` in `@kartik/chat` + `12` in `@kartik/frontend`, `0` failures)
 
 ## Open issues / blockers
 - None.
@@ -47,4 +42,4 @@ Phase 7 (`@kartik/frontend`) is now **100% COMPLETE**. Micro-step `7.3.a` implem
 - None.
 
 ## Safe resume instruction
-Wait for owner review of **Micro-step `7.3.a`** (Phase 7 Exit Gate). On `"continue"` / `"go"`, proceed to **Phase 8 — End-to-End Integration, Evaluation & Hardening, Micro-step `8.1.a`** (Cross-Service E2E Pipeline & Specialist Evaluation Suite).
+Wait for owner review of **Micro-step `8.1.a`**. On `"continue"` / `"go"`, proceed to the final micro-step of the blueprint: **Phase 8 — Micro-step `8.2.a`** (Full Cross-Service E2E Pipeline, Free-Tier / Docker Compose Readiness Validator & Phase 8 Final Exit Gate closure).

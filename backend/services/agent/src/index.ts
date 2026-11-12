@@ -85,3 +85,13 @@ export {
   type AgentHttpResponse,
   type AgentRouterDependencies,
 } from './routes/index.js';
+
+export {
+  SPECIALIST_EVALUATION_DATASET,
+  sanitizeUntrustedRetrievedData,
+  SpecialistEvaluationRunner,
+  type SpecialistEvaluationCase,
+  type EvaluationCaseResult,
+  type EvaluationSuiteReport,
+  type SpecialistEvaluationRunnerInput,
+} from './eval/index.js';

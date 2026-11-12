@@ -23,7 +23,7 @@ import {
 import {
   validateClientUploadCandidate,
   type ClientUploadCandidate,
-} from '../features/uploads/index.js';
+} from '../features/files/index.js';
 import type { KartikGatewayClient } from '../lib/api-client.js';
 import { WorkspaceStore, type WorkspaceState } from '../store/index.js';
 import type {

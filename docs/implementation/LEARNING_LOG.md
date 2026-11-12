@@ -2,31 +2,31 @@
 
 ---
 
+## Entry 28 — Phase 8 / Step 8.1 (Micro-step 8.1.a): Specialist Evaluation Suite (`SPECIALIST_EVALUATION_DATASET`) & Prompt-Injection Data Sanitization
+
+### 1. Concept learned
+- **Evaluating Structure, Routing, Grounding, and Safety — Never Brittle Exact Strings (`Blueprint §10`):**
+  - LLMs are non-deterministic in live mode and deterministic in mock mode, so asserting exact string equality on prose breaks as soon as prompts or models evolve.
+  - Instead, `SpecialistEvaluationRunner` evaluates 4 structural invariants across `SPECIALIST_EVALUATION_DATASET` (8 prompts covering `chat`, `search`, `coding`, `rag`, `vision`, `image`):
+    1. **Routing accuracy:** Does `AgentGraphExecutor` select the expected specialist (`expectedSpecialist`)?
+    2. **Structural validity:** Does the response include a valid `executionId`, preserved `requestId`, non-empty `replyContent`, and positive token accounting?
+    3. **Grounding verification:** Do `search` and `rag` responses include non-empty `citations` (`https://` URLs for web search; `p. <N>` page locators for RAG), and does `search` separate `### Cited Source Material` from `### Synthesis`?
+    4. **Artifact safety:** Do `coding` and `image` turns persist artifacts whose manifests pass `validateArtifactManifest` (`502 ARTIFACT_INVALID` on `../` path traversal)?
+- **Retrieved Content Is Data, Never Instructions (`Blueprint §10`):**
+  - `sanitizeUntrustedRetrievedData` strips prompt-injection directives (`IGNORE ALL PREVIOUS INSTRUCTIONS`, `<system>`, `execute shell:`) and wraps untrusted passages in `[DATA_ONLY_BEGIN] ... [DATA_ONLY_END]`.
+
+### 2. What was implemented
+- `backend/services/agent/src/eval/index.ts` (`SPECIALIST_EVALUATION_DATASET`, `SpecialistEvaluationRunner`, `sanitizeUntrustedRetrievedData`)
+- `backend/services/agent/src/index.ts` (exported evaluation suite symbols)
+- `backend/services/agent/tests/agent-evaluation-suite.test.ts` (4 evaluation & safety benchmark tests)
+
+### 3. How to inspect the feature
+- Run `pnpm test` and inspect `@kartik/agent Specialist Evaluation Suite & Prompt Safety Benchmark (8.1.a)` (`31` suites, `117` tests passing).
+
+---
+
 ## Entry 27 — Phase 7 / Step 7.3 (Micro-step 7.3.a): Workspace Shell Controller, `planId`-Only Billing Checkout, Upload Boundary Guards & Phase 7 Exit Gate
 
 ### 1. Concept learned
 - **Why the Browser Sends `planId` Only — Never an Authoritative Price or Credit Amount (`Blueprint §11`):**
   - `BillingCheckoutController.startTopUpOrder(planId)` sends `{ planId }` to `POST /api/v1/billing/orders` alongside a fresh client-owned `Idempotency-Key`.
-  - Even though `FRONTEND_PLAN_CATALOGUE_DISPLAY` formats integer paise into `"₹199.00"` or `"₹499.00"` for the UI, the browser never transmits `amountPaise` or `credits` to the backend. Billing looks up the authoritative integer paise price on the server and signs/verifies the Razorpay checkout payload (`order_id|payment_id`).
-- **Retry-Safe Workspace Turn Orchestration (`Blueprint §5.4, §10 & Invariant #15`):**
-  - `KartikWorkspaceShellController.sendMessage(prompt)` checks `store.getOrCreatePendingDraft(conversationId, prompt, selectedAgent, attachmentFileIds)`.
-  - If a transient `503 PROVIDER_UNAVAILABLE` interrupts the first turn, the pending draft stays in `WorkspaceStore` with its original `requestId`. When the user clicks retry, the exact same `Idempotency-Key` is transmitted to the Gateway so Chat can replay or settle without double-charging.
-  - If `409 EXECUTION_UNKNOWN` is returned, the workspace shell transitions to `'reconciling'` (`canAutoRetryWithSameKey: false`) and blocks blind retries while backend settlement reconciliation finishes.
-
-### 2. What was implemented
-- `frontend/src/types/index.ts` & `frontend/src/lib/api-client.ts` (added `createPaymentOrder`, `verifyPaymentCheckout`, `uploadFile`)
-- `frontend/src/features/billing/index.ts` (`BillingCheckoutController`, `formatPaiseToInrLabel`, `FRONTEND_PLAN_CATALOGUE_DISPLAY`)
-- `frontend/src/features/uploads/index.ts` (`validateClientUploadCandidate`, `sanitizeUploadFilename`)
-- `frontend/src/app/workspace-shell.ts` (`KartikWorkspaceShellController`)
-- `frontend/tests/frontend-workspace-shell.test.ts` (4 unit tests closing the **Phase 7 Exit Gate**)
-
-### 3. How to inspect the feature
-- Run `pnpm test` and inspect `@kartik/frontend Workspace Shell, Billing Top-Up & Phase 7 Exit Gate (7.3.a)` (`30` suites, `113` tests passing).
-
----
-
-## Entry 26 — Phase 7 / Step 7.2 (Micro-step 7.2.a): Isolated Browser Code Sandbox (`sandbox="allow-scripts"`) & Grounded Citation Sanitizer
-
-### 1. Concept learned
-- **Why `sandbox="allow-scripts"` Must Never Include `allow-same-origin` (`Blueprint §9 Invariant #11 & §11`):**
-  - When an `<iframe>` renders untrusted model-generated code via `srcdoc` with `sandbox="allow-scripts"` (and **without** `allow-same-origin`), the browser places the iframe inside a unique, opaque origin (`null`).
