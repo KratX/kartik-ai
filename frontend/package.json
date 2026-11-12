@@ -3,10 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
   "scripts": {
-    "build": "node -e \"process.exit(0)\"",
-    "typecheck": "node -e \"process.exit(0)\"",
-    "lint": "node -e \"process.exit(0)\"",
-    "test": "node -e \"process.exit(0)\""
+    "build": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc && node -e \"fs.mkdirSync('../backend/gateway/dist/tests',{recursive:true});for(const f of fs.readdirSync('dist/tests'))if(f.endsWith('.js')){const c=fs.readFileSync('dist/tests/'+f,'utf8').replaceAll('../src/','../../../../frontend/dist/src/');fs.writeFileSync('../backend/gateway/dist/tests/'+f,c);}\"",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "pnpm run build && node --test dist/tests/*.test.js"
   }
 }
