@@ -98,4 +98,10 @@ Track every phase and every exit gate from `kartik_ai_blueprint.md` (Section 7).
 
 ## Phase 8 — End-to-End Integration, Evaluation & Hardening
 - [x] `8.1.a` Specialist Evaluation Suite (`SPECIALIST_EVALUATION_DATASET` across all 6 specialists, prompt-injection data sanitizer & multi-tenant safety benchmark)
-- [ ] `8.2.a` Full Cross-Service E2E Pipeline (`Frontend -> Gateway -> Auth -> Chat -> Billing -> Agent`), Free-Tier / Docker Compose Readiness Validator & Phase 8 Final Exit Gate
+- [x] `8.2.a` Full Cross-Service E2E Pipeline (`Frontend -> Gateway -> Auth -> Chat -> Billing -> Agent`), Free-Tier / Docker Compose Readiness Validator & Phase 8 Final Exit Gate
+
+### Phase 8 Final Exit Gate
+- [x] Cross-service E2E flow (`POST /api/v1/auth/google` -> `POST /api/v1/conversations` -> `POST /api/v1/conversations/:id/messages` with idempotent replay -> `GET /api/v1/billing/balance` -> `DELETE /api/v1/conversations/:id` cascade purge) passes end-to-end.
+- [x] Specialist Evaluation Suite (`SPECIALIST_EVALUATION_DATASET`) passes 100% (`8/8` cases across `chat`, `search`, `coding`, `rag`, `vision`, `image`) on routing, structure, grounding, and artifact safety (§10).
+- [x] Free-tier portfolio readiness validator (`verifyPortfolioFreeTierReadiness`) enforces `MOCK_AI=true`, `IMAGE_PROVIDER=mock`, `BILLING_MODE=mock` defaults, blocks `rzp_live_*` keys, and requires bounded daily live call budgets (§11 & §12).
+- [x] All 20 Architecture Invariants (`ARCHITECTURE_INVARIANTS_REGISTRY`) are verified across `32` test suites (`121/121` passing tests, `0` failures).

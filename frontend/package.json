@@ -10,9 +10,9 @@
     }
   },
   "scripts": {
-    "build": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc && node -e \"fs.mkdirSync('../backend/gateway/dist/tests',{recursive:true});for(const f of fs.readdirSync('dist/tests'))if(f.endsWith('.js')){const c=fs.readFileSync('dist/tests/'+f,'utf8').replaceAll('../src/','../../../../frontend/dist/src/');fs.writeFileSync('../backend/gateway/dist/tests/'+f,c);}\"",
+    "build": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc",
     "typecheck": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc",
     "lint": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc",
-    "test": "pnpm run build && node --test dist/tests/*.test.js"
+    "test": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc && node --test \"./dist/tests/*.test.js\""
   }
 }

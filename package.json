@@ -9,14 +9,14 @@
   },
   "packageManager": "pnpm@12.18.0",
   "scripts": {
-    "preinstall": "node -e \"const u=process.env.npm_config_user_agent||'';if(!u.startsWith('pnpm/')){console.error('This repository uses pnpm only \u2014 see Blueprint \u00a74.6.');process.exit(1)}\"",
+    "preinstall": "node -e \"const u=process.env.npm_config_user_agent||'';if(!u.startsWith('pnpm/')){console.error('This repository uses pnpm only \\u2014 see Blueprint \\u00a74.6.');process.exit(1)}\"",
     "toolchain": "node scripts/check-toolchain.mjs",
     "check:env": "node scripts/check-env.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "db:seed": "node scripts/seed-dev-data.mjs",
     "dev": "pnpm --parallel -r --if-present run dev",
     "build": "pnpm --workspace-concurrency=1 -r --if-present run build",
-    "test": "pnpm run build && node --test --test-reporter=spec \"backend/**/dist/tests/*.test.js\"",
+    "test": "pnpm run build && node --test --test-reporter=spec \"backend/**/dist/tests/*.test.js\" \"frontend/dist/tests/*.test.js\"",
     "test:workspaces": "pnpm --workspace-concurrency=1 -r --if-present run test",
     "lint": "pnpm --workspace-concurrency=1 -r --if-present run lint",
     "typecheck": "pnpm --workspace-concurrency=1 -r --if-present run typecheck"
