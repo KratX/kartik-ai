@@ -58,4 +58,24 @@
 ### 3. How to inspect the feature
 - Run `pnpm test` (`38` suites, `139` tests passing).
 
+---
+
+## Entry 36 — Phase 9 / Step 9.3 (Micro-step 9.3.a): Full-Stack Express + Vite Server (`server.ts` on Port 3000), Binary File Upload (`/files/upload`) & Artifact Content Streaming (`/artifacts/:id/content` & `/raw`)
+
+### 1. Concept learned
+- **Ownership-Verified Binary Streaming vs. JSON Metadata (`Blueprint Invariants #10 & #20`):**
+  - Private objects (`%PDF-1.4` documents, OpenXML `.pptx` slide decks, `.png` images, and multi-file code bundles) are never stored in public buckets.
+  - `GET /api/v1/artifacts/:artifactId/content` verifies ownership via `FileIngestionAndArtifactService.getArtifactWithRawBytes` (returning `404 NOT_FOUND` on missing or foreign-owned artifacts) and delivers both the signed URL and Base64 payload, while `GET /api/v1/artifacts/:artifactId/raw` streams the raw binary buffer with `Content-Disposition: attachment; filename="..."` for instant 1-click browser downloads.
+
+### 2. What was implemented
+- `backend/shared/storage/index.ts` (`getPrivateObject` on `ObjectStorage` and `InMemoryObjectStorage`)
+- `backend/services/agent/src/rag/index.ts` (`getArtifactWithRawBytes`)
+- `backend/services/agent/src/controllers/index.ts` & `backend/services/agent/src/routes/index.ts` (`POST /files/upload` and `GET /artifacts/:artifactId/content`)
+- `src/server/platform-api-runtime.ts` & `server.ts` (Port 3000 Express + Vite full-stack server)
+- `backend/services/agent/tests/artifact-content-and-upload-routes.test.ts` (`2/2` tests passing)
+
+### 3. How to inspect the feature
+- Run `pnpm test` (`39` suites, `141` tests passing).
+
+
 

@@ -292,6 +292,33 @@ export class FileIngestionAndArtifactService {
   }
 
   /**
+   * Returns artifact metadata, a short-lived signed download URL, and the raw binary payload
+   * encoded as Base64 after verifying ownership (Invariants #10 & #20).
+   */
+  public async getArtifactWithRawBytes(input: {
+    readonly userId: string;
+    readonly artifactId: string;
+    readonly ttlSeconds?: number;
+  }): Promise<{
+    readonly artifact: ArtifactRecord;
+    readonly download: SignedDownloadUrlResult;
+    readonly contentBase64: string;
+  }> {
+    const { artifact, download } = await this.getArtifactWithSignedUrl(input);
+    const storedObject = await this.objectStorage.getPrivateObject(
+      artifact.storageKey,
+      input.userId,
+    );
+    const contentBase64 = Buffer.from(storedObject.body).toString('base64');
+
+    return Object.freeze({
+      artifact,
+      download,
+      contentBase64,
+    });
+  }
+
+  /**
    * Executes cascade deletion in the strict normative order required by Invariant #18:
    * "Deletion cascades in one order: vectors, then objects, then metadata.
    * A report of 'deleted' is only valid once the owner of each record has confirmed it."

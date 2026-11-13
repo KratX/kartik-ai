@@ -111,6 +111,13 @@ export class AgentController {
     });
   }
 
+  public async getArtifactContent(userId: string, artifactId: string) {
+    return this.deps.ingestionService.getArtifactWithRawBytes({
+      userId,
+      artifactId,
+    });
+  }
+
   public async executeInternalTurn(body: unknown) {
     if (typeof body !== 'object' || body === null || Array.isArray(body)) {
       throw new AppError('VALIDATION_FAILED', 'Execute request body must be a JSON object');

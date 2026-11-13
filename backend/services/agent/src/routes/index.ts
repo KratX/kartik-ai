@@ -97,7 +97,7 @@ export function createAgentRouter(deps: AgentRouterDependencies) {
       }
 
       // Public user routes (forwarded by Gateway with Ed25519 x-user-context aud="agent")
-      if (method === 'POST' && routePath === '/files') {
+      if (method === 'POST' && (routePath === '/files' || routePath === '/files/upload')) {
         const claims = requireAgentUserContext(
           headers,
           deps.config,
@@ -137,6 +137,30 @@ export function createAgentRouter(deps: AgentRouterDependencies) {
           deps.nowSeconds?.(),
         );
         const result = await controller.getFile(claims.sub, fileId);
+        return {
+          statusCode: 200,
+          headers: { 'content-type': 'application/json' },
+          body: createSuccessEnvelope(claims.traceId || traceId, result, {
+            requestId,
+          }) as T,
+        };
+      }
+
+      if (
+        method === 'GET' &&
+        routePath.startsWith('/artifacts/') &&
+        routePath.endsWith('/content')
+      ) {
+        const artifactId = routePath
+          .slice('/artifacts/'.length, -'/content'.length)
+          .replace(/\/+$/, '')
+          .trim();
+        const claims = requireAgentUserContext(
+          headers,
+          deps.config,
+          deps.nowSeconds?.(),
+        );
+        const result = await controller.getArtifactContent(claims.sub, artifactId);
         return {
           statusCode: 200,
           headers: { 'content-type': 'application/json' },

@@ -206,6 +206,10 @@ export interface SignedDownloadUrlResult {
 export interface ObjectStorage {
   putPrivateObject(input: PutPrivateObjectInput): Promise<StoredPrivateObjectMetadata>;
   headPrivateObject(key: string, requesterUserId: string): Promise<StoredPrivateObjectMetadata>;
+  getPrivateObject(
+    key: string,
+    requesterUserId: string,
+  ): Promise<{ readonly metadata: StoredPrivateObjectMetadata; readonly body: Uint8Array }>;
   createSignedDownloadUrl(options: SignedUrlIssueOptions): Promise<SignedDownloadUrlResult>;
   deletePrivateObject(key: string, ownerUserId: string): Promise<boolean>;
 }
@@ -253,6 +257,20 @@ export class InMemoryObjectStorage implements ObjectStorage {
       throw new AppError('NOT_FOUND', 'Requested object was not found');
     }
     return record.metadata;
+  }
+
+  async getPrivateObject(
+    key: string,
+    requesterUserId: string,
+  ): Promise<{ readonly metadata: StoredPrivateObjectMetadata; readonly body: Uint8Array }> {
+    const record = this.objects.get(key);
+    if (record === undefined || record.metadata.ownerUserId !== requesterUserId) {
+      throw new AppError('NOT_FOUND', 'Requested object was not found');
+    }
+    return Object.freeze({
+      metadata: record.metadata,
+      body: new Uint8Array(record.body),
+    });
   }
 
   async createSignedDownloadUrl(options: SignedUrlIssueOptions): Promise<SignedDownloadUrlResult> {
