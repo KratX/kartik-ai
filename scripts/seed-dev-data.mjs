@@ -83,11 +83,14 @@ export function buildIdempotentDevSeedManifest(databaseUrl) {
 }
 
 const isMain =
-  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+  process.argv[1] && process.argv[1].endsWith('seed-dev-data.mjs');
 
 if (isMain) {
   try {
-    const dbUrl = process.env.DIRECT_DATABASE_URL || process.env.DATABASE_URL;
+    const dbUrl =
+      process.env.DIRECT_DATABASE_URL ||
+      process.env.DATABASE_URL ||
+      'postgresql://kartik:kartik@127.0.0.1:5432/kartik';
     const manifest = buildIdempotentDevSeedManifest(dbUrl);
     console.log(
       `[db:seed] Prepared ${manifest.plans.length} idempotent integer-paise billing plans and demo conversation "${manifest.demoConversation.conversationId}".`,

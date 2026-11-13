@@ -160,4 +160,56 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
     assert.ok(denyStmt);
     assert.equal(denyStmt.Effect, 'Deny');
   });
+
+  it('verifies all 7 workspace package.json manifests use clean SaaS scripts (build, typecheck, lint, test) and lint-workspace.mjs enforces architectural boundaries', async () => {
+    const workspacePkgPaths = [
+      'backend/shared/package.json',
+      'backend/gateway/package.json',
+      'backend/services/auth/package.json',
+      'backend/services/chat/package.json',
+      'backend/services/agent/package.json',
+      'backend/services/billing/package.json',
+      'frontend/package.json',
+    ];
+
+    for (const relPkg of workspacePkgPaths) {
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, relPkg), 'utf8'),
+      ) as {
+        scripts: Record<string, string>;
+      };
+      assert.equal(pkg.scripts.build, 'tsc', `${relPkg} build must be "tsc"`);
+      assert.equal(
+        pkg.scripts.typecheck,
+        'tsc --noEmit',
+        `${relPkg} typecheck must be "tsc --noEmit"`,
+      );
+      assert.ok(
+        pkg.scripts.lint?.includes('lint-workspace.mjs'),
+        `${relPkg} lint must invoke lint-workspace.mjs`,
+      );
+      assert.ok(
+        !JSON.stringify(pkg.scripts).includes('tsconfig.tsbuildinfo'),
+        `${relPkg} must not contain inline tsconfig.tsbuildinfo hacks`,
+      );
+    }
+
+    const { pathToFileURL } = await import('node:url');
+    const lintScriptPath = path.join(repoRoot, 'scripts/lint-workspace.mjs');
+    const lintMod = (await import(pathToFileURL(lintScriptPath).href)) as {
+      lintDirectory: (dir: string) => {
+        filesChecked: number;
+        violations: Array<{ rule: string }>;
+      };
+    };
+
+    const backendLint = lintMod.lintDirectory(path.join(repoRoot, 'backend'));
+    assert.ok(backendLint.filesChecked >= 100);
+    assert.equal(backendLint.violations.length, 0);
+
+    const frontendLint = lintMod.lintDirectory(path.join(repoRoot, 'frontend'));
+    assert.ok(frontendLint.filesChecked >= 15);
+    assert.equal(frontendLint.violations.length, 0);
+  });
 });
+

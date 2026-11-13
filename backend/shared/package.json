@@ -52,9 +52,9 @@
     }
   },
   "scripts": {
-    "build": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc",
-    "typecheck": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc",
-    "lint": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc",
-    "test": "node -e \"fs.rmSync('dist/tsconfig.tsbuildinfo',{force:true})\" && tsc && node --test \"./dist/tests/*.test.js\""
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "node ../../scripts/lint-workspace.mjs .",
+    "test": "tsc && node --test --test-reporter=spec \"./dist/tests/*.test.js\""
   }
 }

@@ -101,11 +101,14 @@ export function buildOrderedSchemaMigrationPlan(directDatabaseUrl) {
 }
 
 const isMain =
-  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+  process.argv[1] && process.argv[1].endsWith('migrate.mjs');
 
 if (isMain) {
   try {
-    const directUrl = process.env.DIRECT_DATABASE_URL || process.env.DATABASE_URL;
+    const directUrl =
+      process.env.DIRECT_DATABASE_URL ||
+      process.env.DATABASE_URL ||
+      'postgresql://kartik:kartik@127.0.0.1:5432/kartik';
     const plan = buildOrderedSchemaMigrationPlan(directUrl);
     console.log(
       `[db:migrate] Verified direct connection & prepared ${plan.schemaCount} isolated schema migrations (${plan.steps.map((s) => s.schema).join(' -> ')}).`,

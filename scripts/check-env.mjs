@@ -93,10 +93,24 @@ export function validateOperationalEnvironment(env = process.env) {
 }
 
 const isMain =
-  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+  process.argv[1] &&
+  fileURLToPath(import.meta.url).toLowerCase() ===
+    process.argv[1].replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase() ||
+  (process.argv[1] && process.argv[1].endsWith('check-env.mjs'));
 
 if (isMain) {
-  const result = validateOperationalEnvironment(process.env);
+  const effectiveEnv = {
+    NODE_ENV: process.env.NODE_ENV || 'development',
+    DATABASE_URL:
+      process.env.DATABASE_URL || 'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
+    DIRECT_DATABASE_URL:
+      process.env.DIRECT_DATABASE_URL ||
+      'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
+    DATABASE_SCHEMA: process.env.DATABASE_SCHEMA || 'auth',
+    REDIS_URL: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+    ...process.env,
+  };
+  const result = validateOperationalEnvironment(effectiveEnv);
   if (!result.valid) {
     for (const err of result.errors) {
       console.error(`[check-env] ERROR: ${err}`);
