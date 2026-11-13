@@ -77,5 +77,24 @@
 ### 3. How to inspect the feature
 - Run `pnpm test` (`39` suites, `141` tests passing).
 
+---
+
+## Entry 37 — Phase 9 / Step 9.4 (Micro-step 9.4.a): Phase 15 Frontend Part 1 — Multi-Agent Layout (`Sidebar.tsx`, `Nav.tsx`), Chat Thread (`ChatArea.tsx`, `MessageBubble.tsx`), `MarkdownRenderer.tsx` & 16:9 `SlideDeckPreview.tsx`
+
+### 1. Concept learned
+- **XSS-Free Structured Markdown & Slide Deck View-Models (`Blueprint §11 & Invariant #12`):**
+  - Instead of injecting untrusted HTML into the DOM (`dangerouslySetInnerHTML`), `tokenizeMarkdownBlocks` parses model output into typed AST blocks (`heading`, `code`, `table`, `blockquote`, `list`, `paragraph`) rendered as native React elements.
+  - Similarly, `parsePptArtifactSlideDeck` transforms the `slides-spec.json` manifest of a `ppt_presentation` artifact into an 8-slide 16:9 interactive deck (`Cover` + `6 Content Slides` + `Closing Thank You Slide`) with keyboard/dot navigation and a direct `.pptx` binary download link.
+
+### 2. What was implemented
+- `frontend/src/components/slide-deck-and-markdown.ts` & `frontend/tests/slide-deck-and-markdown.test.ts` (`2/2` tests passing)
+- `src/components/common/LoadingAnimation.tsx`
+- `src/components/chat/MarkdownRenderer.tsx`, `src/components/chat/SlideDeckPreview.tsx`, `src/components/chat/MessageBubble.tsx`, `src/components/chat/MessageList.tsx`, and `src/components/chat/ChatArea.tsx`
+- `src/components/layout/Sidebar.tsx` and `src/components/layout/Nav.tsx`
+
+### 3. How to inspect the feature
+- Run `pnpm test` (`40` suites, `143` tests passing).
+
+
 
 
