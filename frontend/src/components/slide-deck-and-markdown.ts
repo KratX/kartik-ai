@@ -312,3 +312,115 @@ export function buildArtifactRawDownloadUrl(artifactId: string): string {
   const cleanId = encodeURIComponent(artifactId.trim());
   return `/api/v1/artifacts/${cleanId}/raw`;
 }
+
+export interface AgentSelectorPillSpec {
+  readonly id: 'auto' | 'chat' | 'search' | 'coding' | 'pdf' | 'ppt' | 'rag' | 'vision' | 'image';
+  readonly label: string;
+  readonly creditCostLabel: string;
+  readonly placeholder: string;
+}
+
+export const AGENT_SELECTOR_PILLS: readonly AgentSelectorPillSpec[] = Object.freeze([
+  {
+    id: 'auto',
+    label: 'Auto Router',
+    creditCostLabel: '1–10 cr',
+    placeholder: 'Ask anything — LangGraph Router will select the right specialist agent...',
+  },
+  {
+    id: 'chat',
+    label: 'Chat',
+    creditCostLabel: '1 cr',
+    placeholder: 'Ask a technical or architectural question...',
+  },
+  {
+    id: 'search',
+    label: 'Web Search',
+    creditCostLabel: '2 cr',
+    placeholder: 'Search the web with live citations & 4-image visual gallery...',
+  },
+  {
+    id: 'coding',
+    label: 'Coding',
+    creditCostLabel: '5 cr',
+    placeholder: 'Build an interactive HTML/CSS/JS app or ask for a code review...',
+  },
+  {
+    id: 'pdf',
+    label: 'PDF Gen',
+    creditCostLabel: '5 cr',
+    placeholder: 'Describe the multi-section technical PDF report to generate (%PDF-1.4)...',
+  },
+  {
+    id: 'ppt',
+    label: 'PPT Gen',
+    creditCostLabel: '8 cr',
+    placeholder: 'Describe the 6-slide presentation deck to build (.pptx + 16:9 preview)...',
+  },
+  {
+    id: 'rag',
+    label: 'PDF RAG',
+    creditCostLabel: '2 cr',
+    placeholder: 'Ask a grounded question about your uploaded PDF documents...',
+  },
+  {
+    id: 'vision',
+    label: 'Vision OCR',
+    creditCostLabel: '3 cr',
+    placeholder: 'Attach an image (PNG/JPEG/WebP) and ask Vision Agent to inspect it...',
+  },
+  {
+    id: 'image',
+    label: 'Image Gen',
+    creditCostLabel: '10 cr',
+    placeholder: 'Describe the visual artwork or architecture diagram to generate...',
+  },
+]);
+
+/**
+ * Combines a multi-file `code_bundle` (`index.html`, `styles.css`, `app.js`) into a single
+ * self-contained HTML document for an isolated `<iframe sandbox="allow-scripts">` preview
+ * (Invariant #11: never `allow-same-origin`).
+ */
+export function assembleMultiFileHtmlPreview(
+  files: ReadonlyArray<{ readonly path: string; readonly content?: string }>,
+): {
+  readonly sandboxAttribute: 'allow-scripts';
+  readonly srcDoc: string;
+} {
+  const htmlFile =
+    files.find((f) => f.path.endsWith('.html'))?.content ??
+    '<div id="app">Preview Ready</div>';
+  const cssContent = files
+    .filter((f) => f.path.endsWith('.css'))
+    .map((f) => f.content ?? '')
+    .join('\n');
+  const jsContent = files
+    .filter((f) => f.path.endsWith('.js'))
+    .map((f) => (f.content ?? '').replace(/<\/script>/gi, '<\\/script>'))
+    .join('\n');
+
+  const bodyMatch = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(htmlFile);
+  const bodyInner = bodyMatch ? bodyMatch[1]! : htmlFile;
+
+  const srcDoc = [
+    '<!doctype html>',
+    '<html lang="en">',
+    '<head>',
+    '<meta charset="utf-8" />',
+    '<meta name="viewport" content="width=device-width, initial-scale=1" />',
+    `<style>${cssContent}</style>`,
+    '</head>',
+    '<body>',
+    bodyInner,
+    `<script>${jsContent}</script>`,
+    '</body>',
+    '</html>',
+  ].join('\n');
+
+  return Object.freeze({
+    sandboxAttribute: 'allow-scripts',
+    srcDoc,
+  });
+}
+

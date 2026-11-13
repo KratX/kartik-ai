@@ -95,6 +95,25 @@
 ### 3. How to inspect the feature
 - Run `pnpm test` (`40` suites, `143` tests passing).
 
+---
+
+## Entry 38 — Phase 9 / Step 9.5 (Micro-step 9.5.a): Phase 15 Frontend Part 2 — 7 Agent Selector Pills, Voice Dictation, Multi-File Live Sandbox (`ArtifactPanel.tsx`), Razorpay Billing Drawer & 3-Pane `App.tsx`
+
+### 1. Concept learned
+- **Multi-File Sandbox Assembly with Breakout Escaping (`Blueprint §4.1 & Invariant #11`):**
+  - When the Coding Agent generates a 3-file bundle (`index.html`, `styles.css`, `app.js`), `assembleMultiFileHtmlPreview` merges the CSS `<style>` and JavaScript `<script>` blocks into a self-contained HTML document while escaping any embedded `</script>` sequences (`<\/script>`) and enforcing `<iframe sandbox="allow-scripts">` (omitting `allow-same-origin` so untrusted generated code runs in an opaque origin that cannot read parent cookies or storage).
+- **Client-Owned `Idempotency-Key` Across Turns & Checkout (`Blueprint Invariant #15`):**
+  - `src/App.tsx` generates a deterministic `Idempotency-Key` (`idem_...`) per turn and retains `lastTurnReplayPayload` so clicking **0-Charge Replay** re-sends the exact `Idempotency-Key` to `POST /api/v1/conversations/:id/messages`, proving zero duplicate charges and zero duplicate messages.
+
+### 2. What was implemented
+- `frontend/src/components/slide-deck-and-markdown.ts` (`AGENT_SELECTOR_PILLS`, `assembleMultiFileHtmlPreview`)
+- `frontend/tests/multi-agent-workspace-ui.test.ts` (`2/2` tests passing)
+- `src/components/chat/ChatInput.tsx`, `src/components/artifacts/ArtifactPanel.tsx`, `src/components/billing/BillingDrawer.tsx`, `src/components/auth/AuthModal.tsx`, and `src/App.tsx`
+
+### 3. How to inspect the feature
+- Run `pnpm test` (`41` suites, `145` tests passing).
+- Interact with the live 3-pane Multi-Agent Workspace in the browser preview (`http://localhost:3000`).
+
 
 
 
