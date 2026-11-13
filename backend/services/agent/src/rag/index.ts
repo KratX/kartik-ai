@@ -15,6 +15,9 @@ import type {
   VectorStore,
 } from '../models/index.js';
 import type { AgentRepository } from '../repositories/index.js';
+import { extractTextPagesFromPdfBytes } from './loaders/index.js';
+
+export { extractTextPagesFromPdfBytes } from './loaders/index.js';
 
 export interface PdfPageText {
   readonly pageNumber: number;
@@ -171,12 +174,8 @@ export class FileIngestionAndArtifactService {
     let chunkRecords: DocumentChunkRecord[] = [];
 
     if (validated.mimeType === 'application/pdf') {
-      const pages = input.extractedPdfPages ?? [
-        {
-          pageNumber: 1,
-          text: Buffer.from(input.contentBytes).toString('utf8'),
-        },
-      ];
+      const pages =
+        input.extractedPdfPages ?? extractTextPagesFromPdfBytes(input.contentBytes);
       pageCount = pages.length;
 
       const rawChunks = chunkPdfPages({

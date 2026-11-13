@@ -36,3 +36,26 @@
 ### 3. How to inspect the feature
 - Run `pnpm test` (`37` suites, `135` tests passing).
 
+---
+
+## Entry 35 — Phase 9 / Step 9.2 (Micro-step 9.2.a): Live Server-Side `@google/genai` Providers, 2-Stage Coding Intent Classifier, Real Binary PDF Loader & Per-Agent Sliding-Window Rate Limiter
+
+### 1. Concept learned
+- **Two-Stage Coding Intent Classification (`Blueprint §4.1 & Tutorial Part 2`):**
+  - Not every coding prompt wants a brand-new multi-file web app that overwrites the user's Artifact workspace. By classifying prompts first (`classifyCodingIntent` → `CODE_GENERATION` vs `CODE_REVIEW`, `CODE_EXPLANATION`, `DEBUGGING`, `OPTIMIZATION`), `AgentGraphExecutor` only generates a `code_bundle` artifact on `CODE_GENERATION` and returns rich syntax-highlighted Markdown inline in the chat bubble for code reviews, debugging, and explanations.
+- **Per-Agent Sliding-Window Rate Limiting (`Blueprint §9.4, §12 & §15.1`):**
+  - `AgentSlidingWindowRateLimiter.checkAgentLimit` enforces granular per-user, per-minute quotas (`chat: 20/min`, `coding/pdf/ppt/rag/vision/image/search: 5/min`) using scoped Redis keys (`rl:{agent}:{userId}:{minuteBucket}`) and returns `429 RATE_LIMITED` with an exact `retryAfterSeconds` countdown.
+- **Zero-Dependency PDF Binary Text Extraction (`extractTextPagesFromPdfBytes`):**
+  - Parses `%PDF-1.x` content streams (including `FlateDecode` zlib-compressed streams and PDF text operators `Tj`/`TJ`) directly into `{ pageNumber, text }[]` so uploaded `.pdf` files are chunked and vector-indexed automatically without external native binaries.
+
+### 2. What was implemented
+- `backend/services/agent/src/services/agent-rate-limiter.ts`
+- `backend/services/agent/src/rag/loaders/index.ts` & `backend/services/agent/src/rag/index.ts`
+- `backend/services/agent/src/agents/coding/index.ts` & `backend/services/agent/src/graph/index.ts`
+- `backend/services/agent/src/services/live-gemini-providers.ts`
+- `backend/services/agent/tests/live-providers-and-limits.test.ts` (`4/4` tests passing)
+
+### 3. How to inspect the feature
+- Run `pnpm test` (`38` suites, `139` tests passing).
+
+

@@ -1,45 +1,43 @@
 # Kartik.ai Build State
 
 - Current phase: Phase 9 — Multi-Agent Platform Completion (Blueprint v4.3 Phases 6–18 & Video Tutorial Alignment)
-- Current step / micro-step: 9.1.a
+- Current step / micro-step: 9.2.a
 - Status: complete
-- Last completed micro-step: 9.1.a (Canonical 7-Agent Contract with `pdf` & `ppt`, Pricing Table, and Real Binary PDF 1.4 & OpenXML `.pptx` Generators)
-- Next micro-step: 9.2.a (Live Server-Side `@google/genai` AI Providers, 2-Stage Coding Intent Classifier, Real PDF RAG & Per-Agent Sliding-Window Rate Limiter)
+- Last completed micro-step: 9.2.a (Live Server-Side `@google/genai` AI Providers, 2-Stage Coding Intent Classifier, Real Binary PDF RAG Loader & Per-Agent Sliding-Window Rate Limiter)
+- Next micro-step: 9.3.a (Full-Stack Express + Vite Server `server.ts` on Port 3000 Mounting Real `/api/v1/*` Routes, Binary File Uploads & Binary Artifact Downloads)
 - Current branch: main
-- Last known commit: feat(agent): add pdf and ppt specialist generators and binary builders (9.1.a)
+- Last known commit: feat(agent): add live gemini providers, pdf binary loader, coding intent classifier and per-agent rate limiter (9.2.a)
 
 ## Current objective
 Complete **Kartik.ai** across micro-steps `9.1.a`–`9.6.a` so every specialist capability (`chat`, `search`, `coding`, `pdf`, `ppt`, `image`, `vision`), live server-side AI provider, full-stack Port 3000 server, and 3-pane Multi-Agent Workspace UI is 100% aligned with Blueprint v4.3 and the 3-part reference tutorial.
 
 ## Completed work
 - Phases 0–8: Core Monorepo, Shared Contracts, Auth, Gateway, Billing, Agent, Chat, Frontend & Readiness Suites (`Complete`)
-- Phase 9 / `9.1.a`:
-  - Expanded `@kartik/shared/contracts` (`AGENT_NAMES`, `SPECIALIST_AGENT_NAMES`, `BILLING_OPERATIONS`), `@kartik/billing` (`OPERATION_CREDIT_COSTS`), `@kartik/chat` (`AGENT_TO_BILLING_OPERATION`, `DEFAULT_OPERATION_UNITS`, `resolveTargetSpecialist`), and `@kartik/frontend` (`SpecialistAgentName`) to support `pdf` (`pdf_generation`) and `ppt` (`ppt_generation`).
-  - Created `backend/services/agent/src/schemas/index.ts` (`validatePdfDocumentSpec`, `validatePptPresentationSpec`, `stripMarkdownJsonFences`).
-  - Created `backend/services/agent/src/agents/pdf/index.ts` (`buildPdfBinaryBuffer` compiling standards-compliant `%PDF-1.4` multi-page binary files with page numbers, footer, and exact `xref` offsets, plus `MockPdfDocumentProvider`).
-  - Created `backend/services/agent/src/agents/ppt/index.ts` (`buildPptxBinaryBuffer` compiling standards-compliant OpenXML `.pptx` ZIP archives `PK\x03\x04` with Cover + 6 Content Slides + Thank You Slide, plus `MockPptPresentationProvider`).
-  - Wired `pdf` and `ppt` into `AgentGraphExecutor` (`backend/services/agent/src/graph/index.ts`) and added `backend/services/agent/tests/pdf-ppt-generators.test.ts` (`5/5` tests passing).
+- Phase 9 / `9.1.a`: Canonical 7-Agent Contract with `pdf` & `ppt`, Pricing Table, and Real Binary PDF 1.4 & OpenXML `.pptx` Generators (`Complete`)
+- Phase 9 / `9.2.a`:
+  - Created `backend/services/agent/src/services/agent-rate-limiter.ts` (`AGENT_RATE_LIMITS_PER_MINUTE`: `chat: 20/min`, `coding: 5/min`, `pdf: 5/min`, `ppt: 5/min`, `rag: 5/min`, `vision: 5/min`, `image: 5/min`, `search: 5/min`, `InMemoryAgentRateLimitStore`, and `AgentSlidingWindowRateLimiter.checkAgentLimit`).
+  - Created `backend/services/agent/src/rag/loaders/index.ts` (`extractTextPagesFromPdfBytes` parsing real `%PDF-1.x` binary and `FlateDecode` streams into `{ pageNumber, text }[]`) and wired it into `FileIngestionAndArtifactService.ingestUploadedFile` (`backend/services/agent/src/rag/index.ts`).
+  - Created `backend/services/agent/src/agents/coding/index.ts` (`classifyCodingIntent` classifying `CODE_GENERATION` vs `CODE_REVIEW` / `CODE_EXPLANATION` / `DEBUGGING` / `OPTIMIZATION`, `buildRichCodingTemplateBundle`, and `buildNonGenerationCodingMarkdown`) and wired it into `AgentGraphExecutor` (`backend/services/agent/src/graph/index.ts`).
+  - Created `backend/services/agent/src/services/live-gemini-providers.ts` (`LiveGeminiChatModelProvider`, `LiveGeminiCodingModelProvider`, `LiveGeminiSearchProvider` with `googleSearch` grounding + `SearchImageGalleryItem[]`, `LiveGeminiEmbeddingProvider` with `gemini-embedding-2`, `LiveGeminiVisionProvider` with `inlineData`, `LiveGeminiPdfDocumentProvider`, `LiveGeminiPptPresentationProvider`, `LiveGeminiImageGenerationProvider`).
+  - Created `backend/services/agent/tests/live-providers-and-limits.test.ts` (`4/4` tests passing).
 
-## Changed files (Micro-step 9.1.a)
-- `backend/shared/contracts/index.ts` (updated)
-- `backend/shared/tests/contracts.test.ts` (updated)
-- `backend/services/billing/src/services/credit-service.ts` (updated)
-- `backend/services/chat/src/services/index.ts` (updated)
-- `backend/services/agent/src/schemas/index.ts` (created)
-- `backend/services/agent/src/agents/pdf/index.ts` (created)
-- `backend/services/agent/src/agents/ppt/index.ts` (created)
-- `backend/services/agent/src/models/index.ts` (updated)
+## Changed files (Micro-step 9.2.a)
+- `backend/shared/redis/index.ts` (updated)
+- `backend/services/agent/package.json` (updated)
+- `backend/services/agent/src/services/agent-rate-limiter.ts` (created)
+- `backend/services/agent/src/rag/loaders/index.ts` (created)
+- `backend/services/agent/src/rag/index.ts` (updated)
+- `backend/services/agent/src/agents/coding/index.ts` (created)
+- `backend/services/agent/src/services/live-gemini-providers.ts` (created)
 - `backend/services/agent/src/graph/index.ts` (updated)
 - `backend/services/agent/src/index.ts` (updated)
-- `backend/services/agent/tests/pdf-ppt-generators.test.ts` (created)
-- `frontend/src/types/index.ts` (updated)
-- `frontend/src/app/interactive-demo-harness.ts` (updated)
+- `backend/services/agent/tests/live-providers-and-limits.test.ts` (created)
 - `docs/implementation/BUILD_STATE.md` (updated)
 - `docs/implementation/TEST_EVIDENCE.md` (updated)
 - `docs/implementation/LEARNING_LOG.md` (updated)
 
 ## Verification evidence
-- `pnpm test` (`37` suites, `135` tests passing across all 7 workspaces, `0` failures) — **PASS**
+- `pnpm test` (`38` suites, `139` tests passing across all 7 workspaces, `0` failures) — **PASS**
 
 ## Open issues / blockers
 - None.
@@ -48,4 +46,4 @@ Complete **Kartik.ai** across micro-steps `9.1.a`–`9.6.a` so every specialist 
 - None.
 
 ## Safe resume instruction
-Resume at **Phase 9, micro-step 9.2.a**: implement live server-side `@google/genai` providers (`Chat`, `Search` with Google Search Grounding & image gallery, 2-stage `Coding` intent classifier & templates, `PDF`, `PPT`, `Vision`, `Image`, and `PDF RAG` loader/embeddings) plus the per-agent sliding-window rate limiter (`checkAgentLimit`).
+Resume at **Phase 9, micro-step 9.3.a**: implement the full-stack Express + Vite server (`server.ts` on Port 3000) mounting real `/api/v1/*` routes (`Gateway` → `Auth`, `Chat`, `Agent`, `Billing`), binary file upload (`POST /api/v1/files/upload`), and binary artifact download (`GET /api/v1/artifacts/:id/raw`) for `.pdf`, `.pptx`, and images.

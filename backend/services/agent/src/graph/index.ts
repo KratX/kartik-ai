@@ -30,7 +30,12 @@ import {
   MockPptPresentationProvider,
   type PptPresentationProvider,
 } from '../agents/ppt/index.js';
+import {
+  buildNonGenerationCodingMarkdown,
+  classifyCodingIntent,
+} from '../agents/coding/index.js';
 import type { DailyLiveBudgetGuard } from '../services/budget-guard.js';
+import type { AgentSlidingWindowRateLimiter } from '../services/agent-rate-limiter.js';
 
 export interface AgentMetadataStore {
   getFileById(userId: string, fileId: string): Promise<UploadedFileRecord | null>;
@@ -99,6 +104,7 @@ export function routePromptToSpecialist(input: {
 export interface AgentGraphDependencies {
   readonly config: AgentConfig;
   readonly budgetGuard: DailyLiveBudgetGuard;
+  readonly rateLimiter?: AgentSlidingWindowRateLimiter;
   readonly chatProvider: ChatModelProvider;
   readonly codingProvider: CodingModelProvider;
   readonly searchProvider: SearchProvider;
@@ -179,6 +185,13 @@ export class AgentGraphExecutor {
       preferredAgent: request.preferredAgent,
       attachedFiles,
     });
+
+    if (this.deps.rateLimiter) {
+      await this.deps.rateLimiter.checkAgentLimit({
+        userId: request.userId,
+        agent: specialist,
+      });
+    }
 
     const budgetDecision = await this.deps.budgetGuard.checkAndConsumeLiveCall({
       userId: request.userId,
@@ -343,6 +356,26 @@ export class AgentGraphExecutor {
     }
 
     if (specialist === 'coding') {
+      const codingIntent = classifyCodingIntent(trimmedPrompt);
+      if (codingIntent !== 'CODE_GENERATION') {
+        const inlineMarkdown = buildNonGenerationCodingMarkdown(codingIntent, trimmedPrompt);
+        return {
+          executionId,
+          requestId: request.requestId,
+          agent: 'coding',
+          replyContent: `${fallbackNotice}${inlineMarkdown}`,
+          usage: {
+            promptTokens,
+            completionTokens: Math.ceil(inlineMarkdown.length / 4),
+            totalTokens: promptTokens + Math.ceil(inlineMarkdown.length / 4),
+            provider: this.deps.codingProvider.providerName,
+            model: this.deps.config.codingModelId,
+            durationMs: Math.max(1, Date.now() - startMs),
+            mock: !budgetDecision.allowLive,
+          },
+        };
+      }
+
       // Idempotent artifact check by requestId (Invariant #15)
       const existingArtifact = await this.deps.metadataStore.getArtifactByRequestId(
         request.userId,

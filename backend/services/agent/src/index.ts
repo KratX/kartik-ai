@@ -61,6 +61,7 @@ export {
 
 export {
   chunkPdfPages,
+  extractTextPagesFromPdfBytes,
   FileIngestionAndArtifactService,
   type PdfPageText,
   type CascadeDeletionStep,
@@ -126,3 +127,31 @@ export {
   type PptPresentationGenerationResult,
   type PptPresentationProvider,
 } from './agents/ppt/index.js';
+
+export {
+  CODING_INTENT_TYPES,
+  classifyCodingIntent,
+  buildRichCodingTemplateBundle,
+  buildNonGenerationCodingMarkdown,
+  type CodingIntentType,
+} from './agents/coding/index.js';
+
+export {
+  AGENT_RATE_LIMITS_PER_MINUTE,
+  InMemoryAgentRateLimitStore,
+  AgentSlidingWindowRateLimiter,
+  type AgentRateLimitStore,
+  type AgentRateLimitDecision,
+} from './services/agent-rate-limiter.js';
+
+export {
+  LiveGeminiChatModelProvider,
+  LiveGeminiCodingModelProvider,
+  LiveGeminiSearchProvider,
+  LiveGeminiEmbeddingProvider,
+  LiveGeminiVisionProvider,
+  LiveGeminiPdfDocumentProvider,
+  LiveGeminiPptPresentationProvider,
+  LiveGeminiImageGenerationProvider,
+  type SearchImageGalleryItem,
+} from './services/live-gemini-providers.js';

@@ -17,6 +17,7 @@ export type RateLimitScope =
   | 'coding'
   | 'pdf'
   | 'ppt'
+  | 'rag'
   | 'image'
   | 'vision'
   | 'billing';
