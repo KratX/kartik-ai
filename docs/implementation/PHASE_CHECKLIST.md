@@ -105,3 +105,17 @@ Track every phase and every exit gate from `kartik_ai_blueprint.md` (Section 7).
 - [x] Specialist Evaluation Suite (`SPECIALIST_EVALUATION_DATASET`) passes 100% (`8/8` cases across `chat`, `search`, `coding`, `rag`, `vision`, `image`) on routing, structure, grounding, and artifact safety (§10).
 - [x] Free-tier portfolio readiness validator (`verifyPortfolioFreeTierReadiness`) enforces `MOCK_AI=true`, `IMAGE_PROVIDER=mock`, `BILLING_MODE=mock` defaults, blocks `rzp_live_*` keys, and requires bounded daily live call budgets (§11 & §12).
 - [x] All 20 Architecture Invariants (`ARCHITECTURE_INVARIANTS_REGISTRY`) are verified across `32` test suites (`121/121` passing tests, `0` failures).
+
+## Phase 9 — Multi-Agent Platform Completion (Blueprint v4.3 Phases 6–18 & Tutorial Alignment)
+- [x] `9.1.a` Canonical 7-Agent Contract (`chat`, `search`, `coding`, `pdf`, `ppt`, `image`, `vision`), Pricing Table, and Standards-Compliant Binary `%PDF-1.4` & OpenXML `.pptx` Generators
+- [x] `9.2.a` Live Server-Side `@google/genai` Providers (`LiveGemini*Provider`), 2-Stage Coding Intent Classifier, Real Binary PDF RAG Loader & Per-Agent Sliding-Window Rate Limiter
+- [x] `9.3.a` Full-Stack Express + Vite Server (`server.ts` on Port 3000) Mounting `/api/v1/*`, Binary File Upload (`/files/upload`) & Raw Artifact Streaming (`/artifacts/:id/raw`)
+- [x] `9.4.a` Phase 15 Frontend Part 1 — Multi-Agent `Sidebar.tsx`, `Nav.tsx`, `ChatArea.tsx`, `MessageBubble.tsx`, `MarkdownRenderer.tsx`, 16:9 `SlideDeckPreview.tsx` & Image Lightbox Modal
+- [x] `9.5.a` Phase 15 Frontend Part 2 — `ChatInput.tsx` (7 Agent Pills, Paperclip Upload, Web Speech Mic), `ArtifactPanel.tsx` Live Sandbox, `BillingDrawer.tsx` (Starter `₹199` / Pro `₹499` + Razorpay Checkout), `AuthModal.tsx` & 3-Pane `src/App.tsx`
+- [x] `9.6.a` Phase 16 & 18 Infrastructure — Root-Context Multi-Stage `pnpm` `Dockerfile`s (`gateway`, `auth`, `chat`, `agent`, `billing`, `frontend`) & `infra/aws/{ec2-compose,ecs-advanced,iam}` Contracts
+
+### Phase 9 Final Exit Gate
+- [x] All 7 user-facing specialist capabilities (`chat`, `search`, `coding`, `pdf`, `ppt`, `image`, `vision`) + automatic `.pdf` RAG vector indexing execute end-to-end over `/api/v1/*`.
+- [x] Real `%PDF-1.4` binary reports and OpenXML `PK\x03\x04` `.pptx` slide decks (plus inline 16:9 interactive slide deck preview) download cleanly with verified ownership (`404` on foreign IDs).
+- [x] Multi-file coding bundles (`index.html`, `styles.css`, `app.js`) render inside `<iframe sandbox="allow-scripts">` with `</script>` breakout escaping.
+- [x] All 6 multi-stage root-context `pnpm@12.18.0` `Dockerfile`s and Profile P / Profile S AWS deployment templates pass automated contract verification (`42` suites, `147` tests passing, `0` failures).

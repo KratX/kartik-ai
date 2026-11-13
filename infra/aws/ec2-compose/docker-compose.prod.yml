@@ -1,0 +1,133 @@
+# Kartik.ai Profile P Production Single-VM Compose Stack (Blueprint v4.3 §3.4, §7.2 Phase 16, Invariants #1 & #14)
+# Designed to stay within available free allowances, subject to current eligibility and usage
+# (Oracle Cloud Always Free ARM64 VM + Neon Serverless Postgres + Cloudflare R2 $0 egress).
+#
+# Security & Topology Guarantee:
+# - ONLY `frontend` (Nginx Reverse Proxy) binds to host port 80/443.
+# - `gateway` (:8000), `auth` (:8001), `chat` (:8002), `agent` (:8003), `billing` (:8004),
+#   `redis`, and `qdrant` run exclusively on the internal `kartik_internal` bridge network
+#   with zero host port mappings.
+
+name: kartik-prod
+
+services:
+  frontend:
+    build:
+      context: ../../..
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - gateway
+    networks:
+      - kartik_internal
+
+  gateway:
+    build:
+      context: ../../..
+      dockerfile: backend/gateway/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "8000"
+      AUTH_SERVICE_URL: http://auth:8001
+      CHAT_SERVICE_URL: http://chat:8002
+      AGENT_SERVICE_URL: http://agent:8003
+      BILLING_SERVICE_URL: http://billing:8004
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - auth
+      - chat
+      - agent
+      - billing
+      - redis
+    networks:
+      - kartik_internal
+
+  auth:
+    build:
+      context: ../../..
+      dockerfile: backend/services/auth/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "8001"
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+    networks:
+      - kartik_internal
+
+  chat:
+    build:
+      context: ../../..
+      dockerfile: backend/services/chat/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "8002"
+      AGENT_SERVICE_URL: http://agent:8003
+      BILLING_SERVICE_URL: http://billing:8004
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - agent
+      - billing
+      - redis
+    networks:
+      - kartik_internal
+
+  agent:
+    build:
+      context: ../../..
+      dockerfile: backend/services/agent/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "8003"
+      MOCK_AI: ${MOCK_AI:-true}
+      IMAGE_PROVIDER: ${IMAGE_PROVIDER:-mock}
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - qdrant
+      - redis
+    networks:
+      - kartik_internal
+
+  billing:
+    build:
+      context: ../../..
+      dockerfile: backend/services/billing/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "8004"
+      BILLING_MODE: ${BILLING_MODE:-mock}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+    networks:
+      - kartik_internal
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - kartik_internal
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    restart: unless-stopped
+    volumes:
+      - qdrant_prod_data:/qdrant/storage
+    networks:
+      - kartik_internal
+
+networks:
+  kartik_internal:
+    driver: bridge
+
+volumes:
+  qdrant_prod_data:

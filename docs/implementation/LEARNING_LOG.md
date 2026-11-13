@@ -114,6 +114,25 @@
 - Run `pnpm test` (`41` suites, `145` tests passing).
 - Interact with the live 3-pane Multi-Agent Workspace in the browser preview (`http://localhost:3000`).
 
+---
+
+## Entry 39 — Phase 9 / Step 9.6 (Micro-step 9.6.a): Phase 16 & 18 Root-Context Multi-Stage `pnpm` `Dockerfile`s & Profile P / Profile S AWS Infrastructure
+
+### 1. Concept learned
+- **Dockerfile Path vs. Monorepo Build Context (`Blueprint §4.6, §5 & Phase 16`):**
+  - In a `pnpm` workspace where `@kartik/gateway` and `@kartik/auth` import `@kartik/shared` via `workspace:*`, building a service with its own subfolder as the Docker context fails because `pnpm-lock.yaml`, `pnpm-workspace.yaml`, and `backend/shared` lie outside the context.
+  - Using the **repository root (`.`) as the build context** (`docker build -f backend/gateway/Dockerfile .`) lets the builder stage copy only the root lockfile plus the two workspace `package.json` manifests (`@kartik/shared` and the target service) to cache `pnpm install --frozen-lockfile --filter ...` cleanly before copying source files and dropping privileges to `USER node`.
+- **Single-Origin Edge vs. Private Service Discovery (`Blueprint §2.1, §3.4, §3.5 & Invariants #1, #14`):**
+  - Both Profile P (`infra/aws/ec2-compose/docker-compose.prod.yml`) and Profile S (`infra/aws/ecs-advanced/task-definitions.json` with Cloud Map `kartik.local`) ensure that `auth:8001`, `chat:8002`, `agent:8003`, and `billing:8004` are never reachable from the public internet—only Nginx (`:80`) and Gateway (`/api/v1/*`) sit at the edge.
+
+### 2. What was implemented
+- `backend/gateway/Dockerfile`, `backend/services/auth/Dockerfile`, `backend/services/chat/Dockerfile`, `backend/services/agent/Dockerfile`, `backend/services/billing/Dockerfile`, and `frontend/Dockerfile`
+- `infra/aws/ec2-compose/docker-compose.prod.yml`, `infra/aws/ecs-advanced/task-definitions.json`, and `infra/aws/iam/least-privilege-policies.json`
+- `backend/gateway/tests/docker-and-aws-infra.test.ts` (`2/2` tests passing)
+
+### 3. How to inspect the feature
+- Run `pnpm test` (`42` suites, `147` tests passing across all workspaces).
+
 
 
 

@@ -1,0 +1,52 @@
+{
+  "Version": "2012-10-17",
+  "BlueprintReference": "Kartik.ai Least-Privilege IAM Policies (Blueprint v4.3 §11 Secrets & Phase 18)",
+  "Policies": {
+    "KartikAgentPrivateObjectStoragePolicy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Sid": "AllowPrivateBucketObjectReadWriteDeleteOnly",
+          "Effect": "Allow",
+          "Action": [
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject"
+          ],
+          "Resource": "arn:aws:s3:::kartik-ai-private-artifacts/*"
+        },
+        {
+          "Sid": "DenyPublicAclModifications",
+          "Effect": "Deny",
+          "Action": [
+            "s3:PutBucketAcl",
+            "s3:PutObjectAcl",
+            "s3:PutBucketPublicAccessBlock"
+          ],
+          "Resource": [
+            "arn:aws:s3:::kartik-ai-private-artifacts",
+            "arn:aws:s3:::kartik-ai-private-artifacts/*"
+          ]
+        }
+      ]
+    },
+    "KartikEcsTaskExecutionPolicy": {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Sid": "AllowEcrPullAndCloudWatchLogs",
+          "Effect": "Allow",
+          "Action": [
+            "ecr:GetAuthorizationToken",
+            "ecr:BatchCheckLayerAvailability",
+            "ecr:GetDownloadUrlForLayer",
+            "ecr:BatchGetImage",
+            "logs:CreateLogStream",
+            "logs:PutLogEvents"
+          ],
+          "Resource": "*"
+        }
+      ]
+    }
+  }
+}

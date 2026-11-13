@@ -541,20 +541,20 @@ export function App() {
         <div className="shrink-0 bg-slate-950 border-b border-emerald-500/30 px-4 py-2 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
             <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/40 text-[10px] font-mono font-semibold text-emerald-300 uppercase shrink-0">
-              Step 9.5.a Ready
+              Step 9.6.a · 100% Complete
             </span>
             <span className="text-xs text-slate-300 truncate">
-              Phase 15 Multi-Agent Platform UI Complete — 7 Agent Selector Pills, Live Sandbox, Voice Mic, Starter ₹199 / Pro ₹499 Billing &amp; Auth
+              All Phases Complete (42 Suites / 147 Tests) — 7 Specialist Agents, Live Sandbox, PDF/PPTX Binary Exports, Dockerfiles &amp; AWS Infra
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <a
-              href="/__downloads/step-9.5.a.zip"
-              download="step-9.5.a.zip"
+              href="/__downloads/step-9.6.a.zip"
+              download="step-9.6.a.zip"
               className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors"
             >
               <FolderArchive className="w-3.5 h-3.5" />
-              Download step-9.5.a.zip
+              Download step-9.6.a.zip
             </a>
             <button
               type="button"

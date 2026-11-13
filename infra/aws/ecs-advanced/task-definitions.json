@@ -1,0 +1,134 @@
+{
+  "schemaVersion": "1.0",
+  "blueprintReference": "Kartik.ai Blueprint v4.3 §3.5 & §7.2 Phase 18 (Profile S Bounded AWS ECS Fargate + Cloud Map Architecture)",
+  "costWarning": "Designed for a bounded 14-day architectural verification sprint only. Always run teardown before idle charges accrue on ALB, NAT Gateway, or Fargate tasks.",
+  "cloudMapNamespace": {
+    "name": "kartik.local",
+    "type": "DNS_PRIVATE",
+    "services": {
+      "auth": "http://auth.kartik.local:8001",
+      "chat": "http://chat.kartik.local:8002",
+      "agent": "http://agent.kartik.local:8003",
+      "billing": "http://billing.kartik.local:8004"
+    }
+  },
+  "albRouting": {
+    "listenerPort": 80,
+    "rules": [
+      {
+        "priority": 10,
+        "pathPattern": "/api/v1/*",
+        "targetService": "gateway",
+        "targetPort": 8000,
+        "healthCheckPath": "/healthz"
+      },
+      {
+        "priority": 20,
+        "pathPattern": "/*",
+        "targetService": "frontend",
+        "targetPort": 80,
+        "healthCheckPath": "/healthz"
+      }
+    ]
+  },
+  "taskDefinitions": [
+    {
+      "family": "kartik-gateway-task",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "cpu": "256",
+      "memory": "512",
+      "containerDefinitions": [
+        {
+          "name": "gateway",
+          "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/gateway:latest",
+          "portMappings": [{ "containerPort": 8000, "protocol": "tcp" }],
+          "environment": [
+            { "name": "PORT", "value": "8000" },
+            { "name": "AUTH_SERVICE_URL", "value": "http://auth.kartik.local:8001" },
+            { "name": "CHAT_SERVICE_URL", "value": "http://chat.kartik.local:8002" },
+            { "name": "AGENT_SERVICE_URL", "value": "http://agent.kartik.local:8003" },
+            { "name": "BILLING_SERVICE_URL", "value": "http://billing.kartik.local:8004" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "kartik-auth-task",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "cpu": "256",
+      "memory": "512",
+      "containerDefinitions": [
+        {
+          "name": "auth",
+          "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/auth:latest",
+          "portMappings": [{ "containerPort": 8001, "protocol": "tcp" }]
+        }
+      ]
+    },
+    {
+      "family": "kartik-chat-task",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "cpu": "256",
+      "memory": "512",
+      "containerDefinitions": [
+        {
+          "name": "chat",
+          "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/chat:latest",
+          "portMappings": [{ "containerPort": 8002, "protocol": "tcp" }]
+        }
+      ]
+    },
+    {
+      "family": "kartik-agent-task",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "cpu": "512",
+      "memory": "1024",
+      "containerDefinitions": [
+        {
+          "name": "agent",
+          "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/agent:latest",
+          "portMappings": [{ "containerPort": 8003, "protocol": "tcp" }],
+          "environment": [
+            { "name": "MOCK_AI", "value": "true" },
+            { "name": "IMAGE_PROVIDER", "value": "mock" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "kartik-billing-task",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "cpu": "256",
+      "memory": "512",
+      "containerDefinitions": [
+        {
+          "name": "billing",
+          "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/billing:latest",
+          "portMappings": [{ "containerPort": 8004, "protocol": "tcp" }],
+          "environment": [
+            { "name": "BILLING_MODE", "value": "mock" }
+          ]
+        }
+      ]
+    },
+    {
+      "family": "kartik-frontend-task",
+      "networkMode": "awsvpc",
+      "requiresCompatibilities": ["FARGATE"],
+      "cpu": "256",
+      "memory": "512",
+      "containerDefinitions": [
+        {
+          "name": "frontend",
+          "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/frontend:latest",
+          "portMappings": [{ "containerPort": 80, "protocol": "tcp" }]
+        }
+      ]
+    }
+  ]
+}

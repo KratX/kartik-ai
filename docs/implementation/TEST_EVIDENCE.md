@@ -22,7 +22,8 @@ Chronological record of test commands and real execution results across micro-st
 | 2026-11-13 | Phase 9 / `9.2.a` | Linux / Node v22.23.2 | `pnpm test` (Live Gemini Providers, Real PDF Binary Loader, Coding Intent Classifier & Per-Agent Rate Limiter) | **PASS** | `38` suites, `139` tests passing (`4/4` in `live-providers-and-limits.test.ts`) | AI + Owner |
 | 2026-11-13 | Phase 9 / `9.3.a` | Linux / Node v22.23.2 | `pnpm test` (Full-Stack Server, `/files/upload` & `/artifacts/:id/content` Binary Routes) | **PASS** | `39` suites, `141` tests passing (`2/2` in `artifact-content-and-upload-routes.test.ts`) | AI + Owner |
 | 2026-11-13 | Phase 9 / `9.4.a` | Linux / Node v22.23.2 | `pnpm test` (Phase 15 Frontend Part 1 — SlideDeckPreview & MarkdownRenderer Tokenizers + Chat/Layout UI) | **PASS** | `40` suites, `143` tests passing (`2/2` in `slide-deck-and-markdown.test.ts`) | AI + Owner |
-| 2026-11-13 | Phase 9 / `9.5.a` | Linux / Node v22.23.2 | `pnpm test` (Phase 15 Frontend Part 2 — 7 Agent Selector Pills, Multi-File Sandbox Assembler & 3-Pane Workspace UI) | **PASS** | `41` suites, `145` tests passing (`2/2` in `multi-agent-workspace-ui.test.ts`) | AI |
+| 2026-11-13 | Phase 9 / `9.5.a` | Linux / Node v22.23.2 | `pnpm test` (Phase 15 Frontend Part 2 — 7 Agent Selector Pills, Multi-File Sandbox Assembler & 3-Pane Workspace UI) | **PASS** | `41` suites, `145` tests passing (`2/2` in `multi-agent-workspace-ui.test.ts`) | AI + Owner |
+| 2026-11-13 | Phase 9 / `9.6.a` | Linux / Node v22.23.2 | `pnpm test` (Phase 16 & 18 Multi-Stage `pnpm` Dockerfiles & AWS Profile P/S Infrastructure Contracts) | **PASS** | `42` suites, `147` tests passing (`2/2` in `docker-and-aws-infra.test.ts`) — All Phases Complete | AI |
 
 
 
