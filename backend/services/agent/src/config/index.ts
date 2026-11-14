@@ -177,7 +177,11 @@ function normalizeEd25519PublicKeyPem(rawKey: string): string {
 export function loadAgentConfig(
   env: Record<string, string | undefined> = process.env,
 ): AgentConfig {
-  const raw = loadConfig(AGENT_CONFIG_SCHEMA, env) as {
+  const effectiveEnv: Record<string, string | undefined> = {
+    ...env,
+    PORT: env.PORT ?? env.PORT_AGENT,
+  };
+  const raw = loadConfig(AGENT_CONFIG_SCHEMA, effectiveEnv) as {
     NODE_ENV: 'development' | 'test' | 'production';
     PORT: number;
     DATABASE_URL: string;

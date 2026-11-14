@@ -14,6 +14,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { INTERNAL_AUTH_HEADERS } from '@kartik/shared';
 import {
+  bootstrapAuthService,
   createAuthRouter,
   extractSessionIdFromCookieHeader,
   InMemorySessionStore,
@@ -283,4 +284,24 @@ describe('@kartik/auth HTTP routes & Phase 2 Exit Gate closure (2.4.a)', () => {
     assert.equal(unknownRoute.statusCode, 404);
     assert.equal(unknownRoute.body.error.code, 'NOT_FOUND');
   });
+
+  it('bootstraps the executable Auth Service runtime via bootstrapAuthService and serves /healthz and /readyz over TCP', async () => {
+    const runtime = bootstrapAuthService({
+      env: { NODE_ENV: 'test' },
+    });
+    const { port } = await runtime.httpServer.listen(0, '127.0.0.1');
+    try {
+      const healthRes = await fetch(`http://127.0.0.1:${port}/healthz`);
+      assert.equal(healthRes.status, 200);
+      const healthBody = (await healthRes.json()) as { data: { service: string; status: string } };
+      assert.equal(healthBody.data.service, 'auth');
+      assert.equal(healthBody.data.status, 'ok');
+
+      const readyRes = await fetch(`http://127.0.0.1:${port}/readyz`);
+      assert.equal(readyRes.status, 200);
+    } finally {
+      await runtime.httpServer.close();
+    }
+  });
 });
+

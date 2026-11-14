@@ -39,36 +39,42 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
       readonly port: number;
       readonly filterPkg: string;
       readonly requiresNonRootNodeUser: boolean;
+      readonly expectedCmd?: string;
     }> = [
       {
         relPath: 'backend/gateway/Dockerfile',
         port: 8000,
         filterPkg: '@kartik/gateway',
         requiresNonRootNodeUser: true,
+        expectedCmd: 'CMD ["node", "backend/gateway/dist/src/server/index.js"]',
       },
       {
         relPath: 'backend/services/auth/Dockerfile',
         port: 8001,
         filterPkg: '@kartik/auth',
         requiresNonRootNodeUser: true,
+        expectedCmd: 'CMD ["node", "backend/services/auth/dist/src/server.js"]',
       },
       {
         relPath: 'backend/services/chat/Dockerfile',
         port: 8002,
         filterPkg: '@kartik/chat',
         requiresNonRootNodeUser: true,
+        expectedCmd: 'CMD ["node", "backend/services/chat/dist/src/server.js"]',
       },
       {
         relPath: 'backend/services/agent/Dockerfile',
         port: 8003,
         filterPkg: '@kartik/agent',
         requiresNonRootNodeUser: true,
+        expectedCmd: 'CMD ["node", "backend/services/agent/dist/src/server.js"]',
       },
       {
         relPath: 'backend/services/billing/Dockerfile',
         port: 8004,
         filterPkg: '@kartik/billing',
         requiresNonRootNodeUser: true,
+        expectedCmd: 'CMD ["node", "backend/services/billing/dist/src/server.js"]',
       },
       {
         relPath: 'frontend/Dockerfile',
@@ -103,6 +109,12 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
         assert.ok(
           content.includes('USER node'),
           `${item.relPath} must drop privileges to USER node`,
+        );
+      }
+      if (item.expectedCmd) {
+        assert.ok(
+          content.includes(item.expectedCmd),
+          `${item.relPath} must use executable server bootstrap CMD: ${item.expectedCmd}`,
         );
       }
     }

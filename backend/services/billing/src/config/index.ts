@@ -132,7 +132,12 @@ function isValidEd25519PublicKey(rawPemOrBase64: string): boolean {
 export function loadBillingConfig(
   env: Record<string, string | undefined> = process.env,
 ): BillingServiceConfig {
-  const config = loadConfig(BILLING_CONFIG_SCHEMA, env) as unknown as BillingServiceConfig;
+  const effectiveEnv: Record<string, string | undefined> = {
+    ...env,
+    PORT: env.PORT ?? env.PORT_BILLING,
+    BILLING_DATABASE_URL: env.BILLING_DATABASE_URL ?? env.DATABASE_URL,
+  };
+  const config = loadConfig(BILLING_CONFIG_SCHEMA, effectiveEnv) as unknown as BillingServiceConfig;
 
   const crossFieldErrors: Record<string, string> = {};
 

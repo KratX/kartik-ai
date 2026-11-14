@@ -14,6 +14,7 @@ import type {
   CreditSettleRequest,
 } from '@kartik/shared/contracts';
 import {
+  bootstrapChatService,
   ChatOrchestratorService,
   DEFAULT_OPERATION_UNITS,
   InMemoryChatRepository,
@@ -535,4 +536,24 @@ describe('@kartik/chat HTTP routes & Phase 6 Exit Gate closure (6.3.a)', () => {
     assert.equal(r3.body.error.code, 'RATE_LIMITED');
     assert.equal(r3.headers['Retry-After'] ?? r3.headers['retry-after'], '60');
   });
+
+  it('bootstraps the executable Chat Service runtime via bootstrapChatService and serves /healthz and /readyz over TCP', async () => {
+    const runtime = bootstrapChatService({
+      env: { NODE_ENV: 'test' },
+    });
+    const { port } = await runtime.httpServer.listen(0, '127.0.0.1');
+    try {
+      const healthRes = await fetch(`http://127.0.0.1:${port}/healthz`);
+      assert.equal(healthRes.status, 200);
+      const healthBody = (await healthRes.json()) as { data: { service: string; status: string } };
+      assert.equal(healthBody.data.service, 'chat');
+      assert.equal(healthBody.data.status, 'ok');
+
+      const readyRes = await fetch(`http://127.0.0.1:${port}/readyz`);
+      assert.equal(readyRes.status, 200);
+    } finally {
+      await runtime.httpServer.close();
+    }
+  });
 });
+

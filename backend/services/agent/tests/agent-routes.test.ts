@@ -8,6 +8,7 @@ import {
 import { InMemoryObjectStorage } from '@kartik/shared/storage';
 import {
   AgentGraphExecutor,
+  bootstrapAgentService,
   DailyLiveBudgetGuard,
   FileIngestionAndArtifactService,
   InMemoryAgentRepository,
@@ -302,4 +303,24 @@ describe('@kartik/agent HTTP Routes & Phase 5 Exit Gate Closure (5.4.a)', () => 
     assert.equal(afterPurge.statusCode, 404);
     assert.equal(afterPurge.body.error.code, 'NOT_FOUND');
   });
+
+  it('bootstraps the executable Agent Service runtime via bootstrapAgentService and serves /healthz and /readyz over TCP', async () => {
+    const runtime = bootstrapAgentService({
+      env: { NODE_ENV: 'test' },
+    });
+    const { port } = await runtime.httpServer.listen(0, '127.0.0.1');
+    try {
+      const healthRes = await fetch(`http://127.0.0.1:${port}/healthz`);
+      assert.equal(healthRes.status, 200);
+      const healthBody = (await healthRes.json()) as { data: { service: string; status: string } };
+      assert.equal(healthBody.data.service, 'agent');
+      assert.equal(healthBody.data.status, 'ok');
+
+      const readyRes = await fetch(`http://127.0.0.1:${port}/readyz`);
+      assert.equal(readyRes.status, 200);
+    } finally {
+      await runtime.httpServer.close();
+    }
+  });
 });
+

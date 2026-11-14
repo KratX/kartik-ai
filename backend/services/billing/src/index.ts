@@ -10,3 +10,17 @@ export * from './webhooks/index.js';
 export * from './middleware/index.js';
 export * from './controllers/index.js';
 export * from './routes/index.js';
+export * from './server.js';
+
+import { isExecutedAsMainModule } from '@kartik/shared';
+import { startBillingServer } from './server.js';
+
+if (isExecutedAsMainModule(import.meta.url)) {
+  startBillingServer().catch((err: unknown) => {
+    process.stderr.write(
+      `[billing] Fatal startup error: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.exit(1);
+  });
+}
+

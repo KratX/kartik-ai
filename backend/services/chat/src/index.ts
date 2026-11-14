@@ -59,3 +59,26 @@ export {
   type ChatHttpResponse,
   type ChatRouterDependencies,
 } from './routes/index.js';
+
+export {
+  HttpBillingServiceClient,
+  HttpAgentServiceClient,
+  buildChatBootstrapEnv,
+  bootstrapChatService,
+  startChatServer,
+  type ChatServiceBootstrapOptions,
+  type ChatServiceRuntime,
+} from './server.js';
+
+import { isExecutedAsMainModule } from '@kartik/shared';
+import { startChatServer } from './server.js';
+
+if (isExecutedAsMainModule(import.meta.url)) {
+  startChatServer().catch((err: unknown) => {
+    process.stderr.write(
+      `[chat] Fatal startup error: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.exit(1);
+  });
+}
+

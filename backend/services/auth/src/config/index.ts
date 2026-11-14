@@ -116,7 +116,13 @@ export interface AuthServiceConfig {
 export function loadAuthConfig(
   env: Record<string, string | undefined> = process.env,
 ): AuthServiceConfig {
-  const parsed = loadConfig(AUTH_CONFIG_SCHEMA, env) as unknown as AuthServiceConfig;
+  const normalizedEnv: Record<string, string | undefined> = {
+    ...env,
+    ...(env.PORT_AUTH === undefined && env.PORT !== undefined
+      ? { PORT_AUTH: env.PORT }
+      : {}),
+  };
+  const parsed = loadConfig(AUTH_CONFIG_SCHEMA, normalizedEnv) as unknown as AuthServiceConfig;
 
   const crossFieldReasons: Record<string, string> = {};
 

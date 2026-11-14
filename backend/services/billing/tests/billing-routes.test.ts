@@ -6,6 +6,7 @@ import {
   signUserContextAssertion,
 } from '@kartik/shared';
 import {
+  bootstrapBillingService,
   CreditReservationService,
   InMemoryBillingRepository,
   MockPaymentProvider,
@@ -399,4 +400,24 @@ describe('@kartik/billing HTTP routes & Phase 4 Exit Gate closure (4.4.a)', () =
     assert.equal(r3.body.error.code, 'RATE_LIMITED');
     assert.ok(r3.headers['retry-after']);
   });
+
+  it('bootstraps the executable Billing Service runtime via bootstrapBillingService and serves /healthz and /readyz over TCP', async () => {
+    const runtime = bootstrapBillingService({
+      env: { NODE_ENV: 'test' },
+    });
+    const { port } = await runtime.httpServer.listen(0, '127.0.0.1');
+    try {
+      const healthRes = await fetch(`http://127.0.0.1:${port}/healthz`);
+      assert.equal(healthRes.status, 200);
+      const healthBody = (await healthRes.json()) as { data: { service: string; status: string } };
+      assert.equal(healthBody.data.service, 'billing');
+      assert.equal(healthBody.data.status, 'ok');
+
+      const readyRes = await fetch(`http://127.0.0.1:${port}/readyz`);
+      assert.equal(readyRes.status, 200);
+    } finally {
+      await runtime.httpServer.close();
+    }
+  });
 });
+

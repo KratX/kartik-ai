@@ -7,7 +7,7 @@
     "@kartik/shared": "workspace:*"
   },
   "scripts": {
-    "start": "node ./dist/src/index.js",
+    "start": "node ./dist/src/server.js",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "lint": "node ../../../scripts/lint-workspace.mjs .",

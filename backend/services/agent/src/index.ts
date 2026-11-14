@@ -155,3 +155,24 @@ export {
   LiveGeminiImageGenerationProvider,
   type SearchImageGalleryItem,
 } from './services/live-gemini-providers.js';
+
+export {
+  buildAgentBootstrapEnv,
+  bootstrapAgentService,
+  startAgentServer,
+  type AgentServiceBootstrapOptions,
+  type AgentServiceRuntime,
+} from './server.js';
+
+import { isExecutedAsMainModule } from '@kartik/shared';
+import { startAgentServer } from './server.js';
+
+if (isExecutedAsMainModule(import.meta.url)) {
+  startAgentServer().catch((err: unknown) => {
+    process.stderr.write(
+      `[agent] Fatal startup error: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.exit(1);
+  });
+}
+

@@ -23,13 +23,16 @@ FROM node:22-alpine AS runner
 WORKDIR /workspace
 
 ENV NODE_ENV=production
+ENV HOST=0.0.0.0
 ENV PORT=8004
+ENV PORT_BILLING=8004
 ENV BILLING_MODE=mock
 
 COPY --from=builder /workspace/node_modules ./node_modules
 COPY --from=builder /workspace/backend/shared/package.json ./backend/shared/package.json
 COPY --from=builder /workspace/backend/shared/dist ./backend/shared/dist
 COPY --from=builder /workspace/backend/services/billing/package.json ./backend/services/billing/package.json
+COPY --from=builder /workspace/backend/services/billing/node_modules ./backend/services/billing/node_modules
 COPY --from=builder /workspace/backend/services/billing/dist ./backend/services/billing/dist
 
 USER node
@@ -38,4 +41,4 @@ EXPOSE 8004
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8004/healthz || exit 1
 
-CMD ["node", "backend/services/billing/dist/src/index.js"]
+CMD ["node", "backend/services/billing/dist/src/server.js"]

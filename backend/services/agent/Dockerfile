@@ -23,7 +23,9 @@ FROM node:22-alpine AS runner
 WORKDIR /workspace
 
 ENV NODE_ENV=production
+ENV HOST=0.0.0.0
 ENV PORT=8003
+ENV PORT_AGENT=8003
 ENV MOCK_AI=true
 ENV IMAGE_PROVIDER=mock
 
@@ -31,6 +33,7 @@ COPY --from=builder /workspace/node_modules ./node_modules
 COPY --from=builder /workspace/backend/shared/package.json ./backend/shared/package.json
 COPY --from=builder /workspace/backend/shared/dist ./backend/shared/dist
 COPY --from=builder /workspace/backend/services/agent/package.json ./backend/services/agent/package.json
+COPY --from=builder /workspace/backend/services/agent/node_modules ./backend/services/agent/node_modules
 COPY --from=builder /workspace/backend/services/agent/dist ./backend/services/agent/dist
 
 USER node
@@ -39,4 +42,4 @@ EXPOSE 8003
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8003/healthz || exit 1
 
-CMD ["node", "backend/services/agent/dist/src/index.js"]
+CMD ["node", "backend/services/agent/dist/src/server.js"]

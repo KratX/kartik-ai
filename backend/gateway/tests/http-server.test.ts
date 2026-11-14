@@ -11,6 +11,7 @@ import {
   generateEd25519KeyPair,
 } from '@kartik/shared';
 import {
+  bootstrapGatewayService,
   createGatewayRouter,
   createManagedHttpServer,
   InMemoryUpstreamHttpClient,
@@ -136,4 +137,24 @@ describe('@kartik/gateway Live node:http Server Adapter & Graceful Shutdown (8.4
       await managed.close();
     }
   });
+
+  it('bootstraps the full Gateway service runtime via bootstrapGatewayService and serves /healthz and /readyz over TCP', async () => {
+    const runtime = bootstrapGatewayService({
+      env: { NODE_ENV: 'test' },
+    });
+    const { port } = await runtime.httpServer.listen(0, '127.0.0.1');
+    try {
+      const healthRes = await fetch(`http://127.0.0.1:${port}/healthz`);
+      assert.equal(healthRes.status, 200);
+      const healthBody = (await healthRes.json()) as { data: { service: string; status: string } };
+      assert.equal(healthBody.data.service, 'gateway');
+      assert.equal(healthBody.data.status, 'ok');
+
+      const readyRes = await fetch(`http://127.0.0.1:${port}/readyz`);
+      assert.equal(readyRes.status, 200);
+    } finally {
+      await runtime.httpServer.close();
+    }
+  });
 });
+

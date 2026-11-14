@@ -3,11 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "dependencies": {
     "@kartik/shared": "workspace:*"
   },
   "scripts": {
-    "start": "node ./dist/src/index.js",
+    "start": "node ./dist/src/server/index.js",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "lint": "node ../../scripts/lint-workspace.mjs .",

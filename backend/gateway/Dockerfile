@@ -23,11 +23,14 @@ FROM node:22-alpine AS runner
 WORKDIR /workspace
 
 ENV NODE_ENV=production
+ENV HOST=0.0.0.0
 ENV PORT=8000
+ENV PORT_GATEWAY=8000
 
 COPY --from=builder /workspace/node_modules ./node_modules
 COPY --from=builder /workspace/backend/shared/package.json ./backend/shared/package.json
 COPY --from=builder /workspace/backend/shared/dist ./backend/shared/dist
+COPY --from=builder /workspace/backend/gateway/node_modules ./backend/gateway/node_modules
 COPY --from=builder /workspace/backend/gateway/package.json ./backend/gateway/package.json
 COPY --from=builder /workspace/backend/gateway/dist ./backend/gateway/dist
 
@@ -37,4 +40,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8000/healthz || exit 1
 
-CMD ["node", "backend/gateway/dist/src/index.js"]
+CMD ["node", "backend/gateway/dist/src/server/index.js"]

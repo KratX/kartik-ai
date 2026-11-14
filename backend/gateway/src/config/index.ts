@@ -171,7 +171,13 @@ export function parseCorsAllowedOrigins(rawOrigins: string): readonly string[] {
 export function loadGatewayConfig(
   env: Record<string, string | undefined> = process.env,
 ): GatewayServiceConfig {
-  const parsed = loadConfig(GATEWAY_CONFIG_SCHEMA, env) as unknown as Omit<
+  const normalizedEnv: Record<string, string | undefined> = {
+    ...env,
+    ...(env.PORT_GATEWAY === undefined && env.PORT !== undefined
+      ? { PORT_GATEWAY: env.PORT }
+      : {}),
+  };
+  const parsed = loadConfig(GATEWAY_CONFIG_SCHEMA, normalizedEnv) as unknown as Omit<
     GatewayServiceConfig,
     'allowedOrigins'
   >;

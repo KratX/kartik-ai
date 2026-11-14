@@ -1,220 +1,179 @@
 /**
  * @file backend/gateway/src/server/index.ts
- * @description Zero-dependency `node:http` Server Adapter with raw-body webhook preservation,
- * payload size limits, and graceful `SIGINT`/`SIGTERM` shutdown (`Blueprint §8.3 & §11`, Micro-step 8.4.a).
+ * @description Executable API Gateway Service Bootstrap, Dependency Initializer,
+ * and `node:http` Listener (`Blueprint §2.1, §8.3, §9 Invariant #1, §11`).
  */
 
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import {
+  createLogger,
+  createManagedHttpServer,
+  DEV_SHARED_BOOTSTRAP_DEFAULTS,
+  InMemoryRateLimitStore,
+  isExecutedAsMainModule,
+  type ExecutableServiceRouter,
+  type Logger,
+  type ManagedHttpServer,
+  type ManagedHttpServerOptions,
+  type RateLimitCounterStore,
+} from '@kartik/shared';
+import {
+  loadGatewayConfig,
+  type GatewayServiceConfig,
+} from '../config/index.js';
+import {
+  FetchUpstreamHttpClient,
+  type UpstreamHttpClient,
+} from '../proxy/index.js';
+import { CrossServiceHealthAggregator } from '../readiness/index.js';
+import { createGatewayRouter, type GatewayRouter } from '../routes/index.js';
 
-export interface ExecutableServiceRouter {
-  execute(request: {
-    readonly method: string;
-    readonly path: string;
-    readonly headers?: Readonly<
-      Record<string, string | readonly string[] | undefined>
-    >;
-    readonly body?: unknown;
-    readonly rawBody?: string | Buffer;
-    readonly ip?: string;
-  }): Promise<{
-    readonly statusCode: number;
-    readonly headers?: Readonly<Record<string, string>>;
-    readonly body: unknown;
-  }>;
+export {
+  createManagedHttpServer,
+  type ExecutableServiceRouter,
+  type ManagedHttpServer,
+  type ManagedHttpServerOptions,
+};
+
+export interface GatewayServiceBootstrapOptions {
+  readonly env?: Record<string, string | undefined>;
+  readonly host?: string;
+  readonly port?: number;
+  readonly upstreamClient?: UpstreamHttpClient;
+  readonly rateLimitStore?: RateLimitCounterStore;
+  readonly logger?: Logger;
+  readonly checkClusterReadiness?: boolean;
 }
 
-export interface ManagedHttpServerOptions {
-  readonly serviceName: string;
-  readonly router: ExecutableServiceRouter;
-  readonly maxBodyBytes?: number;
-  readonly onShutdown?: () => Promise<void> | void;
+export interface BootstrappedGatewayService {
+  readonly config: GatewayServiceConfig;
+  readonly logger: Logger;
+  readonly upstreamClient: UpstreamHttpClient;
+  readonly healthAggregator: CrossServiceHealthAggregator;
+  readonly router: GatewayRouter;
+  readonly httpServer: ManagedHttpServer;
+  start(
+    port?: number,
+    host?: string,
+  ): Promise<{ readonly port: number; readonly host: string }>;
+  stop(): Promise<void>;
 }
-
-export interface ManagedHttpServer {
-  readonly server: http.Server;
-  listen(port: number, host?: string): Promise<{ readonly port: number; readonly host: string }>;
-  close(): Promise<void>;
-}
-
-const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MiB
 
 /**
- * Wraps any Kartik service router (`GatewayRouter`, `AuthRouter`, `ChatRouter`, `AgentRouter`, `BillingRouter`)
- * in a production-hardened `node:http` server.
- *
- * Enforces:
- * - Raw body preservation (`rawBody`) for `POST /webhooks/razorpay` and `POST /api/v1/webhooks/razorpay` (§11).
- * - Strict request body byte ceiling (`maxBodyBytes`) to prevent memory exhaustion.
- * - Idempotent graceful shutdown (`close()`) that drains connections and closes registered DB/Redis resources (§8.3).
+ * Applies deterministic development/container defaults when variables are not explicitly set
+ * so the API Gateway boots cleanly in local dev and container smoke tests.
  */
-export function createManagedHttpServer(
-  options: ManagedHttpServerOptions,
-): ManagedHttpServer {
-  const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
-  let isShuttingDown = false;
-  let closePromise: Promise<void> | null = null;
+export function buildGatewayBootstrapEnv(
+  env: Record<string, string | undefined> = process.env,
+): Record<string, string | undefined> {
+  return {
+    NODE_ENV: env.NODE_ENV ?? 'development',
+    LOG_LEVEL: env.LOG_LEVEL ?? 'info',
+    PORT_GATEWAY: env.PORT_GATEWAY ?? env.PORT ?? '8000',
+    REDIS_URL: env.REDIS_URL ?? DEV_SHARED_BOOTSTRAP_DEFAULTS.redisUrl,
+    AUTH_SERVICE_URL: env.AUTH_SERVICE_URL ?? 'http://127.0.0.1:8001',
+    CHAT_SERVICE_URL: env.CHAT_SERVICE_URL ?? 'http://127.0.0.1:8002',
+    AGENT_SERVICE_URL: env.AGENT_SERVICE_URL ?? 'http://127.0.0.1:8003',
+    BILLING_SERVICE_URL: env.BILLING_SERVICE_URL ?? 'http://127.0.0.1:8004',
+    SERVICE_TO_SERVICE_TOKEN:
+      env.SERVICE_TO_SERVICE_TOKEN ??
+      DEV_SHARED_BOOTSTRAP_DEFAULTS.serviceToServiceToken,
+    USER_CONTEXT_SIGNING_KEY:
+      env.USER_CONTEXT_SIGNING_KEY ??
+      DEV_SHARED_BOOTSTRAP_DEFAULTS.userContextPrivateKeyPem,
+    CORS_ALLOWED_ORIGINS:
+      env.CORS_ALLOWED_ORIGINS ??
+      'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000',
+    ...env,
+  };
+}
 
-  const server = http.createServer(async (req, res) => {
-    if (isShuttingDown) {
-      res.writeHead(503, {
-        'content-type': 'application/json; charset=utf-8',
-        connection: 'close',
-      });
-      res.end(
-        JSON.stringify({
-          traceId: 'trc_shutting_down',
-          data: null,
-          meta: { nextCursor: null },
-          error: {
-            code: 'PROVIDER_UNAVAILABLE',
-            message: `Service ${options.serviceName} is shutting down`,
-          },
-        }),
-      );
-      return;
-    }
-
-    const method = (req.method ?? 'GET').toUpperCase();
-    const urlPath = req.url ?? '/';
-
-    const chunks: Buffer[] = [];
-    let receivedBytes = 0;
-    let payloadTooLarge = false;
-
-    for await (const chunk of req) {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
-      receivedBytes += buf.byteLength;
-      if (receivedBytes > maxBodyBytes) {
-        payloadTooLarge = true;
-        break;
-      }
-      chunks.push(buf);
-    }
-
-    if (payloadTooLarge) {
-      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
-      res.end(
-        JSON.stringify({
-          traceId: 'trc_payload_limit',
-          data: null,
-          meta: { nextCursor: null },
-          error: {
-            code: 'VALIDATION_FAILED',
-            message: `Request body exceeds maximum allowed size (${maxBodyBytes} bytes)`,
-          },
-        }),
-      );
-      return;
-    }
-
-    const rawBuffer = chunks.length > 0 ? Buffer.concat(chunks) : Buffer.alloc(0);
-    const rawBodyString = rawBuffer.toString('utf8');
-
-    let parsedBody: unknown = undefined;
-    if (rawBuffer.byteLength > 0) {
-      const contentType = (req.headers['content-type'] ?? '').toLowerCase();
-      if (contentType.includes('application/json') || rawBodyString.trim().startsWith('{')) {
-        try {
-          parsedBody = JSON.parse(rawBodyString);
-        } catch {
-          res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
-          res.end(
-            JSON.stringify({
-              traceId: 'trc_invalid_json',
-              data: null,
-              meta: { nextCursor: null },
-              error: {
-                code: 'VALIDATION_FAILED',
-                message: 'Malformed JSON request body',
-              },
-            }),
-          );
-          return;
-        }
-      }
-    }
-
-    const normalizedHeaders: Record<string, string | readonly string[] | undefined> = {};
-    for (const [k, v] of Object.entries(req.headers)) {
-      normalizedHeaders[k.toLowerCase()] = v;
-    }
-
-    const remoteIp =
-      (typeof req.headers['x-forwarded-for'] === 'string'
-        ? req.headers['x-forwarded-for'].split(',')[0]?.trim()
-        : undefined) ??
-      req.socket.remoteAddress ??
-      '127.0.0.1';
-
-    const dispatched = await options.router.execute({
-      method,
-      path: urlPath,
-      headers: normalizedHeaders,
-      ...(parsedBody !== undefined ? { body: parsedBody } : {}),
-      ...(rawBuffer.byteLength > 0 ? { rawBody: rawBodyString } : {}),
-      ip: remoteIp,
+/**
+ * Initializes the API Gateway dependency graph (`config`, `logger`, `upstreamClient`,
+ * `rateLimitStore`, `healthAggregator`, `router`, and `httpServer`).
+ */
+export function bootstrapGatewayService(
+  options: GatewayServiceBootstrapOptions = {},
+): BootstrappedGatewayService {
+  const effectiveEnv = buildGatewayBootstrapEnv(options.env ?? process.env);
+  const config = loadGatewayConfig(effectiveEnv);
+  const logger =
+    options.logger ??
+    createLogger({
+      service: 'gateway',
+      level: config.LOG_LEVEL,
     });
 
-    const outHeaders: Record<string, string> = {
-      'content-type': 'application/json; charset=utf-8',
-      ...(dispatched.headers ?? {}),
-    };
+  const upstreamClient =
+    options.upstreamClient ?? new FetchUpstreamHttpClient(config);
+  const rateLimitStore =
+    options.rateLimitStore ?? new InMemoryRateLimitStore();
+  const healthAggregator = new CrossServiceHealthAggregator(upstreamClient);
 
-    res.writeHead(dispatched.statusCode, outHeaders);
-    if (dispatched.statusCode === 204 || dispatched.body === null) {
-      res.end();
-      return;
-    }
-    res.end(JSON.stringify(dispatched.body));
+  const router = createGatewayRouter({
+    config,
+    upstreamClient,
+    rateLimitStore,
+    logger,
+    checkReadiness: async () => {
+      if (options.checkClusterReadiness) {
+        const summary = await healthAggregator.checkAllServices();
+        return summary.status === 'ready';
+      }
+      return true;
+    },
   });
 
-  async function listen(
-    port: number,
-    host = '127.0.0.1',
+  const httpServer = createManagedHttpServer({
+    serviceName: 'gateway',
+    router,
+    onShutdown: async () => {
+      logger.info('API Gateway HTTP server shut down cleanly');
+    },
+  });
+
+  async function start(
+    port = options.port ?? config.PORT_GATEWAY,
+    host = options.host ?? effectiveEnv.HOST ?? '0.0.0.0',
   ): Promise<{ readonly port: number; readonly host: string }> {
-    return new Promise((resolve, reject) => {
-      const onError = (err: Error) => {
-        server.off('listening', onListening);
-        reject(err);
-      };
-      const onListening = () => {
-        server.off('error', onError);
-        const addr = server.address() as AddressInfo;
-        resolve(
-          Object.freeze({
-            port: addr.port,
-            host: addr.address,
-          }),
-        );
-      };
-      server.once('error', onError);
-      server.once('listening', onListening);
-      server.listen(port, host);
+    const bound = await httpServer.listen(port, host);
+    logger.info('API Gateway HTTP listener started', {
+      host: bound.host,
+      port: bound.port,
     });
+    return bound;
   }
 
-  async function close(): Promise<void> {
-    if (closePromise) {
-      return closePromise;
-    }
-    isShuttingDown = true;
-    closePromise = (async () => {
-      if (server.listening) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((err) => (err ? reject(err) : resolve()));
-        });
-      }
-      if (options.onShutdown) {
-        await options.onShutdown();
-      }
-    })();
-    return closePromise;
+  async function stop(): Promise<void> {
+    await httpServer.close();
   }
 
   return Object.freeze({
-    server,
-    listen,
-    close,
+    config,
+    logger,
+    upstreamClient,
+    healthAggregator,
+    router,
+    httpServer,
+    start,
+    stop,
+  });
+}
+
+/**
+ * Boots the API Gateway HTTP listener and attaches `SIGINT`/`SIGTERM` graceful shutdown handlers.
+ */
+export async function startGatewayServer(
+  options: GatewayServiceBootstrapOptions = {},
+): Promise<BootstrappedGatewayService> {
+  const runtime = bootstrapGatewayService(options);
+  runtime.httpServer.attachSignalHandlers(runtime.logger);
+  await runtime.start();
+  return runtime;
+}
+
+if (isExecutedAsMainModule(import.meta.url)) {
+  startGatewayServer().catch((err: unknown) => {
+    console.error('[gateway] Fatal startup error:', err);
+    process.exit(1);
   });
 }

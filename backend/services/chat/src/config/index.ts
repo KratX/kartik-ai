@@ -110,7 +110,11 @@ function normalizeEd25519PublicKeyPem(rawKey: string): string {
 export function loadChatConfig(
   env: Record<string, string | undefined> = process.env,
 ): ChatConfig {
-  const raw = loadConfig(CHAT_CONFIG_SCHEMA, env) as {
+  const effectiveEnv: Record<string, string | undefined> = {
+    ...env,
+    PORT: env.PORT ?? env.PORT_CHAT,
+  };
+  const raw = loadConfig(CHAT_CONFIG_SCHEMA, effectiveEnv) as {
     NODE_ENV: 'development' | 'test' | 'production';
     PORT: number;
     DATABASE_URL: string;
