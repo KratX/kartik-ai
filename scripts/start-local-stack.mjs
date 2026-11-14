@@ -617,12 +617,18 @@ export async function startLocalStackServer(options = {}) {
     chatProvider: new LiveGeminiChatModelProvider(),
     searchProvider,
     codingProvider: new LiveGeminiCodingModelProvider(),
+    embeddingProvider,
     visionProvider: new LiveGeminiVisionProvider(),
     imageProvider: new LiveGeminiImageGenerationProvider(),
     pdfProvider: new LiveGeminiPdfDocumentProvider(),
     pptProvider: new LiveGeminiPptPresentationProvider(),
     vectorStore,
-    ingestionService,
+    objectStorage,
+    metadataStore: agentRepo,
+    loadImageBytes: async (storageKey, userId) => {
+      const obj = await objectStorage.getPrivateObject(storageKey, userId);
+      return obj.body;
+    },
   });
 
   let availableCredits = 200;
@@ -865,7 +871,7 @@ export async function startLocalStackServer(options = {}) {
       }
 
       if (pathname === '/api/v1/ui/state' && req.method === 'GET') {
-        const files = await agentRepo.listFilesByOwner(DEMO_LOCAL_SESSION.userId);
+        const files = await agentRepo.listFilesByUser(DEMO_LOCAL_SESSION.userId);
         return {
           statusCode: 200,
           headers: {},
@@ -952,9 +958,10 @@ export async function startLocalStackServer(options = {}) {
           const preferredAgent = body.preferredAgent;
           const attachmentFileIds = Array.isArray(body.attachmentFileIds) ? body.attachmentFileIds : [];
 
-          const execResult = await graphExecutor.executeTurn({
+          const execResult = await graphExecutor.execute({
             userId: DEMO_LOCAL_SESSION.userId,
             conversationId: convId,
+            messageId: `msg_u_${Date.now()}`,
             requestId: reqId,
             traceId: `trc_${Date.now()}`,
             prompt,
@@ -962,15 +969,15 @@ export async function startLocalStackServer(options = {}) {
             attachmentFileIds,
           });
 
-          const cost = COST_BY_AGENT[execResult.agentUsed] ?? 1;
+          const cost = COST_BY_AGENT[execResult.agent] ?? 1;
           availableCredits = Math.max(0, availableCredits - cost);
 
           const artifacts = [];
-          for (const artId of execResult.artifactIds) {
-            const fullArt = await ingestionService.getArtifactWithRawBytes(
-              DEMO_LOCAL_SESSION.userId,
-              artId,
-            );
+          for (const artId of execResult.artifactIds ?? []) {
+            const fullArt = await ingestionService.getArtifactWithRawBytes({
+              userId: DEMO_LOCAL_SESSION.userId,
+              artifactId: artId,
+            });
             const ext =
               fullArt.artifact.artifactType === 'pdf_document'
                 ? '.pdf'
@@ -984,7 +991,7 @@ export async function startLocalStackServer(options = {}) {
                 .replace(/[^A-Za-z0-9._-]+/g, '-')
                 .toLowerCase()
                 .slice(0, 48) + ext;
-            const b64 = Buffer.from(fullArt.rawBytes).toString('base64');
+            const b64 = fullArt.contentBase64;
             artifacts.push({
               ...fullArt.artifact,
               downloadFilename: safeName,
@@ -993,8 +1000,8 @@ export async function startLocalStackServer(options = {}) {
           }
 
           let searchImages = [];
-          if (execResult.agentUsed === 'search') {
-            searchImages = await searchProvider.searchImages(prompt, 4);
+          if (execResult.agent === 'search') {
+            searchImages = searchProvider.lastSearchImages ?? [];
           }
 
           const list = uiMessagesByConv.get(convId) ?? [];
@@ -1005,10 +1012,10 @@ export async function startLocalStackServer(options = {}) {
           const assistantMsg = {
             messageId: `msg_a_${Date.now()}`,
             role: 'assistant',
-            agentUsed: execResult.agentUsed,
+            agentUsed: execResult.agent,
             creditsCharged: cost,
-            content: execResult.answer,
-            citations: execResult.citations,
+            content: execResult.replyContent,
+            citations: execResult.citations ?? [],
             artifacts,
             searchImages,
           };
@@ -1033,7 +1040,10 @@ export async function startLocalStackServer(options = {}) {
         const conv = uiConversations.get(convId);
         if (conv) {
           conv.deletionState = 'deleted';
-          await ingestionService.purgeConversationData(DEMO_LOCAL_SESSION.userId, convId);
+          await ingestionService.purgeResources({
+            userId: DEMO_LOCAL_SESSION.userId,
+            conversationId: convId,
+          });
           if (uiConversations.size === 1 || Array.from(uiConversations.values()).every(c => c.deletionState !== 'active')) {
             const newId = `conv_${crypto.randomBytes(4).toString('hex')}`;
             uiConversations.set(newId, {
@@ -1051,13 +1061,13 @@ export async function startLocalStackServer(options = {}) {
 
       if (pathname === '/api/v1/ui/files/upload' && req.method === 'POST') {
         const body = req.body ?? {};
-        const rawBytes = Buffer.from(String(body.contentBase64 ?? ''), 'base64');
+        const contentBytes = new Uint8Array(Buffer.from(String(body.contentBase64 ?? ''), 'base64'));
         const ingested = await ingestionService.ingestUploadedFile({
           userId: DEMO_LOCAL_SESSION.userId,
           conversationId: String(body.conversationId ?? 'conv_welcome_01'),
           originalFilename: String(body.originalFilename ?? 'document.pdf'),
           declaredMimeType: String(body.declaredMimeType ?? 'application/pdf'),
-          rawBytes,
+          contentBytes,
         });
         return { statusCode: 201, headers: {}, body: { ok: true, data: ingested } };
       }
@@ -1065,7 +1075,10 @@ export async function startLocalStackServer(options = {}) {
       const artContentMatch = pathname.match(/^\/api\/v1\/ui\/artifacts\/([^/]+)\/content$/);
       if (artContentMatch && req.method === 'GET') {
         const artId = decodeURIComponent(artContentMatch[1]);
-        const data = await ingestionService.getArtifactWithRawBytes(DEMO_LOCAL_SESSION.userId, artId);
+        const data = await ingestionService.getArtifactWithRawBytes({
+          userId: DEMO_LOCAL_SESSION.userId,
+          artifactId: artId,
+        });
         return {
           statusCode: 200,
           headers: {},
@@ -1073,7 +1086,7 @@ export async function startLocalStackServer(options = {}) {
             ok: true,
             data: {
               artifact: data.artifact,
-              contentBase64: Buffer.from(data.rawBytes).toString('base64'),
+              contentBase64: data.contentBase64,
             },
           },
         };

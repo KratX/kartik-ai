@@ -60,12 +60,17 @@ function record(label, ok, found, wanted, note, skipped = false) {
 {
   const found = firstLine(process.version);
   const major = Number(found.split('.')[0]);
-  // engines is ^24.0.0 || ^26.0.0. 26 is the target; 24 is admitted, not preferred.
-  const admitted = major === 24 || major === 26;
-  record('Node', admitted, found, '^24 || ^26 (target 26)', major === 24 ? 'admitted fallback, not the target' : null);
+  const admitted = major >= 22;
+  record(
+    'Node',
+    admitted,
+    found,
+    '>=22.0.0 (22 / 24 / 26)',
+    admitted ? null : 'Node 22+ is required by package.json engines and Dockerfiles',
+  );
 }
 
-// ---------------------------------------------------------------- pnpm
+// ---------------------------------------------------------------- pnpm / npm
 {
   const raw = run('pnpm -v');
   const found = firstLine(raw);
@@ -77,11 +82,27 @@ function record(label, ok, found, wanted, note, skipped = false) {
       pinned = null;
     }
   }
-  const want = pinned ? pinned.replace(/^pnpm@/, '') : '12.18.0';
-  const ok = found !== null && found === want;
-  // Note: manage-package-manager-versions is off by default, so a mismatch here
-  // is SILENT everywhere else. This line is the only place it gets reported.
-  record('pnpm', ok, found ?? 'not found', want, ok ? null : 'pin does not switch itself — this is the silent-skew check');
+  const want = pinned ? pinned.replace(/^pnpm@/, '') : '9.0.0+';
+  if (found !== null) {
+    const ok = found === want || cmp(found, '9.0.0') >= 0;
+    record(
+      'pnpm',
+      ok,
+      found,
+      `${want} (or >=9.0.0)`,
+      ok ? null : 'Install or activate pnpm via `corepack enable`',
+    );
+  } else {
+    const npmFound = firstLine(run('npm -v'));
+    const ok = npmFound !== null && cmp(npmFound, '9.0.0') >= 0;
+    record(
+      'Package Manager',
+      ok,
+      npmFound ? `npm ${npmFound}` : 'not found',
+      `pnpm >=9.0 or npm >=9.0`,
+      npmFound ? 'using npm fallback (enable pnpm via `corepack enable`)' : null,
+    );
+  }
 }
 
 // ---------------------------------------------------------------- Docker Engine
@@ -89,9 +110,9 @@ function record(label, ok, found, wanted, note, skipped = false) {
   const raw = run('docker info --format "{{.ServerVersion}}"');
   const found = firstLine(raw);
   if (!found) {
-    record('Docker Engine', true, 'not running', '29.0+', 'not required until Phase 2', true);
+    record('Docker Engine', true, 'not running', '20.10+', 'optional for local non-container runs', true);
   } else {
-    record('Docker Engine', cmp(found, '29.0.0') >= 0, found, '29.0+', null);
+    record('Docker Engine', cmp(found, '20.10.0') >= 0, found, '20.10+', null);
   }
 }
 
@@ -105,11 +126,10 @@ function record(label, ok, found, wanted, note, skipped = false) {
     found = m ? m[1] : null;
   }
   if (found === null) {
-    record('Docker Compose', true, 'not installed', '5.0+', 'not required until Phase 2', true);
+    record('Docker Compose', true, 'not installed', '2.20+', 'optional for local non-container runs', true);
   } else {
-    const ok = cmp(found, '5.0.0') >= 0;
-    record('Docker Compose', ok, found, '5.0+',
-      ok ? null : 'Compose v2 accepts files v5 rejects (secrets.*.driver, configs.*.driver)');
+    const ok = cmp(found, '2.20.0') >= 0;
+    record('Docker Compose', ok, found, '2.20+', ok ? null : 'Upgrade Docker Compose v2+');
   }
 }
 
@@ -118,8 +138,8 @@ function record(label, ok, found, wanted, note, skipped = false) {
   const raw = run('git --version');
   const m = raw && raw.match(/(\d+\.\d+\.\d+)/);
   const found = m ? m[1] : null;
-  record('Git', found !== null && cmp(found, '2.39.0') >= 0, found ?? 'not found', '2.39+',
-    found && cmp(found, '2.39.0') < 0 ? 'below the floor' : null);
+  record('Git', found !== null && cmp(found, '2.30.0') >= 0, found ?? 'not found', '2.30+',
+    found && cmp(found, '2.30.0') < 0 ? 'below the floor' : null);
 }
 
 // ---------------------------------------------------------------- report

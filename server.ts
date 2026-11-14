@@ -16,6 +16,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import express, { type Request, type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
+import { isExecutedAsMainModule } from './backend/shared/http/index.js';
 import {
   createSuccessEnvelope,
   mapErrorToHttpResponse,
@@ -49,9 +50,10 @@ export function createKartikExpressApp() {
       readHeaderString(req, 'x-trace-id') ??
       `trc_${crypto.randomBytes(8).toString('hex')}`;
     const resolvedReqId = requestId ?? readHeaderString(req, 'idempotency-key');
-    res
-      .status(statusCode)
-      .json(createSuccessEnvelope(traceId, data, { requestId: resolvedReqId }));
+    res.status(statusCode).json({
+      ok: true,
+      ...createSuccessEnvelope(traceId, data, { requestId: resolvedReqId }),
+    });
   };
 
   const sendError = (req: Request, res: Response, err: unknown) => {
@@ -63,7 +65,10 @@ export function createKartikExpressApp() {
     for (const [k, v] of Object.entries(mapped.headers)) {
       res.setHeader(k, v);
     }
-    res.status(mapped.httpStatus).json(mapped.body);
+    res.status(mapped.httpStatus).json({
+      ok: false,
+      ...mapped.body,
+    });
   };
 
   // 1. Health & Readiness Probes
@@ -361,6 +366,6 @@ async function startServer() {
   });
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isExecutedAsMainModule(import.meta.url)) {
   void startServer();
 }

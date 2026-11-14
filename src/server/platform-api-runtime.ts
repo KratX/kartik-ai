@@ -279,11 +279,9 @@ export class KartikPlatformRuntime {
   }
 
   public getAuthStatus() {
-    if (!this.isAuthenticated) {
-      throw new AppError('UNAUTHENTICATED', 'No active session cookie');
-    }
     return {
-      user: this.currentUser,
+      isAuthenticated: this.isAuthenticated,
+      user: this.isAuthenticated ? this.currentUser : null,
       demoReadOnly: this.demoReadOnly,
     };
   }
@@ -301,9 +299,11 @@ export class KartikPlatformRuntime {
       };
     }
     return {
+      isAuthenticated: true,
       sessionId: `sess_${crypto.randomBytes(12).toString('hex')}`,
       user: this.currentUser,
       demoReadOnly: this.demoReadOnly,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
     };
   }
 
@@ -332,7 +332,10 @@ export class KartikPlatformRuntime {
         (c) => c.userId === this.currentUser.userId && c.deletionState === 'active',
       )
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    return { items };
+    return {
+      items,
+      conversations: items,
+    };
   }
 
   public createConversation(title?: string) {
@@ -365,6 +368,7 @@ export class KartikPlatformRuntime {
     return {
       conversation: conv,
       items,
+      messages: items,
     };
   }
 
@@ -383,6 +387,14 @@ export class KartikPlatformRuntime {
     const convFiles = userFiles.filter((f) =>
       f.storageKey.includes(`/${conversationId}/`),
     );
+    const convArtifacts = await this.repository.listArtifactsByConversation(
+      this.currentUser.userId,
+      conversationId,
+    );
+    const purgedStorageKeys = [
+      ...convFiles.map((f) => f.storageKey),
+      ...convArtifacts.map((a) => a.storageKey),
+    ];
 
     const purgeReport = await this.ingestionService.purgeResources({
       userId: this.currentUser.userId,
@@ -396,7 +408,12 @@ export class KartikPlatformRuntime {
     return {
       conversationId,
       status: 'deleted' as const,
+      deletionState: 'deleted' as const,
       purgeReport,
+      purgedSummary: {
+        purgedVectorChunks: purgeReport.vectorsDeleted,
+        purgedStorageKeys,
+      },
     };
   }
 
@@ -408,18 +425,26 @@ export class KartikPlatformRuntime {
   }) {
     this.assertWritable();
     const contentBytes = new Uint8Array(Buffer.from(input.contentBase64, 'base64'));
-    return this.ingestionService.ingestUploadedFile({
+    const fileRecord = await this.ingestionService.ingestUploadedFile({
       userId: this.currentUser.userId,
       conversationId: input.conversationId,
       originalFilename: input.originalFilename,
       declaredMimeType: input.declaredMimeType,
       contentBytes,
     });
+    return {
+      ...fileRecord,
+      file: fileRecord,
+      chunkCount: fileRecord.chunkCount,
+    };
   }
 
   public async listFiles() {
     const items = await this.repository.listFilesByUser(this.currentUser.userId);
-    return { items };
+    return {
+      items,
+      files: items,
+    };
   }
 
   public async getArtifactContent(artifactId: string) {
@@ -476,7 +501,17 @@ export class KartikPlatformRuntime {
     });
 
     const billingOp = AGENT_TO_BILLING_OPERATION[targetAgent];
-    const creditCost = OPERATION_CREDIT_COSTS[billingOp] ?? 1;
+    const agentCreditCosts: Record<SpecialistAgentName, number> = {
+      chat: 1,
+      search: 2,
+      coding: 5,
+      pdf: 5,
+      ppt: 8,
+      rag: 2,
+      vision: 3,
+      image: 10,
+    };
+    const creditCost = agentCreditCosts[targetAgent] ?? OPERATION_CREDIT_COSTS[billingOp] ?? 1;
 
     if (this.availableCredits < creditCost) {
       throw new AppError(
@@ -608,12 +643,13 @@ export class KartikPlatformRuntime {
       orderId,
       razorpayOrderId: orderId,
       razorpayKeyId: process.env.RAZORPAY_KEY_ID ?? 'rzp_test_kartik_ai_demo',
+      plan,
       planId: plan.planId,
       planName: plan.name,
       amountPaise: plan.amountPaise,
       amountInrLabel: plan.amountInrLabel,
       creditsGranted: plan.creditsGranted,
-      currency: 'INR',
+      currency: 'INR' as const,
       status: 'created' as const,
     };
   }
@@ -629,9 +665,19 @@ export class KartikPlatformRuntime {
       throw new AppError('NOT_FOUND', `Order "${input.orderId}" was not found`);
     }
 
+    const paymentId =
+      input.paymentId ?? `pay_rzp_${crypto.randomBytes(6).toString('hex')}`;
+    const signature = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET ?? 'rzp_test_secret_kartik')
+      .update(`${order.orderId}|${paymentId}`)
+      .digest('hex');
+
     if (order.settled) {
       return {
+        verified: true,
         orderId: order.orderId,
+        paymentId,
+        signature,
         planId: order.plan.planId,
         creditsAdded: 0,
         availableCredits: this.availableCredits,
@@ -646,8 +692,6 @@ export class KartikPlatformRuntime {
       planId: order.plan.planId,
     };
 
-    const paymentId =
-      input.paymentId ?? `pay_rzp_${crypto.randomBytes(6).toString('hex')}`;
     this.ledger.unshift({
       entryId: `led_${crypto.randomBytes(6).toString('hex')}`,
       timestamp: new Date().toISOString(),
@@ -658,8 +702,10 @@ export class KartikPlatformRuntime {
     });
 
     return {
+      verified: true,
       orderId: order.orderId,
       paymentId,
+      signature,
       planId: order.plan.planId,
       creditsAdded: order.plan.creditsGranted,
       availableCredits: this.availableCredits,
