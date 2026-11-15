@@ -9,6 +9,7 @@
  * `@kartik/chat` conversation/message lifecycle with ordered cascade deletion.
  */
 
+import 'dotenv/config';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -325,15 +326,28 @@ export class KartikPlatformRuntime {
     readonly displayName?: string;
     readonly avatarUrl?: string | null;
   }) {
+    const prevUserId = this.currentUser.userId;
     this.isAuthenticated = true;
     if (input?.uid || input?.email || input?.displayName) {
+      const rawUid = input.uid?.trim() || this.currentUser.userId;
+      const safeUid = rawUid.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || this.currentUser.userId;
       this.currentUser = {
         ...this.currentUser,
-        userId: input.uid?.trim() || this.currentUser.userId,
+        userId: safeUid,
         email: input.email?.trim() || this.currentUser.email,
         displayName: input.displayName?.trim() || this.currentUser.displayName,
         avatarUrl: input.avatarUrl ?? this.currentUser.avatarUrl,
       };
+    }
+    if (prevUserId !== this.currentUser.userId) {
+      for (const [id, conv] of this.conversations.entries()) {
+        if (conv.userId === prevUserId) {
+          this.conversations.set(id, {
+            ...conv,
+            userId: this.currentUser.userId,
+          });
+        }
+      }
     }
     void getOrCreateUser(
       this.currentUser.userId,

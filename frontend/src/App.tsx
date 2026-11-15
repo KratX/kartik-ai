@@ -319,8 +319,20 @@ export function App() {
         setIsArtifactPanelOpen(true);
       }
 
-      await loadConversationMessages(input.conversationId);
-      await refreshConversations(input.conversationId);
+      const resolvedConvId = json.data.conversationId || input.conversationId;
+      setActiveConversationId(resolvedConvId);
+      setMessages((prev) => {
+        const exists = prev.some(
+          (m) => m.messageId === json.data.assistantMessage.messageId,
+        );
+        if (exists) {
+          return prev;
+        }
+        return [...prev, json.data.userMessage, json.data.assistantMessage];
+      });
+
+      await loadConversationMessages(resolvedConvId);
+      await refreshConversations(resolvedConvId);
       await refreshBillingAndAuth();
     } catch (err) {
       setErrorBanner(

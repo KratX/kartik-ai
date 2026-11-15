@@ -129,6 +129,7 @@ async function callGroqFallback(params: {
           max_tokens: 2048,
           ...(params.jsonMode ? { response_format: { type: 'json_object' } } : {}),
         }),
+        signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) {
         continue;
@@ -163,39 +164,11 @@ async function createServerGeminiClient(explicitApiKey?: string): Promise<Gemini
     return null;
   }
 
-  // 1. Try dynamic @google/genai SDK if installed in root node_modules (AI Studio runtime)
-  try {
-    const pkgName = '@google/genai';
-    const sdk = (await import(pkgName)) as {
-      GoogleGenAI?: new (opts: Record<string, unknown>) => {
-        models: {
-          generateContent(p: unknown): Promise<GeminiGenerateContentResult>;
-          embedContent(p: unknown): Promise<GeminiEmbedContentResult>;
-        };
-      };
-    };
-    if (sdk.GoogleGenAI) {
-      const instance = new sdk.GoogleGenAI({
-        apiKey: key,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      });
-      return {
-        generateContent: (params) => instance.models.generateContent(params),
-        embedContent: (params) => instance.models.embedContent(params),
-      };
-    }
-  } catch {
-    // Fall back to Node 22 native fetch REST adapter
-  }
-
-  // 2. Native Node 22 fetch adapter (zero external npm dependencies for strict pnpm workspaces)
   return {
     async generateContent(params): Promise<GeminiGenerateContentResult> {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.model)}:generateContent`;
+      const targetModel =
+        params.model === 'gemini-3.8-flash' ? 'gemini-3-flash-preview' : params.model;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:generateContent`;
       const bodyPayload: Record<string, unknown> = {
         contents:
           typeof params.contents === 'string'
@@ -227,21 +200,22 @@ async function createServerGeminiClient(explicitApiKey?: string): Promise<Gemini
           'User-Agent': 'aistudio-build',
         },
         body: JSON.stringify(bodyPayload),
+        signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) {
         throw new Error(`Gemini HTTP ${res.status}`);
       }
       const data = (await res.json()) as {
         candidates?: Array<{
-          content?: { parts?: Array<{ text?: string }> };
+          content?: { parts?: Array<{ text?: string; thought?: boolean }> };
           groundingMetadata?: { groundingChunks?: GeminiGroundingChunk[] };
         }>;
       };
       const firstCandidate = data.candidates?.[0];
-      const text =
-        firstCandidate?.content?.parts
-          ?.map((p) => p.text ?? '')
-          .join('') ?? '';
+      const parts = firstCandidate?.content?.parts ?? [];
+      const nonThoughtParts = parts.filter((p) => !p.thought);
+      const effectiveParts = nonThoughtParts.length > 0 ? nonThoughtParts : parts;
+      const text = effectiveParts.map((p) => p.text ?? '').join('');
       return {
         text,
         candidates: data.candidates,
@@ -249,10 +223,13 @@ async function createServerGeminiClient(explicitApiKey?: string): Promise<Gemini
     },
 
     async embedContent(params): Promise<GeminiEmbedContentResult> {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.model)}:batchEmbedContents`;
+      const targetModel =
+        params.model === 'gemini-embedding-2' ? 'gemini-embedding-001' : params.model;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:batchEmbedContents`;
       const requests = params.contents.map((t) => ({
-        model: `models/${params.model}`,
+        model: `models/${targetModel}`,
         content: { parts: [{ text: t }] },
+        outputDimensionality: 768,
       }));
       const res = await fetch(url, {
         method: 'POST',
@@ -262,6 +239,7 @@ async function createServerGeminiClient(explicitApiKey?: string): Promise<Gemini
           'User-Agent': 'aistudio-build',
         },
         body: JSON.stringify({ requests }),
+        signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) {
         throw new Error(`Gemini Embed HTTP ${res.status}`);

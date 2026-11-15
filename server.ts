@@ -12,6 +12,7 @@
  * 4. Vite dev middleware in development or static `dist/` in production on Port 3000.
  */
 
+import 'dotenv/config';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import express, { type Request, type Response } from 'express';

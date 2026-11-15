@@ -132,16 +132,18 @@ export class DailyLiveBudgetGuard {
       });
     }
 
-    const globalCount = await this.store.incrementHashCounter(
-      globalSpec.key,
-      input.providerField,
-      globalSpec.ttlSeconds,
-    );
-    const userCount = await this.store.incrementHashCounter(
-      userSpec.key,
-      input.providerField,
-      userSpec.ttlSeconds,
-    );
+    const [globalCount, userCount] = await Promise.all([
+      this.store.incrementHashCounter(
+        globalSpec.key,
+        input.providerField,
+        globalSpec.ttlSeconds,
+      ),
+      this.store.incrementHashCounter(
+        userSpec.key,
+        input.providerField,
+        userSpec.ttlSeconds,
+      ),
+    ]);
 
     const effectiveCount = Math.max(globalCount, userCount);
     if (effectiveCount > this.dailyLimit) {

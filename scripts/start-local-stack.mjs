@@ -15,6 +15,7 @@
  *    Starter `₹199` / Pro `₹499` Razorpay Checkout Drawer).
  */
 
+import 'dotenv/config';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';

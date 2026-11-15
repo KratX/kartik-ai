@@ -306,24 +306,29 @@ export class RespRedisClient implements RedisClient {
     this.timeoutMs = options.timeoutMs ?? 4_000;
   }
 
-  public async sendCommand(args: readonly string[]): Promise<RespValue> {
+  public async sendPipeline(userCommands: readonly (readonly string[])[]): Promise<RespValue[]> {
     const commandsToRun: (readonly string[])[] = [];
+    let prefixCount = 0;
     if (this.password) {
       if (this.username) {
         commandsToRun.push(['AUTH', this.username, this.password]);
       } else {
         commandsToRun.push(['AUTH', this.password]);
       }
+      prefixCount += 1;
     }
     if (this.dbIndex > 0) {
       commandsToRun.push(['SELECT', String(this.dbIndex)]);
+      prefixCount += 1;
     }
-    commandsToRun.push(args);
+    for (const cmd of userCommands) {
+      commandsToRun.push(cmd);
+    }
 
     const payload = Buffer.concat(commandsToRun.map((cmd) => encodeRespCommand(cmd)));
     const expectedReplies = commandsToRun.length;
 
-    return new Promise<RespValue>((resolve, reject) => {
+    return new Promise<RespValue[]>((resolve, reject) => {
       let settled = false;
       let recvBuffer = Buffer.alloc(0);
 
@@ -336,14 +341,14 @@ export class RespRedisClient implements RedisClient {
           })
         : net.createConnection({ host: this.host, port: this.port });
 
-      const finish = (err: Error | null, result?: RespValue) => {
+      const finish = (err: Error | null, results?: RespValue[]) => {
         if (settled) return;
         settled = true;
         socket.destroy();
         if (err) {
           reject(err);
         } else {
-          resolve(result ?? null);
+          resolve(results ?? []);
         }
       };
 
@@ -363,7 +368,7 @@ export class RespRedisClient implements RedisClient {
         recvBuffer = Buffer.concat([recvBuffer, chunk]);
         try {
           let offset = 0;
-          let lastValue: RespValue = null;
+          const allReplies: RespValue[] = [];
           for (let i = 0; i < expectedReplies; i += 1) {
             const frame = parseRespFrame(recvBuffer, offset);
             if (!frame) {
@@ -373,15 +378,20 @@ export class RespRedisClient implements RedisClient {
               finish(new Error(`Redis error: ${String(frame.value)}`));
               return;
             }
-            lastValue = frame.value;
+            allReplies.push(frame.value);
             offset = frame.nextOffset;
           }
-          finish(null, lastValue);
+          finish(null, allReplies.slice(prefixCount));
         } catch (err) {
           finish(err instanceof Error ? err : new Error(String(err)));
         }
       });
     });
+  }
+
+  public async sendCommand(args: readonly string[]): Promise<RespValue> {
+    const replies = await this.sendPipeline([args]);
+    return replies[0] ?? null;
   }
 
   public async get(key: string): Promise<string | null> {
@@ -419,11 +429,11 @@ export class RespRedisClient implements RedisClient {
     ttlSeconds: number,
   ): Promise<{ readonly count: number; readonly ttlSeconds: number }> {
     const cleanTtl = assertPositiveTtl(ttlSeconds);
-    const countVal = await this.sendCommand(['INCR', key]);
+    const [countVal] = await this.sendPipeline([
+      ['INCR', key],
+      ['EXPIRE', key, String(cleanTtl), 'NX'],
+    ]);
     const count = typeof countVal === 'number' ? countVal : Number(countVal) || 1;
-    if (count === 1) {
-      await this.sendCommand(['EXPIRE', key, String(cleanTtl)]);
-    }
     return { count, ttlSeconds: cleanTtl };
   }
 
@@ -462,8 +472,10 @@ export class RespRedisClient implements RedisClient {
     ttlSeconds: number,
   ): Promise<number> {
     const cleanTtl = assertPositiveTtl(ttlSeconds);
-    const res = await this.sendCommand(['HINCRBY', key, field, String(increment)]);
-    await this.sendCommand(['EXPIRE', key, String(cleanTtl)]);
+    const [res] = await this.sendPipeline([
+      ['HINCRBY', key, field, String(increment)],
+      ['EXPIRE', key, String(cleanTtl)],
+    ]);
     return typeof res === 'number' ? res : Number(res) || increment;
   }
 
@@ -786,6 +798,6 @@ export function createRedisClientFromUrl(
   if (options?.forceInMemory || !redisUrl) {
     return new InMemoryRedisClient();
   }
-  return new ResilientRedisClient(redisUrl, { timeoutMs: options?.timeoutMs ?? 600 });
+  return new ResilientRedisClient(redisUrl, { timeoutMs: options?.timeoutMs ?? 2500 });
 }
 
