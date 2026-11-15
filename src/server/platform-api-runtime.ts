@@ -205,6 +205,9 @@ export class KartikPlatformRuntime {
     const { publicKey } = crypto.generateKeyPairSync('ed25519');
     const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
 
+    const hasLiveAiKey = Boolean(
+      process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY || process.env.TAVILY_API_KEY,
+    );
     const config = loadAgentConfig({
       NODE_ENV: process.env.NODE_ENV === 'production' ? 'production' : 'development',
       DATABASE_URL:
@@ -212,8 +215,11 @@ export class KartikPlatformRuntime {
       REDIS_URL: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
       USER_CONTEXT_PUBLIC_KEY: publicKeyPem,
       INTERNAL_CALLER_TOKEN_CHAT: 'internal-secret-token-chat-to-agent',
-      MOCK_AI: process.env.GEMINI_API_KEY ? 'false' : 'true',
-      GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? 'test-gemini-api-key-value',
+      MOCK_AI: hasLiveAiKey ? 'false' : 'true',
+      GEMINI_API_KEY:
+        process.env.GEMINI_API_KEY ??
+        process.env.GROQ_API_KEY ??
+        'test-gemini-api-key-value',
       TAVILY_API_KEY: process.env.TAVILY_API_KEY ?? 'test-tavily-api-key',
       DAILY_LIVE_CALL_BUDGET: process.env.DAILY_LIVE_CALL_BUDGET ?? '100',
     });

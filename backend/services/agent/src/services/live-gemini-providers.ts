@@ -92,14 +92,74 @@ interface GeminiClientAdapter {
   }): Promise<GeminiEmbedContentResult>;
 }
 
+function stripEnvQuotes(val: string | undefined): string {
+  if (!val) {
+    return '';
+  }
+  return val.trim().replace(/^["']|["']$/g, '');
+}
+
+async function callGroqFallback(params: {
+  readonly prompt: string;
+  readonly systemInstruction?: string;
+  readonly jsonMode?: boolean;
+}): Promise<string | null> {
+  const groqKey = stripEnvQuotes(process.env.GROQ_API_KEY);
+  if (!groqKey || groqKey.startsWith('test-') || groqKey.startsWith('placeholder')) {
+    return null;
+  }
+
+  const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
+  if (params.systemInstruction) {
+    messages.push({ role: 'system', content: params.systemInstruction });
+  }
+  messages.push({ role: 'user', content: params.prompt });
+
+  for (const model of ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b']) {
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${groqKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: 2048,
+          ...(params.jsonMode ? { response_format: { type: 'json_object' } } : {}),
+        }),
+      });
+      if (!res.ok) {
+        continue;
+      }
+      const data = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const text = data.choices?.[0]?.message?.content?.trim();
+      if (text && text.length > 0) {
+        return text;
+      }
+    } catch {
+      // Try next Groq model
+    }
+  }
+  return null;
+}
+
 async function createServerGeminiClient(explicitApiKey?: string): Promise<GeminiClientAdapter | null> {
-  const key = (
+  const key = stripEnvQuotes(
     explicitApiKey ??
-    process.env.GEMINI_API_KEY ??
-    process.env.GOOGLE_AI_API_KEY ??
-    ''
-  ).trim();
-  if (!key || key === 'test-gemini-api-key-value' || key.startsWith('placeholder')) {
+      process.env.GEMINI_API_KEY ??
+      process.env.GOOGLE_AI_API_KEY ??
+      '',
+  );
+  if (
+    !key ||
+    key === 'test-gemini-api-key-value' ||
+    key === 'your_gemini_api_key_here' ||
+    key.startsWith('placeholder')
+  ) {
     return null;
   }
 
@@ -227,6 +287,10 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
     readonly systemInstruction?: string;
     readonly maxOutputTokens: number;
   }): Promise<{ readonly content: string; readonly tokensUsed: number }> {
+    const sysInstruction =
+      input.systemInstruction ??
+      'You are Kartik.ai, a senior multi-agent engineering assistant. Provide clear, well-structured Markdown answers with tables, bullet points, and code blocks when helpful.';
+
     const ai = await createServerGeminiClient(this.apiKey);
     if (ai) {
       try {
@@ -234,9 +298,7 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
           model: 'gemini-3.8-flash',
           contents: input.prompt,
           config: {
-            systemInstruction:
-              input.systemInstruction ??
-              'You are Kartik.ai, a senior multi-agent engineering assistant. Provide clear, well-structured Markdown answers with tables, bullet points, and code blocks when helpful.',
+            systemInstruction: sysInstruction,
           },
         });
         const text = (response.text ?? '').trim();
@@ -247,8 +309,19 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
           };
         }
       } catch {
-        // Fall through to structured local synthesis if upstream call errors
+        // Fall through to Groq or structured local synthesis if upstream call errors
       }
+    }
+
+    const groqReply = await callGroqFallback({
+      prompt: input.prompt,
+      systemInstruction: sysInstruction,
+    });
+    if (groqReply) {
+      return {
+        content: groqReply,
+        tokensUsed: Math.max(16, Math.ceil(groqReply.length / 4)),
+      };
     }
 
     const cleanTopic = input.prompt.trim();
@@ -419,6 +492,73 @@ export class LiveGeminiSearchProvider implements SearchProvider {
     readonly maxResults?: number;
   }): Promise<readonly SearchResultItem[]> {
     this.lastSearchImages = LiveGeminiSearchProvider.buildTopicImages(input.query);
+    const maxItems = input.maxResults ?? 4;
+
+    const tavilyKey = stripEnvQuotes(process.env.TAVILY_API_KEY);
+    if (
+      tavilyKey &&
+      tavilyKey !== 'test-tavily-api-key' &&
+      !tavilyKey.startsWith('placeholder')
+    ) {
+      try {
+        const tavRes = await fetch('https://api.tavily.com/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            api_key: tavilyKey,
+            query: input.query,
+            max_results: maxItems,
+            include_images: true,
+            include_answer: true,
+          }),
+        });
+        if (tavRes.ok) {
+          const tavData = (await tavRes.json()) as {
+            answer?: string;
+            images?: Array<string | { url?: string; description?: string }>;
+            results?: Array<{ title?: string; url?: string; content?: string }>;
+          };
+          if (tavData.answer && tavData.answer.trim().length > 0) {
+            this.lastSynthesizedAnswer = tavData.answer.trim();
+          }
+          const rawResults = tavData.results ?? [];
+          const items: SearchResultItem[] = [];
+          for (const r of rawResults) {
+            if (r.title && r.url) {
+              items.push({
+                title: r.title,
+                url: r.url,
+                snippet: (r.content ?? `Verified web source for ${input.query}`).slice(0, 260),
+              });
+            }
+            if (items.length >= maxItems) {
+              break;
+            }
+          }
+          if (Array.isArray(tavData.images) && tavData.images.length >= 4) {
+            this.lastSearchImages = tavData.images.slice(0, 4).map((img, idx) => {
+              const imgUrl = typeof img === 'string' ? img : (img.url ?? '');
+              const desc =
+                typeof img === 'object' && img?.description
+                  ? img.description
+                  : `${input.query.slice(0, 32)} — Visual #${idx + 1}`;
+              return Object.freeze({
+                id: `simg_${idx + 1}`,
+                title: desc,
+                imageUrl: imgUrl,
+                sourceUrl: items[idx % Math.max(1, items.length)]?.url ?? imgUrl,
+              });
+            });
+          }
+          if (items.length > 0) {
+            return Object.freeze(items);
+          }
+        }
+      } catch {
+        // Fall through to Gemini googleSearch grounding
+      }
+    }
+
     const ai = await createServerGeminiClient(this.apiKey);
 
     if (ai) {
@@ -446,7 +586,7 @@ export class LiveGeminiSearchProvider implements SearchProvider {
                 : `Verified web source for ${input.query}`,
             });
           }
-          if (items.length >= (input.maxResults ?? 4)) {
+          if (items.length >= maxItems) {
             break;
           }
         }
