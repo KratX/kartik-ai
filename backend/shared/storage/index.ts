@@ -489,8 +489,20 @@ export interface S3CompatibleObjectStorageOptions {
   readonly fallbackStorage?: ObjectStorage;
 }
 
+function stripEnvQuotes(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  return trimmed.replace(/^["']|["']$/g, '');
+}
+
 /**
- * Production S3 / Cloudflare R2 / MinIO private object storage adapter using AWS Signature V4 (`AWS4-HMAC-SHA256`).
+ * Production S3 / Neon Object Storage / Cloudflare R2 / MinIO private object storage adapter
+ * using AWS Signature V4 (`AWS4-HMAC-SHA256`) with path-style URLs (`forcePathStyle: true`).
  * Enforces private bucket semantics, server-side keys, and `x-amz-meta-owner-user-id` ownership checks (Invariants #10 & #20).
  */
 export class S3CompatibleObjectStorage implements ObjectStorage {
@@ -501,15 +513,37 @@ export class S3CompatibleObjectStorage implements ObjectStorage {
   private readonly region: string;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly fallback: ObjectStorage;
+  private bucketEnsured = false;
 
   constructor(options: S3CompatibleObjectStorageOptions) {
-    this.endpoint = options.endpoint.replace(/\/+$/, '');
-    this.bucket = options.bucket;
-    this.accessKeyId = options.accessKeyId;
-    this.secretAccessKey = options.secretAccessKey;
-    this.region = options.region ?? 'auto';
+    this.endpoint = (stripEnvQuotes(options.endpoint) ?? options.endpoint).replace(/\/+$/, '');
+    this.bucket = stripEnvQuotes(options.bucket) ?? options.bucket;
+    this.accessKeyId = stripEnvQuotes(options.accessKeyId) ?? options.accessKeyId;
+    this.secretAccessKey = stripEnvQuotes(options.secretAccessKey) ?? options.secretAccessKey;
+    this.region = stripEnvQuotes(options.region) ?? 'auto';
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
-    this.fallback = options.fallbackStorage ?? new FileSystemObjectStorage();
+    this.fallback = options.fallbackStorage ?? new InMemoryObjectStorage();
+  }
+
+  private async ensureBucketExists(): Promise<void> {
+    if (this.bucketEnsured) {
+      return;
+    }
+    const bucketUrl = new URL(`${this.endpoint}/${this.bucket}`);
+    const emptyHash = sha256Hex('');
+    const headers = this.buildSignedHeaders({
+      method: 'PUT',
+      canonicalUri: bucketUrl.pathname,
+      host: bucketUrl.host,
+      payloadHash: emptyHash,
+    });
+    const res = await this.fetchImpl(bucketUrl.toString(), {
+      method: 'PUT',
+      headers,
+    });
+    if (res.ok || res.status === 409) {
+      this.bucketEnsured = true;
+    }
   }
 
   private buildSignedHeaders(params: {
@@ -569,28 +603,38 @@ export class S3CompatibleObjectStorage implements ObjectStorage {
     const createdAt = new Date().toISOString();
     const parsedUrl = new URL(`${this.endpoint}/${this.bucket}/${input.key}`);
     const payloadHash = sha256Hex(input.body);
-    const headers = this.buildSignedHeaders({
-      method: 'PUT',
-      canonicalUri: parsedUrl.pathname,
-      host: parsedUrl.host,
-      payloadHash,
-      extraHeaders: {
-        'content-type': input.mimeType,
-        'x-amz-meta-owner-user-id': input.ownerUserId,
-        'x-amz-meta-sha256': input.sha256,
-        'x-amz-meta-created-at': createdAt,
-      },
-    });
+    const buildPutHeaders = () =>
+      this.buildSignedHeaders({
+        method: 'PUT',
+        canonicalUri: parsedUrl.pathname,
+        host: parsedUrl.host,
+        payloadHash,
+        extraHeaders: {
+          'content-type': input.mimeType,
+          'x-amz-meta-owner-user-id': input.ownerUserId,
+          'x-amz-meta-sha256': input.sha256,
+          'x-amz-meta-created-at': createdAt,
+        },
+      });
 
     try {
-      const res = await this.fetchImpl(parsedUrl.toString(), {
+      let res = await this.fetchImpl(parsedUrl.toString(), {
         method: 'PUT',
-        headers,
+        headers: buildPutHeaders(),
         body: Buffer.from(input.body),
       });
+      if (res.status === 404 && !this.bucketEnsured) {
+        await this.ensureBucketExists();
+        res = await this.fetchImpl(parsedUrl.toString(), {
+          method: 'PUT',
+          headers: buildPutHeaders(),
+          body: Buffer.from(input.body),
+        });
+      }
       if (!res.ok) {
         throw new Error(`S3 PUT failed with status ${res.status}`);
       }
+      this.bucketEnsured = true;
       await this.fallback.putPrivateObject(input);
       return Object.freeze({
         key: input.key,
@@ -995,10 +1039,18 @@ export function createObjectStorageFromEnv(
     });
   }
 
-  const endpoint = env.OBJECT_STORAGE_ENDPOINT ?? env.R2_ENDPOINT;
-  const bucket = env.OBJECT_STORAGE_BUCKET ?? 'kartik-private';
-  const accessKeyId = env.OBJECT_STORAGE_ACCESS_KEY ?? env.R2_ACCESS_KEY_ID;
-  const secretAccessKey = env.OBJECT_STORAGE_SECRET_KEY ?? env.R2_SECRET_ACCESS_KEY;
+  const endpoint = stripEnvQuotes(
+    env.OBJECT_STORAGE_ENDPOINT ?? env.AWS_ENDPOINT_URL_S3 ?? env.R2_ENDPOINT,
+  );
+  const bucket =
+    stripEnvQuotes(env.OBJECT_STORAGE_BUCKET ?? env.AWS_S3_BUCKET) ?? 'assets';
+  const accessKeyId = stripEnvQuotes(
+    env.OBJECT_STORAGE_ACCESS_KEY ?? env.AWS_ACCESS_KEY_ID ?? env.R2_ACCESS_KEY_ID,
+  );
+  const secretAccessKey = stripEnvQuotes(
+    env.OBJECT_STORAGE_SECRET_KEY ?? env.AWS_SECRET_ACCESS_KEY ?? env.R2_SECRET_ACCESS_KEY,
+  );
+  const region = stripEnvQuotes(env.OBJECT_STORAGE_REGION ?? env.AWS_REGION) ?? 'auto';
 
   const pgStorage = new PostgresObjectStorage({
     pool: createLazyPostgresPool({
@@ -1022,7 +1074,7 @@ export function createObjectStorageFromEnv(
       bucket,
       accessKeyId,
       secretAccessKey,
-      region: env.OBJECT_STORAGE_REGION ?? 'auto',
+      region,
       fallbackStorage: pgStorage,
     });
   }

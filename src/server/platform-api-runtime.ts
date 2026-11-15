@@ -141,7 +141,9 @@ export class KartikPlatformRuntime {
   private readonly redisClient = createRedisClientFromUrl(process.env.REDIS_URL);
   public readonly repository = new DrizzleCloudSqlAgentRepository();
   public readonly objectStorage =
-    process.env.OBJECT_STORAGE_ENDPOINT || process.env.R2_ENDPOINT
+    process.env.OBJECT_STORAGE_ENDPOINT ||
+    process.env.AWS_ENDPOINT_URL_S3 ||
+    process.env.R2_ENDPOINT
       ? createObjectStorageFromEnv(process.env)
       : new DrizzleCloudSqlObjectStorage();
   public readonly vectorStore = createVectorStoreFromEnv(
