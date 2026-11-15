@@ -116,6 +116,18 @@ export const paymentOrders = pgTable('payment_orders', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
+export const privateObjects = pgTable('private_objects', {
+  storageKey: text('storage_key').primaryKey(),
+  ownerUserUid: text('owner_user_uid')
+    .references(() => users.uid, { onDelete: 'cascade' })
+    .notNull(),
+  mimeType: text('mime_type').notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  sha256Hex: text('sha256_hex').notNull(),
+  contentBase64: text('content_base64').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 export const usersRelations = relations(users, ({ many }) => ({
   conversations: many(conversations),
   messages: many(messages),
@@ -123,6 +135,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   artifacts: many(artifacts),
   ledgerEntries: many(creditLedgerEntries),
   paymentOrders: many(paymentOrders),
+  privateObjects: many(privateObjects),
 }));
 
 export const conversationsRelations = relations(conversations, ({ one, many }) => ({

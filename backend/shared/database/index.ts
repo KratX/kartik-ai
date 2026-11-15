@@ -414,6 +414,9 @@ export function createLazyPostgresPool(options: {
         let database = options.database ?? process.env.SQL_DB_NAME ?? 'kartik';
         let port = options.port ?? 5432;
 
+        let requiresSsl = false;
+        let isPoolerEndpoint = false;
+
         if (!options.host && !process.env.SQL_HOST && options.connectionString) {
           try {
             const parsed = new URL(options.connectionString);
@@ -422,6 +425,10 @@ export function createLazyPostgresPool(options: {
             password = decodeURIComponent(parsed.password || password);
             database = parsed.pathname.replace(/^\/+/, '') || database;
             port = parsed.port ? Number(parsed.port) : port;
+            requiresSsl =
+              parsed.searchParams.get('sslmode') === 'require' ||
+              host.includes('neon.tech');
+            isPoolerEndpoint = host.includes('-pooler');
           } catch {
             // Keep defaults if URL parse fails
           }
@@ -433,10 +440,11 @@ export function createLazyPostgresPool(options: {
           password,
           database,
           port,
+          ...(requiresSsl ? { ssl: { rejectUnauthorized: false } } : {}),
           max: options.max ?? DEFAULT_PGPOOL_MAX_CONNECTIONS,
           idleTimeoutMillis: options.idleTimeoutMillis ?? DEFAULT_PGPOOL_IDLE_TIMEOUT_MS,
           connectionTimeoutMillis: options.connectionTimeoutMillis ?? 15_000,
-          options: `-c search_path=${validSchema},public`,
+          ...(isPoolerEndpoint ? {} : { options: `-c search_path=${validSchema},public` }),
         });
 
         return new PgDriverDatabasePool(rawPool, validSchema);

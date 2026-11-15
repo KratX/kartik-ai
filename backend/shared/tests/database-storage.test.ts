@@ -6,6 +6,7 @@ import {
   buildObjectStorageKey,
   computeMigrationChecksum,
   InMemoryObjectStorage,
+  PostgresObjectStorage,
   runForwardMigrations,
   validateUploadFile,
   withTransaction,
@@ -237,5 +238,80 @@ describe('@kartik/shared/database & @kartik/shared/storage (1.8.a)', () => {
         }),
       (err: unknown) => (err as { code?: string }).code === 'NOT_FOUND',
     );
+
+    // PostgresObjectStorage persists and retrieves binary objects via SQL private_objects table
+    const pgRows = new Map<
+      string,
+      {
+        storage_key: string;
+        owner_user_uid: string;
+        mime_type: string;
+        size_bytes: number;
+        sha256_hex: string;
+        content_base64: string;
+        created_at: string;
+      }
+    >();
+    const pgPool: DatabasePool = {
+      async query<TRow>(sql: string, params?: readonly unknown[]): Promise<DatabaseQueryResult<TRow>> {
+        if (sql.includes('INSERT INTO private_objects') && params) {
+          const row = {
+            storage_key: String(params[0]),
+            owner_user_uid: String(params[1]),
+            mime_type: String(params[2]),
+            size_bytes: Number(params[3]),
+            sha256_hex: String(params[4]),
+            content_base64: String(params[5]),
+            created_at: String(params[6]),
+          };
+          pgRows.set(row.storage_key, row);
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes('FROM private_objects') && params) {
+          const found = pgRows.get(String(params[0]));
+          return {
+            rows: found ? ([found] as unknown as TRow[]) : [],
+            rowCount: found ? 1 : 0,
+          };
+        }
+        if (sql.includes('DELETE FROM private_objects') && params) {
+          const k = String(params[0]);
+          const u = String(params[1]);
+          const found = pgRows.get(k);
+          if (found && found.owner_user_uid === u) {
+            pgRows.delete(k);
+            return { rows: [], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+      async connect(): Promise<DatabaseClient> {
+        throw new Error('Not needed');
+      },
+      async end(): Promise<void> {},
+    };
+
+    const pgStorage = new PostgresObjectStorage({ pool: pgPool });
+    await pgStorage.putPrivateObject({
+      key,
+      ownerUserId: 'usr_kartik_01',
+      mimeType: 'application/pdf',
+      body: pdfHeader,
+      sha256: 'c'.repeat(64),
+    });
+
+    const loaded = await pgStorage.getPrivateObject(key, 'usr_kartik_01');
+    assert.equal(loaded.metadata.sizeBytes, pdfHeader.byteLength);
+    assert.deepEqual(Array.from(loaded.body), Array.from(pdfHeader));
+
+    await assert.rejects(
+      () => pgStorage.getPrivateObject(key, 'usr_intruder_99'),
+      (err: unknown) => (err as { code?: string }).code === 'NOT_FOUND',
+    );
+
+    const deleted = await pgStorage.deletePrivateObject(key, 'usr_kartik_01');
+    assert.equal(deleted, true);
   });
 });
+

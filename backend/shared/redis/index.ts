@@ -294,7 +294,8 @@ export class RespRedisClient implements RedisClient {
   private readonly timeoutMs: number;
 
   constructor(redisUrl: string, options: { readonly timeoutMs?: number } = {}) {
-    const parsed = new URL(redisUrl);
+    const cleanUrl = redisUrl.trim().replace(/^["']|["']$/g, '');
+    const parsed = new URL(cleanUrl);
     this.useTls = parsed.protocol === 'rediss:';
     this.host = parsed.hostname || '127.0.0.1';
     this.port = parsed.port ? Number.parseInt(parsed.port, 10) : 6379;
@@ -302,13 +303,13 @@ export class RespRedisClient implements RedisClient {
     this.password = parsed.password ? decodeURIComponent(parsed.password) : null;
     const pathDb = parsed.pathname.replace(/^\/+/, '');
     this.dbIndex = pathDb ? Number.parseInt(pathDb, 10) || 0 : 0;
-    this.timeoutMs = options.timeoutMs ?? 1_500;
+    this.timeoutMs = options.timeoutMs ?? 4_000;
   }
 
   public async sendCommand(args: readonly string[]): Promise<RespValue> {
     const commandsToRun: (readonly string[])[] = [];
     if (this.password) {
-      if (this.username && this.username !== 'default') {
+      if (this.username) {
         commandsToRun.push(['AUTH', this.username, this.password]);
       } else {
         commandsToRun.push(['AUTH', this.password]);
@@ -327,7 +328,12 @@ export class RespRedisClient implements RedisClient {
       let recvBuffer = Buffer.alloc(0);
 
       const socket = this.useTls
-        ? tls.connect({ host: this.host, port: this.port, rejectUnauthorized: false })
+        ? tls.connect({
+            host: this.host,
+            port: this.port,
+            servername: this.host,
+            rejectUnauthorized: false,
+          })
         : net.createConnection({ host: this.host, port: this.port });
 
       const finish = (err: Error | null, result?: RespValue) => {
@@ -349,7 +355,7 @@ export class RespRedisClient implements RedisClient {
         finish(err);
       });
 
-      socket.on('connect', () => {
+      socket.on(this.useTls ? 'secureConnect' : 'connect', () => {
         socket.write(payload);
       });
 

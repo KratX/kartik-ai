@@ -9,6 +9,15 @@ import {
   InMemoryAgentRepository,
   type AgentRepository,
 } from '../../backend/services/agent/src/repositories/index.js';
+import { AppError } from '../../backend/shared/errors/index.js';
+import {
+  InMemoryObjectStorage,
+  type ObjectStorage,
+  type PutPrivateObjectInput,
+  type SignedDownloadUrlResult,
+  type SignedUrlIssueOptions,
+  type StoredPrivateObjectMetadata,
+} from '../../backend/shared/storage/index.js';
 import { db } from './index.ts';
 import {
   artifacts,
@@ -16,18 +25,21 @@ import {
   creditLedgerEntries,
   messages,
   paymentOrders,
+  privateObjects,
   uploadedFiles,
   users,
 } from './schema.ts';
 import { getOrCreateUser } from './users.ts';
 
 function isCloudSqlConfigured(): boolean {
-  return Boolean(
-    process.env.SQL_HOST &&
-      process.env.SQL_USER &&
-      process.env.SQL_DB_NAME &&
-      process.env.NODE_ENV !== 'test',
+  if (process.env.NODE_ENV === 'test') {
+    return false;
+  }
+  const hasCloudSql = Boolean(
+    process.env.SQL_HOST && process.env.SQL_USER && process.env.SQL_DB_NAME,
   );
+  const hasDatabaseUrl = Boolean(process.env.DATABASE_URL?.trim());
+  return hasCloudSql || hasDatabaseUrl;
 }
 
 /**
@@ -594,3 +606,186 @@ export async function syncPlatformPaymentOrderToCloudSql(input: {
     });
   }
 }
+
+/**
+ * Drizzle ORM + Cloud SQL PostgreSQL (`asia-south1`) implementation of `ObjectStorage`.
+ * Persists uploaded PDFs/images and generated `.pdf`/`.pptx`/`.png`/code artifacts directly
+ * in the `private_objects` PostgreSQL table while mirroring in `InMemoryObjectStorage` for
+ * instant sub-millisecond reads and enforcing Invariants #10 & #20 (`404 NOT_FOUND` on foreign objects).
+ */
+export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
+  private readonly cache = new InMemoryObjectStorage();
+
+  public async putPrivateObject(
+    input: PutPrivateObjectInput,
+  ): Promise<StoredPrivateObjectMetadata> {
+    const metadata = await this.cache.putPrivateObject(input);
+    if (!isCloudSqlConfigured()) {
+      return metadata;
+    }
+    try {
+      await getOrCreateUser(
+        input.ownerUserId,
+        `${input.ownerUserId}@kartik.ai`,
+        'Kartik Rawat',
+        null,
+      );
+      const contentBase64 = Buffer.from(input.body).toString('base64');
+      await db
+        .insert(privateObjects)
+        .values({
+          storageKey: input.key,
+          ownerUserUid: input.ownerUserId,
+          mimeType: input.mimeType,
+          sizeBytes: input.body.byteLength,
+          sha256Hex: input.sha256,
+          contentBase64,
+          createdAt: new Date(metadata.createdAt),
+        })
+        .onConflictDoUpdate({
+          target: privateObjects.storageKey,
+          set: {
+            mimeType: input.mimeType,
+            sizeBytes: input.body.byteLength,
+            sha256Hex: input.sha256,
+            contentBase64,
+          },
+        });
+      return metadata;
+    } catch (error) {
+      throw new Error('Database query failed. Please try again later.', {
+        cause: error,
+      });
+    }
+  }
+
+  public async headPrivateObject(
+    key: string,
+    requesterUserId: string,
+  ): Promise<StoredPrivateObjectMetadata> {
+    try {
+      return await this.cache.headPrivateObject(key, requesterUserId);
+    } catch (err) {
+      if (!isCloudSqlConfigured()) {
+        throw err;
+      }
+    }
+    try {
+      const rows = await db
+        .select({
+          storageKey: privateObjects.storageKey,
+          ownerUserUid: privateObjects.ownerUserUid,
+          mimeType: privateObjects.mimeType,
+          sizeBytes: privateObjects.sizeBytes,
+          sha256Hex: privateObjects.sha256Hex,
+          createdAt: privateObjects.createdAt,
+        })
+        .from(privateObjects)
+        .where(eq(privateObjects.storageKey, key))
+        .limit(1);
+      const row = rows[0];
+      if (!row || row.ownerUserUid !== requesterUserId) {
+        throw new AppError('NOT_FOUND', 'Requested object was not found');
+      }
+      return Object.freeze({
+        key: row.storageKey,
+        ownerUserId: row.ownerUserUid,
+        mimeType: row.mimeType,
+        sizeBytes: row.sizeBytes,
+        sha256: row.sha256Hex,
+        createdAt: row.createdAt.toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      throw new Error('Database query failed. Please try again later.', {
+        cause: error,
+      });
+    }
+  }
+
+  public async getPrivateObject(
+    key: string,
+    requesterUserId: string,
+  ): Promise<{
+    readonly metadata: StoredPrivateObjectMetadata;
+    readonly body: Uint8Array;
+  }> {
+    try {
+      return await this.cache.getPrivateObject(key, requesterUserId);
+    } catch (err) {
+      if (!isCloudSqlConfigured()) {
+        throw err;
+      }
+    }
+    try {
+      const rows = await db
+        .select()
+        .from(privateObjects)
+        .where(eq(privateObjects.storageKey, key))
+        .limit(1);
+      const row = rows[0];
+      if (!row || row.ownerUserUid !== requesterUserId) {
+        throw new AppError('NOT_FOUND', 'Requested object was not found');
+      }
+      const body = new Uint8Array(Buffer.from(row.contentBase64, 'base64'));
+      const metadata: StoredPrivateObjectMetadata = Object.freeze({
+        key: row.storageKey,
+        ownerUserId: row.ownerUserUid,
+        mimeType: row.mimeType,
+        sizeBytes: row.sizeBytes,
+        sha256: row.sha256Hex,
+        createdAt: row.createdAt.toISOString(),
+      });
+      await this.cache.putPrivateObject({
+        key: row.storageKey,
+        ownerUserId: row.ownerUserUid,
+        mimeType: row.mimeType,
+        body,
+        sha256: row.sha256Hex,
+      });
+      return Object.freeze({ metadata, body });
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      throw new Error('Database query failed. Please try again later.', {
+        cause: error,
+      });
+    }
+  }
+
+  public async createSignedDownloadUrl(
+    options: SignedUrlIssueOptions,
+  ): Promise<SignedDownloadUrlResult> {
+    await this.headPrivateObject(options.key, options.requesterUserId);
+    return this.cache.createSignedDownloadUrl(options);
+  }
+
+  public async deletePrivateObject(
+    key: string,
+    ownerUserId: string,
+  ): Promise<boolean> {
+    const deletedCache = await this.cache.deletePrivateObject(key, ownerUserId);
+    if (!isCloudSqlConfigured()) {
+      return deletedCache;
+    }
+    try {
+      await db
+        .delete(privateObjects)
+        .where(
+          and(
+            eq(privateObjects.storageKey, key),
+            eq(privateObjects.ownerUserUid, ownerUserId),
+          ),
+        );
+      return true;
+    } catch (error) {
+      throw new Error('Database query failed. Please try again later.', {
+        cause: error,
+      });
+    }
+  }
+}
+

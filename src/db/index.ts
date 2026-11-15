@@ -1,6 +1,9 @@
+import * as dotenv from 'dotenv';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './schema.ts';
+
+dotenv.config();
 
 declare global {
   // eslint-disable-next-line no-var
@@ -9,19 +12,39 @@ declare global {
 
 export const createPool = () => {
   if (!global._postgresPool) {
-    global._postgresPool = new Pool({
-      host: process.env.SQL_HOST,
-      user: process.env.SQL_USER,
-      password: process.env.SQL_PASSWORD,
-      database: process.env.SQL_DB_NAME,
-      max: 10,
-      idleTimeoutMillis: 10000,
-      connectionTimeoutMillis: 15000,
-      keepAlive: true,
-    });
+    const databaseUrl = process.env.DATABASE_URL?.trim();
+    if (databaseUrl && !process.env.SQL_HOST) {
+      const parsed = new URL(databaseUrl);
+      const requiresSsl =
+        parsed.searchParams.get('sslmode') === 'require' ||
+        parsed.hostname.includes('neon.tech');
+      global._postgresPool = new Pool({
+        host: parsed.hostname,
+        port: parsed.port ? Number(parsed.port) : 5432,
+        user: decodeURIComponent(parsed.username),
+        password: decodeURIComponent(parsed.password),
+        database: parsed.pathname.replace(/^\/+/, '') || 'neondb',
+        ...(requiresSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+        max: 10,
+        idleTimeoutMillis: 10000,
+        connectionTimeoutMillis: 15000,
+        keepAlive: true,
+      });
+    } else {
+      global._postgresPool = new Pool({
+        host: process.env.SQL_HOST,
+        user: process.env.SQL_USER,
+        password: process.env.SQL_PASSWORD,
+        database: process.env.SQL_DB_NAME,
+        max: 10,
+        idleTimeoutMillis: 10000,
+        connectionTimeoutMillis: 15000,
+        keepAlive: true,
+      });
+    }
 
     global._postgresPool.on('error', () => {
-      // Absorb routine idle client disconnections when Cloud SQL scales to zero;
+      // Absorb routine idle client disconnections when serverless Postgres (Neon / Cloud SQL) scales to zero;
       // pg.Pool automatically evicts the closed client and opens a fresh connection on the next query.
     });
   }

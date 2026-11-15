@@ -45,6 +45,7 @@ import {
 import type { SpecialistAgentName } from '../../backend/shared/contracts/index.js';
 import {
   DrizzleCloudSqlAgentRepository,
+  DrizzleCloudSqlObjectStorage,
   syncPlatformBillingLedgerToCloudSql,
   syncPlatformConversationToCloudSql,
   syncPlatformMessageToCloudSql,
@@ -139,17 +140,10 @@ export interface PlatformLedgerEntry {
 export class KartikPlatformRuntime {
   private readonly redisClient = createRedisClientFromUrl(process.env.REDIS_URL);
   public readonly repository = new DrizzleCloudSqlAgentRepository();
-  public readonly objectStorage = createObjectStorageFromEnv(
-    process.env.NODE_ENV === 'test'
-      ? {
-          ...process.env,
-          OBJECT_STORAGE_ROOT_DIR: path.join(
-            os.tmpdir(),
-            `kartik-platform-objects-${process.pid}-${Date.now()}`,
-          ),
-        }
-      : process.env,
-  );
+  public readonly objectStorage =
+    process.env.OBJECT_STORAGE_ENDPOINT || process.env.R2_ENDPOINT
+      ? createObjectStorageFromEnv(process.env)
+      : new DrizzleCloudSqlObjectStorage();
   public readonly vectorStore = createVectorStoreFromEnv(
     process.env.NODE_ENV === 'test'
       ? {
