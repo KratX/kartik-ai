@@ -3,7 +3,7 @@
 # Build from repository root:
 #   docker build -f backend/services/agent/Dockerfile -t kartik-ai/agent:latest .
 
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /workspace
 
 RUN corepack enable && corepack prepare pnpm@12.18.0 --activate
@@ -19,7 +19,7 @@ COPY backend/services/agent ./backend/services/agent
 
 RUN pnpm --filter @kartik/shared run build && pnpm --filter @kartik/agent run build
 
-FROM node:22-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /workspace
 
 ENV NODE_ENV=production

@@ -22,6 +22,7 @@ logs/
 npm-debug.log*
 
 # local databases and volumes
+.data/
 data/
 mongo-data/
 redis-data/

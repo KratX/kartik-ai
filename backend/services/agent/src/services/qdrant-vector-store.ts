@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { AppError } from '@kartik/shared/errors';
 import type {
@@ -325,7 +326,7 @@ export class PersistentDiskVectorStore implements VectorStore {
   constructor(options?: { readonly storageFilePath?: string }) {
     this.storageFilePath = path.resolve(
       options?.storageFilePath ??
-        path.join(process.cwd(), '.data', 'qdrant-vectors.json'),
+        path.join(os.tmpdir(), 'kartik-ai-storage', 'qdrant-vectors.json'),
     );
   }
 

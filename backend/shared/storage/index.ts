@@ -310,6 +310,7 @@ export class InMemoryObjectStorage implements ObjectStorage {
 }
 
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
@@ -328,7 +329,9 @@ export class FileSystemObjectStorage implements ObjectStorage {
     readonly signingSecret?: string;
     readonly baseEndpoint?: string;
   } = {}) {
-    this.rootDir = path.resolve(options.rootDir ?? '.data/object-storage');
+    this.rootDir = path.resolve(
+      options.rootDir ?? path.join(os.tmpdir(), 'kartik-ai-storage', 'object-storage'),
+    );
     this.signingSecret = options.signingSecret ?? 'kartik-private-storage-signing-secret';
     this.baseEndpoint = options.baseEndpoint ?? 'http://localhost:9000/kartik-private';
   }
@@ -782,7 +785,10 @@ export function createObjectStorageFromEnv(
   const secretAccessKey = env.OBJECT_STORAGE_SECRET_KEY ?? env.R2_SECRET_ACCESS_KEY;
 
   const fsStorage = new FileSystemObjectStorage({
-    rootDir: env.OBJECT_STORAGE_DIR ?? '.data/object-storage',
+    rootDir:
+      env.OBJECT_STORAGE_DIR ??
+      env.OBJECT_STORAGE_ROOT_DIR ??
+      path.join(os.tmpdir(), 'kartik-ai-storage', 'object-storage'),
     baseEndpoint: endpoint ? `${endpoint.replace(/\/+$/, '')}/${bucket}` : undefined,
   });
 

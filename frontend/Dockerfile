@@ -3,7 +3,7 @@
 # Build from repository root:
 #   docker build -f frontend/Dockerfile -t kartik-ai/frontend:latest .
 
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /workspace
 
 RUN corepack enable && corepack prepare pnpm@12.18.0 --activate
