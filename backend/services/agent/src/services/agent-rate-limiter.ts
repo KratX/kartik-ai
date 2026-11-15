@@ -74,6 +74,29 @@ export class InMemoryAgentRateLimitStore implements AgentRateLimitStore {
   }
 }
 
+/**
+ * Production Redis-backed per-agent sliding/fixed-window rate-limit store (`INCR` + `EXPIRE`).
+ */
+export class RedisAgentRateLimitStore implements AgentRateLimitStore {
+  private readonly redis: Pick<import('@kartik/shared/redis').RedisClient, 'incrWithTtl'>;
+
+  constructor(redis: Pick<import('@kartik/shared/redis').RedisClient, 'incrWithTtl'>) {
+    this.redis = redis;
+  }
+
+  public async incrementWindowCounter(
+    key: string,
+    ttlSeconds: number,
+    nowMs: number = Date.now(),
+  ): Promise<{ readonly count: number; readonly expiresAtMs: number }> {
+    const res = await this.redis.incrWithTtl(key, ttlSeconds);
+    return {
+      count: res.count,
+      expiresAtMs: nowMs + res.ttlSeconds * 1000,
+    };
+  }
+}
+
 export class AgentSlidingWindowRateLimiter {
   private readonly store: AgentRateLimitStore;
   private readonly limits: Readonly<Record<SpecialistAgentName, number>>;

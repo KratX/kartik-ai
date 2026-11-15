@@ -176,3 +176,610 @@ export const RedisKeys = {
     };
   },
 } as const;
+
+import net from 'node:net';
+import tls from 'node:tls';
+
+export interface RedisClient {
+  get(key: string): Promise<string | null>;
+  setEx(key: string, value: string, ttlSeconds: number): Promise<void>;
+  setNxEx(key: string, value: string, ttlSeconds: number): Promise<boolean>;
+  del(key: string): Promise<number>;
+  delIfEquals(key: string, expectedValue: string): Promise<boolean>;
+  incrWithTtl(
+    key: string,
+    ttlSeconds: number,
+  ): Promise<{ readonly count: number; readonly ttlSeconds: number }>;
+  hSet(key: string, fields: Record<string, string>): Promise<number>;
+  hGetAll(key: string): Promise<Record<string, string>>;
+  hIncrByWithTtl(
+    key: string,
+    field: string,
+    increment: number,
+    ttlSeconds: number,
+  ): Promise<number>;
+  hGet(key: string, field: string): Promise<string | null>;
+  expire(key: string, ttlSeconds: number): Promise<boolean>;
+  close(): Promise<void>;
+}
+
+/**
+ * Encodes a command array into the Redis Serialization Protocol (RESP2) wire format.
+ */
+export function encodeRespCommand(args: readonly string[]): Buffer {
+  const parts: Buffer[] = [Buffer.from(`*${args.length}\r\n`, 'utf8')];
+  for (const arg of args) {
+    const buf = Buffer.from(String(arg), 'utf8');
+    parts.push(Buffer.from(`$${buf.byteLength}\r\n`, 'utf8'), buf, Buffer.from('\r\n', 'utf8'));
+  }
+  return Buffer.concat(parts);
+}
+
+export type RespValue = string | number | null | RespValue[];
+
+/**
+ * Parses a single RESP2 frame from `buffer` starting at `offset`.
+ * Returns `null` if the buffer does not yet contain a complete frame.
+ */
+export function parseRespFrame(
+  buffer: Buffer,
+  offset = 0,
+): { readonly value: RespValue; readonly nextOffset: number; readonly isError?: boolean } | null {
+  if (offset >= buffer.length) {
+    return null;
+  }
+  const prefix = String.fromCharCode(buffer[offset]!);
+  const lineEnd = buffer.indexOf('\r\n', offset + 1);
+  if (lineEnd === -1) {
+    return null;
+  }
+  const headerPayload = buffer.subarray(offset + 1, lineEnd).toString('utf8');
+
+  if (prefix === '+') {
+    return { value: headerPayload, nextOffset: lineEnd + 2 };
+  }
+  if (prefix === '-') {
+    return { value: headerPayload, nextOffset: lineEnd + 2, isError: true };
+  }
+  if (prefix === ':') {
+    return { value: Number.parseInt(headerPayload, 10), nextOffset: lineEnd + 2 };
+  }
+  if (prefix === '$') {
+    const byteLen = Number.parseInt(headerPayload, 10);
+    if (byteLen === -1) {
+      return { value: null, nextOffset: lineEnd + 2 };
+    }
+    const bodyStart = lineEnd + 2;
+    const bodyEnd = bodyStart + byteLen;
+    if (buffer.length < bodyEnd + 2) {
+      return null;
+    }
+    const strVal = buffer.subarray(bodyStart, bodyEnd).toString('utf8');
+    return { value: strVal, nextOffset: bodyEnd + 2 };
+  }
+  if (prefix === '*') {
+    const count = Number.parseInt(headerPayload, 10);
+    if (count === -1) {
+      return { value: null, nextOffset: lineEnd + 2 };
+    }
+    const items: RespValue[] = [];
+    let cursor = lineEnd + 2;
+    for (let i = 0; i < count; i += 1) {
+      const parsed = parseRespFrame(buffer, cursor);
+      if (!parsed) {
+        return null;
+      }
+      if (parsed.isError) {
+        return parsed;
+      }
+      items.push(parsed.value);
+      cursor = parsed.nextOffset;
+    }
+    return { value: items, nextOffset: cursor };
+  }
+  throw new Error(`Unsupported RESP frame prefix "${prefix}"`);
+}
+
+/**
+ * Zero-dependency RESP2 TCP/TLS Redis client using `node:net` and `node:tls`.
+ * Executes single-roundtrip commands with bounded socket timeouts.
+ */
+export class RespRedisClient implements RedisClient {
+  private readonly host: string;
+  private readonly port: number;
+  private readonly useTls: boolean;
+  private readonly username: string | null;
+  private readonly password: string | null;
+  private readonly dbIndex: number;
+  private readonly timeoutMs: number;
+
+  constructor(redisUrl: string, options: { readonly timeoutMs?: number } = {}) {
+    const parsed = new URL(redisUrl);
+    this.useTls = parsed.protocol === 'rediss:';
+    this.host = parsed.hostname || '127.0.0.1';
+    this.port = parsed.port ? Number.parseInt(parsed.port, 10) : 6379;
+    this.username = parsed.username ? decodeURIComponent(parsed.username) : null;
+    this.password = parsed.password ? decodeURIComponent(parsed.password) : null;
+    const pathDb = parsed.pathname.replace(/^\/+/, '');
+    this.dbIndex = pathDb ? Number.parseInt(pathDb, 10) || 0 : 0;
+    this.timeoutMs = options.timeoutMs ?? 1_500;
+  }
+
+  public async sendCommand(args: readonly string[]): Promise<RespValue> {
+    const commandsToRun: (readonly string[])[] = [];
+    if (this.password) {
+      if (this.username && this.username !== 'default') {
+        commandsToRun.push(['AUTH', this.username, this.password]);
+      } else {
+        commandsToRun.push(['AUTH', this.password]);
+      }
+    }
+    if (this.dbIndex > 0) {
+      commandsToRun.push(['SELECT', String(this.dbIndex)]);
+    }
+    commandsToRun.push(args);
+
+    const payload = Buffer.concat(commandsToRun.map((cmd) => encodeRespCommand(cmd)));
+    const expectedReplies = commandsToRun.length;
+
+    return new Promise<RespValue>((resolve, reject) => {
+      let settled = false;
+      let recvBuffer = Buffer.alloc(0);
+
+      const socket = this.useTls
+        ? tls.connect({ host: this.host, port: this.port, rejectUnauthorized: false })
+        : net.createConnection({ host: this.host, port: this.port });
+
+      const finish = (err: Error | null, result?: RespValue) => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        if (err) {
+          reject(err);
+        } else {
+          resolve(result ?? null);
+        }
+      };
+
+      socket.setTimeout(this.timeoutMs, () => {
+        finish(new Error(`Redis socket timeout after ${this.timeoutMs}ms`));
+      });
+
+      socket.on('error', (err) => {
+        finish(err);
+      });
+
+      socket.on('connect', () => {
+        socket.write(payload);
+      });
+
+      socket.on('data', (chunk: Buffer) => {
+        recvBuffer = Buffer.concat([recvBuffer, chunk]);
+        try {
+          let offset = 0;
+          let lastValue: RespValue = null;
+          for (let i = 0; i < expectedReplies; i += 1) {
+            const frame = parseRespFrame(recvBuffer, offset);
+            if (!frame) {
+              return;
+            }
+            if (frame.isError) {
+              finish(new Error(`Redis error: ${String(frame.value)}`));
+              return;
+            }
+            lastValue = frame.value;
+            offset = frame.nextOffset;
+          }
+          finish(null, lastValue);
+        } catch (err) {
+          finish(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+    });
+  }
+
+  public async get(key: string): Promise<string | null> {
+    const val = await this.sendCommand(['GET', key]);
+    return typeof val === 'string' ? val : null;
+  }
+
+  public async setEx(key: string, value: string, ttlSeconds: number): Promise<void> {
+    const cleanTtl = assertPositiveTtl(ttlSeconds);
+    await this.sendCommand(['SET', key, value, 'EX', String(cleanTtl)]);
+  }
+
+  public async setNxEx(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const cleanTtl = assertPositiveTtl(ttlSeconds);
+    const res = await this.sendCommand(['SET', key, value, 'NX', 'EX', String(cleanTtl)]);
+    return res === 'OK';
+  }
+
+  public async del(key: string): Promise<number> {
+    const res = await this.sendCommand(['DEL', key]);
+    return typeof res === 'number' ? res : 0;
+  }
+
+  public async delIfEquals(key: string, expectedValue: string): Promise<boolean> {
+    const current = await this.get(key);
+    if (current !== expectedValue) {
+      return false;
+    }
+    const deleted = await this.del(key);
+    return deleted > 0;
+  }
+
+  public async incrWithTtl(
+    key: string,
+    ttlSeconds: number,
+  ): Promise<{ readonly count: number; readonly ttlSeconds: number }> {
+    const cleanTtl = assertPositiveTtl(ttlSeconds);
+    const countVal = await this.sendCommand(['INCR', key]);
+    const count = typeof countVal === 'number' ? countVal : Number(countVal) || 1;
+    if (count === 1) {
+      await this.sendCommand(['EXPIRE', key, String(cleanTtl)]);
+    }
+    return { count, ttlSeconds: cleanTtl };
+  }
+
+  public async hSet(key: string, fields: Record<string, string>): Promise<number> {
+    const entries = Object.entries(fields);
+    if (entries.length === 0) {
+      return 0;
+    }
+    const cmd: string[] = ['HSET', key];
+    for (const [k, v] of entries) {
+      cmd.push(k, v);
+    }
+    const res = await this.sendCommand(cmd);
+    return typeof res === 'number' ? res : entries.length;
+  }
+
+  public async hGetAll(key: string): Promise<Record<string, string>> {
+    const res = await this.sendCommand(['HGETALL', key]);
+    const out: Record<string, string> = {};
+    if (Array.isArray(res)) {
+      for (let i = 0; i + 1 < res.length; i += 2) {
+        const k = res[i];
+        const v = res[i + 1];
+        if (typeof k === 'string' && typeof v === 'string') {
+          out[k] = v;
+        }
+      }
+    }
+    return out;
+  }
+
+  public async hIncrByWithTtl(
+    key: string,
+    field: string,
+    increment: number,
+    ttlSeconds: number,
+  ): Promise<number> {
+    const cleanTtl = assertPositiveTtl(ttlSeconds);
+    const res = await this.sendCommand(['HINCRBY', key, field, String(increment)]);
+    await this.sendCommand(['EXPIRE', key, String(cleanTtl)]);
+    return typeof res === 'number' ? res : Number(res) || increment;
+  }
+
+  public async hGet(key: string, field: string): Promise<string | null> {
+    const res = await this.sendCommand(['HGET', key, field]);
+    return typeof res === 'string' ? res : null;
+  }
+
+  public async expire(key: string, ttlSeconds: number): Promise<boolean> {
+    const cleanTtl = assertPositiveTtl(ttlSeconds);
+    const res = await this.sendCommand(['EXPIRE', key, String(cleanTtl)]);
+    return res === 1 || res === '1';
+  }
+
+  public async close(): Promise<void> {
+    // Connections are per-command short-lived or pooled on demand
+  }
+}
+
+/**
+ * Deterministic TTL-enforcing in-memory `RedisClient` implementation.
+ */
+export class InMemoryRedisClient implements RedisClient {
+  private readonly strings = new Map<string, { value: string; expiresAtMs: number }>();
+  private readonly hashes = new Map<
+    string,
+    { fields: Map<string, string>; expiresAtMs: number }
+  >();
+  private readonly nowFn: () => number;
+
+  constructor(nowFn: () => number = () => Date.now()) {
+    this.nowFn = nowFn;
+  }
+
+  private getActiveString(key: string): { value: string; expiresAtMs: number } | null {
+    const entry = this.strings.get(key);
+    if (!entry) return null;
+    if (this.nowFn() >= entry.expiresAtMs) {
+      this.strings.delete(key);
+      return null;
+    }
+    return entry;
+  }
+
+  private getActiveHash(
+    key: string,
+  ): { fields: Map<string, string>; expiresAtMs: number } | null {
+    const entry = this.hashes.get(key);
+    if (!entry) return null;
+    if (this.nowFn() >= entry.expiresAtMs) {
+      this.hashes.delete(key);
+      return null;
+    }
+    return entry;
+  }
+
+  public async get(key: string): Promise<string | null> {
+    return this.getActiveString(key)?.value ?? null;
+  }
+
+  public async setEx(key: string, value: string, ttlSeconds: number): Promise<void> {
+    const cleanTtl = assertPositiveTtl(ttlSeconds);
+    this.strings.set(key, {
+      value,
+      expiresAtMs: this.nowFn() + cleanTtl * 1000,
+    });
+  }
+
+  public async setNxEx(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const cleanTtl = assertPositiveTtl(ttlSeconds);
+    if (this.getActiveString(key)) {
+      return false;
+    }
+    this.strings.set(key, {
+      value,
+      expiresAtMs: this.nowFn() + cleanTtl * 1000,
+    });
+    return true;
+  }
+
+  public async del(key: string): Promise<number> {
+    const s = this.strings.delete(key);
+    const h = this.hashes.delete(key);
+    return s || h ? 1 : 0;
+  }
+
+  public async delIfEquals(key: string, expectedValue: string): Promise<boolean> {
+    const active = this.getActiveString(key);
+    if (!active || active.value !== expectedValue) {
+      return false;
+    }
+    this.strings.delete(key);
+    return true;
+  }
+
+  public async incrWithTtl(
+    key: string,
+    ttlSeconds: number,
+  ): Promise<{ readonly count: number; readonly ttlSeconds: number }> {
+    const cleanTtl = assertPositiveTtl(ttlSeconds);
+    const active = this.getActiveString(key);
+    if (!active) {
+      this.strings.set(key, {
+        value: '1',
+        expiresAtMs: this.nowFn() + cleanTtl * 1000,
+      });
+      return { count: 1, ttlSeconds: cleanTtl };
+    }
+    const nextCount = (Number.parseInt(active.value, 10) || 0) + 1;
+    active.value = String(nextCount);
+    const remainingTtl = Math.max(1, Math.ceil((active.expiresAtMs - this.nowFn()) / 1000));
+    return { count: nextCount, ttlSeconds: remainingTtl };
+  }
+
+  public async hSet(key: string, fields: Record<string, string>): Promise<number> {
+    let active = this.getActiveHash(key);
+    if (!active) {
+      active = {
+        fields: new Map<string, string>(),
+        expiresAtMs: this.nowFn() + REDIS_TTL_SECONDS.SESSION_SLIDING * 1000,
+      };
+      this.hashes.set(key, active);
+    }
+    let added = 0;
+    for (const [k, v] of Object.entries(fields)) {
+      if (!active.fields.has(k)) added += 1;
+      active.fields.set(k, v);
+    }
+    return added;
+  }
+
+  public async hGetAll(key: string): Promise<Record<string, string>> {
+    const active = this.getActiveHash(key);
+    if (!active) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of active.fields.entries()) {
+      out[k] = v;
+    }
+    return out;
+  }
+
+  public async hIncrByWithTtl(
+    key: string,
+    field: string,
+    increment: number,
+    ttlSeconds: number,
+  ): Promise<number> {
+    const cleanTtl = assertPositiveTtl(ttlSeconds);
+    let active = this.getActiveHash(key);
+    if (!active) {
+      active = {
+        fields: new Map<string, string>(),
+        expiresAtMs: this.nowFn() + cleanTtl * 1000,
+      };
+      this.hashes.set(key, active);
+    }
+    const prev = Number.parseInt(active.fields.get(field) ?? '0', 10) || 0;
+    const next = prev + increment;
+    active.fields.set(field, String(next));
+    return next;
+  }
+
+  public async hGet(key: string, field: string): Promise<string | null> {
+    const active = this.getActiveHash(key);
+    return active?.fields.get(field) ?? null;
+  }
+
+  public async expire(key: string, ttlSeconds: number): Promise<boolean> {
+    const cleanTtl = assertPositiveTtl(ttlSeconds);
+    const activeHash = this.getActiveHash(key);
+    if (activeHash) {
+      activeHash.expiresAtMs = this.nowFn() + cleanTtl * 1000;
+      return true;
+    }
+    const activeStr = this.getActiveString(key);
+    if (activeStr) {
+      activeStr.expiresAtMs = this.nowFn() + cleanTtl * 1000;
+      return true;
+    }
+    return false;
+  }
+
+  public async close(): Promise<void> {}
+}
+
+/**
+ * Production Redis client wrapper that executes commands against `RespRedisClient` (`redis://` / `rediss://`)
+ * and falls back cleanly to `InMemoryRedisClient` when running in an environment where no Redis daemon is reachable.
+ */
+export class ResilientRedisClient implements RedisClient {
+  private readonly primary: RespRedisClient;
+  private readonly fallback: InMemoryRedisClient;
+
+  constructor(redisUrl: string, options: { readonly timeoutMs?: number } = {}) {
+    this.primary = new RespRedisClient(redisUrl, options);
+    this.fallback = new InMemoryRedisClient();
+  }
+
+  private async runWithFallback<T>(
+    primaryOp: () => Promise<T>,
+    fallbackOp: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await primaryOp();
+    } catch {
+      return fallbackOp();
+    }
+  }
+
+  public get(key: string): Promise<string | null> {
+    return this.runWithFallback(
+      () => this.primary.get(key),
+      () => this.fallback.get(key),
+    );
+  }
+
+  public setEx(key: string, value: string, ttlSeconds: number): Promise<void> {
+    return this.runWithFallback(
+      async () => {
+        await this.primary.setEx(key, value, ttlSeconds);
+        await this.fallback.setEx(key, value, ttlSeconds);
+      },
+      () => this.fallback.setEx(key, value, ttlSeconds),
+    );
+  }
+
+  public setNxEx(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    return this.runWithFallback(
+      () => this.primary.setNxEx(key, value, ttlSeconds),
+      () => this.fallback.setNxEx(key, value, ttlSeconds),
+    );
+  }
+
+  public del(key: string): Promise<number> {
+    return this.runWithFallback(
+      async () => {
+        const res = await this.primary.del(key);
+        await this.fallback.del(key);
+        return res;
+      },
+      () => this.fallback.del(key),
+    );
+  }
+
+  public delIfEquals(key: string, expectedValue: string): Promise<boolean> {
+    return this.runWithFallback(
+      () => this.primary.delIfEquals(key, expectedValue),
+      () => this.fallback.delIfEquals(key, expectedValue),
+    );
+  }
+
+  public incrWithTtl(
+    key: string,
+    ttlSeconds: number,
+  ): Promise<{ readonly count: number; readonly ttlSeconds: number }> {
+    return this.runWithFallback(
+      () => this.primary.incrWithTtl(key, ttlSeconds),
+      () => this.fallback.incrWithTtl(key, ttlSeconds),
+    );
+  }
+
+  public hSet(key: string, fields: Record<string, string>): Promise<number> {
+    return this.runWithFallback(
+      async () => {
+        const count = await this.primary.hSet(key, fields);
+        await this.fallback.hSet(key, fields);
+        return count;
+      },
+      () => this.fallback.hSet(key, fields),
+    );
+  }
+
+  public hGetAll(key: string): Promise<Record<string, string>> {
+    return this.runWithFallback(
+      () => this.primary.hGetAll(key),
+      () => this.fallback.hGetAll(key),
+    );
+  }
+
+  public hIncrByWithTtl(
+    key: string,
+    field: string,
+    increment: number,
+    ttlSeconds: number,
+  ): Promise<number> {
+    return this.runWithFallback(
+      () => this.primary.hIncrByWithTtl(key, field, increment, ttlSeconds),
+      () => this.fallback.hIncrByWithTtl(key, field, increment, ttlSeconds),
+    );
+  }
+
+  public hGet(key: string, field: string): Promise<string | null> {
+    return this.runWithFallback(
+      () => this.primary.hGet(key, field),
+      () => this.fallback.hGet(key, field),
+    );
+  }
+
+  public expire(key: string, ttlSeconds: number): Promise<boolean> {
+    return this.runWithFallback(
+      async () => {
+        const ok = await this.primary.expire(key, ttlSeconds);
+        await this.fallback.expire(key, ttlSeconds);
+        return ok;
+      },
+      () => this.fallback.expire(key, ttlSeconds),
+    );
+  }
+
+  public async close(): Promise<void> {
+    await this.primary.close();
+    await this.fallback.close();
+  }
+}
+
+export function createRedisClientFromUrl(
+  redisUrl?: string,
+  options?: { readonly forceInMemory?: boolean; readonly timeoutMs?: number },
+): RedisClient {
+  if (options?.forceInMemory || !redisUrl) {
+    return new InMemoryRedisClient();
+  }
+  return new ResilientRedisClient(redisUrl, { timeoutMs: options?.timeoutMs ?? 600 });
+}
+

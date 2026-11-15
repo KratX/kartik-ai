@@ -400,14 +400,100 @@ function mapConversationRow(row: ConversationRow): ConversationRecord {
   });
 }
 
+interface MessageRow {
+  message_id: string;
+  conversation_id: string;
+  user_id: string;
+  request_id: string;
+  role: MessageRecord['role'];
+  content: string;
+  agent_used: MessageRecord['agentUsed'];
+  attachment_file_ids: readonly string[] | string;
+  artifact_ids: readonly string[] | string;
+  citations: readonly MessageCitation[] | string;
+  created_at: string | Date;
+}
+
+interface AgentRunRow {
+  run_id: string;
+  request_id: string;
+  trace_id: string;
+  user_id: string;
+  conversation_id: string;
+  user_message_id: string;
+  assistant_message_id: string | null;
+  agent: AgentRunRecord['agent'];
+  operation: AgentRunRecord['operation'];
+  reservation_id: string | null;
+  reserved_credits: number;
+  settled_credits: number | null;
+  state: AgentRunState;
+  payload_fingerprint: string;
+  error_code: string | null;
+  created_at: string | Date;
+  updated_at: string | Date;
+}
+
+function parseJsonArray<T>(val: readonly T[] | string | null | undefined): readonly T[] {
+  if (!val) return Object.freeze([]);
+  if (typeof val === 'string') {
+    try {
+      const parsed = JSON.parse(val) as T[];
+      return Object.freeze(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      return Object.freeze([]);
+    }
+  }
+  return Object.freeze([...val]);
+}
+
+function mapMessageRow(row: MessageRow): MessageRecord {
+  const toIso = (val: string | Date) =>
+    val instanceof Date ? val.toISOString() : String(val);
+  return Object.freeze({
+    messageId: row.message_id,
+    conversationId: row.conversation_id,
+    userId: row.user_id,
+    requestId: row.request_id,
+    role: row.role,
+    content: row.content,
+    agentUsed: row.agent_used ?? null,
+    attachmentFileIds: parseJsonArray<string>(row.attachment_file_ids),
+    artifactIds: parseJsonArray<string>(row.artifact_ids),
+    citations: parseJsonArray<MessageCitation>(row.citations),
+    createdAt: toIso(row.created_at),
+  });
+}
+
+function mapAgentRunRow(row: AgentRunRow): AgentRunRecord {
+  const toIso = (val: string | Date) =>
+    val instanceof Date ? val.toISOString() : String(val);
+  return Object.freeze({
+    runId: row.run_id,
+    requestId: row.request_id,
+    traceId: row.trace_id,
+    userId: row.user_id,
+    conversationId: row.conversation_id,
+    userMessageId: row.user_message_id,
+    assistantMessageId: row.assistant_message_id ?? null,
+    agent: row.agent,
+    operation: row.operation,
+    reservationId: row.reservation_id ?? null,
+    reservedCredits: Number(row.reserved_credits),
+    settledCredits: row.settled_credits === null ? null : Number(row.settled_credits),
+    state: row.state,
+    payloadFingerprint: row.payload_fingerprint,
+    errorCode: row.error_code ?? null,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  });
+}
+
 /**
  * PostgreSQL implementation of `ChatRepository` targeting `chat.conversations`,
  * `chat.messages`, and `chat.agent_runs` (Invariants #3 & #7).
  */
-export class PostgresChatRepository implements Pick<
-  ChatRepository,
-  'createConversation' | 'getConversationForUser' | 'updateConversationDeletionState' | 'saveMessage'
-> {
+export class PostgresChatRepository implements ChatRepository {
   private readonly db: Pick<DatabaseClient, 'query'>;
 
   constructor(db: Pick<DatabaseClient, 'query'>) {
@@ -433,17 +519,22 @@ export class PostgresChatRepository implements Pick<
         conversation.updatedAt,
       ],
     );
-    return conversation;
+    return Object.freeze({ ...conversation });
   }
 
   public async getConversationForUser(
     userId: string,
     conversationId: string,
+    options?: { readonly includePurging?: boolean },
   ): Promise<ConversationRecord> {
     const res = await this.db.query<ConversationRow>(
-      `SELECT * FROM chat.conversations
-       WHERE conversation_id = $1 AND user_id = $2 AND deletion_state = 'active'
-       LIMIT 1`,
+      options?.includePurging
+        ? `SELECT * FROM chat.conversations
+           WHERE conversation_id = $1 AND user_id = $2
+           LIMIT 1`
+        : `SELECT * FROM chat.conversations
+           WHERE conversation_id = $1 AND user_id = $2 AND deletion_state = 'active'
+           LIMIT 1`,
       [conversationId, userId],
     );
     const row = res.rows[0];
@@ -451,6 +542,66 @@ export class PostgresChatRepository implements Pick<
       throw new AppError('NOT_FOUND', 'Conversation was not found');
     }
     return mapConversationRow(row);
+  }
+
+  public async listConversationsForUser(input: {
+    readonly userId: string;
+    readonly limit?: unknown;
+    readonly cursor?: unknown;
+    readonly cursorSecret?: string;
+  }): Promise<PaginatedResult<ConversationRecord>> {
+    const scope = 'conversations:list';
+    const parsed = parsePaginationQuery(
+      { limit: input.limit, cursor: input.cursor },
+      {
+        expectedScope: scope,
+        expectedUserId: input.userId,
+        secret: input.cursorSecret,
+      },
+    );
+
+    const fetchLimit = parsed.limit + 1;
+    const res = parsed.cursor
+      ? await this.db.query<ConversationRow>(
+          `SELECT * FROM chat.conversations
+           WHERE user_id = $1
+             AND deletion_state = 'active'
+             AND (created_at, conversation_id) < ($2::timestamptz, $3)
+           ORDER BY created_at DESC, conversation_id DESC
+           LIMIT $4`,
+          [input.userId, parsed.cursor.createdAt, parsed.cursor.id, fetchLimit],
+        )
+      : await this.db.query<ConversationRow>(
+          `SELECT * FROM chat.conversations
+           WHERE user_id = $1
+             AND deletion_state = 'active'
+           ORDER BY created_at DESC, conversation_id DESC
+           LIMIT $2`,
+          [input.userId, fetchLimit],
+        );
+
+    const mapped = res.rows.map(mapConversationRow);
+    const hasMore = mapped.length > parsed.limit;
+    const slice = mapped.slice(0, parsed.limit);
+    const lastItem = slice[slice.length - 1];
+
+    const nextCursor =
+      hasMore && lastItem
+        ? encodePaginationCursor(
+            {
+              scope,
+              userId: input.userId,
+              createdAt: lastItem.createdAt,
+              id: lastItem.conversationId,
+            },
+            input.cursorSecret,
+          )
+        : null;
+
+    return Object.freeze({
+      items: Object.freeze(slice),
+      nextCursor,
+    });
   }
 
   public async updateConversationDeletionState(
@@ -474,6 +625,7 @@ export class PostgresChatRepository implements Pick<
   }
 
   public async saveMessage(message: MessageRecord): Promise<MessageRecord> {
+    await this.getConversationForUser(message.userId, message.conversationId);
     await this.db.query(
       `INSERT INTO chat.messages (
          message_id, conversation_id, user_id, request_id, role, content,
@@ -493,6 +645,230 @@ export class PostgresChatRepository implements Pick<
         message.createdAt,
       ],
     );
-    return message;
+    await this.db.query(
+      `UPDATE chat.conversations
+       SET message_count = message_count + 1,
+           last_message_at = $3,
+           updated_at = $3
+       WHERE conversation_id = $1 AND user_id = $2`,
+      [message.conversationId, message.userId, message.createdAt],
+    );
+    return Object.freeze({
+      ...message,
+      attachmentFileIds: Object.freeze([...message.attachmentFileIds]),
+      artifactIds: Object.freeze([...message.artifactIds]),
+      citations: Object.freeze([...message.citations]),
+    });
+  }
+
+  public async listMessagesForConversation(input: {
+    readonly userId: string;
+    readonly conversationId: string;
+    readonly limit?: unknown;
+    readonly cursor?: unknown;
+    readonly cursorSecret?: string;
+  }): Promise<PaginatedResult<MessageRecord>> {
+    await this.getConversationForUser(input.userId, input.conversationId);
+
+    const scope = `messages:${input.conversationId}`;
+    const parsed = parsePaginationQuery(
+      { limit: input.limit, cursor: input.cursor },
+      {
+        expectedScope: scope,
+        expectedUserId: input.userId,
+        secret: input.cursorSecret,
+      },
+    );
+
+    const fetchLimit = parsed.limit + 1;
+    const res = parsed.cursor
+      ? await this.db.query<MessageRow>(
+          `SELECT * FROM chat.messages
+           WHERE conversation_id = $1
+             AND user_id = $2
+             AND (created_at, message_id) < ($3::timestamptz, $4)
+           ORDER BY created_at DESC, message_id DESC
+           LIMIT $5`,
+          [
+            input.conversationId,
+            input.userId,
+            parsed.cursor.createdAt,
+            parsed.cursor.id,
+            fetchLimit,
+          ],
+        )
+      : await this.db.query<MessageRow>(
+          `SELECT * FROM chat.messages
+           WHERE conversation_id = $1 AND user_id = $2
+           ORDER BY created_at DESC, message_id DESC
+           LIMIT $3`,
+          [input.conversationId, input.userId, fetchLimit],
+        );
+
+    const mapped = res.rows.map(mapMessageRow);
+    const hasMore = mapped.length > parsed.limit;
+    const slice = mapped.slice(0, parsed.limit);
+    const lastItem = slice[slice.length - 1];
+
+    const nextCursor =
+      hasMore && lastItem
+        ? encodePaginationCursor(
+            {
+              scope,
+              userId: input.userId,
+              createdAt: lastItem.createdAt,
+              id: lastItem.messageId,
+            },
+            input.cursorSecret,
+          )
+        : null;
+
+    return Object.freeze({
+      items: Object.freeze(slice),
+      nextCursor,
+    });
+  }
+
+  public async listAllFileAndArtifactIdsForConversation(
+    userId: string,
+    conversationId: string,
+  ): Promise<{
+    readonly fileIds: readonly string[];
+    readonly artifactIds: readonly string[];
+  }> {
+    await this.getConversationForUser(userId, conversationId, {
+      includePurging: true,
+    });
+
+    const res = await this.db.query<
+      Pick<MessageRow, 'attachment_file_ids' | 'artifact_ids'>
+    >(
+      `SELECT attachment_file_ids, artifact_ids
+       FROM chat.messages
+       WHERE conversation_id = $1 AND user_id = $2`,
+      [conversationId, userId],
+    );
+
+    const fileIdSet = new Set<string>();
+    const artifactIdSet = new Set<string>();
+
+    for (const row of res.rows) {
+      for (const fid of parseJsonArray<string>(row.attachment_file_ids)) {
+        fileIdSet.add(fid);
+      }
+      for (const aid of parseJsonArray<string>(row.artifact_ids)) {
+        artifactIdSet.add(aid);
+      }
+    }
+
+    return Object.freeze({
+      fileIds: Object.freeze([...fileIdSet]),
+      artifactIds: Object.freeze([...artifactIdSet]),
+    });
+  }
+
+  public async saveAgentRun(run: AgentRunRecord): Promise<AgentRunRecord> {
+    await this.db.query(
+      `INSERT INTO chat.agent_runs (
+         run_id, request_id, trace_id, user_id, conversation_id,
+         user_message_id, assistant_message_id, agent, operation,
+         reservation_id, reserved_credits, settled_credits, state,
+         payload_fingerprint, error_code, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+      [
+        run.runId,
+        run.requestId,
+        run.traceId,
+        run.userId,
+        run.conversationId,
+        run.userMessageId,
+        run.assistantMessageId,
+        run.agent,
+        run.operation,
+        run.reservationId,
+        run.reservedCredits,
+        run.settledCredits,
+        run.state,
+        run.payloadFingerprint,
+        run.errorCode,
+        run.createdAt,
+        run.updatedAt,
+      ],
+    );
+    return Object.freeze({ ...run });
+  }
+
+  public async updateAgentRun(
+    requestId: string,
+    patch: {
+      readonly state?: AgentRunState;
+      readonly reservationId?: string | null;
+      readonly reservedCredits?: number;
+      readonly settledCredits?: number | null;
+      readonly assistantMessageId?: string | null;
+      readonly errorCode?: string | null;
+      readonly updatedAt?: string;
+    },
+  ): Promise<AgentRunRecord> {
+    const existingRes = await this.db.query<AgentRunRow>(
+      `SELECT * FROM chat.agent_runs WHERE request_id = $1 LIMIT 1`,
+      [requestId],
+    );
+    const existingRow = existingRes.rows[0];
+    if (!existingRow) {
+      throw new AppError('NOT_FOUND', `AgentRun for requestId "${requestId}" was not found`);
+    }
+    const existing = mapAgentRunRow(existingRow);
+    const updated: AgentRunRecord = Object.freeze({
+      ...existing,
+      ...(patch.state !== undefined ? { state: patch.state } : {}),
+      ...(patch.reservationId !== undefined ? { reservationId: patch.reservationId } : {}),
+      ...(patch.reservedCredits !== undefined ? { reservedCredits: patch.reservedCredits } : {}),
+      ...(patch.settledCredits !== undefined ? { settledCredits: patch.settledCredits } : {}),
+      ...(patch.assistantMessageId !== undefined
+        ? { assistantMessageId: patch.assistantMessageId }
+        : {}),
+      ...(patch.errorCode !== undefined ? { errorCode: patch.errorCode } : {}),
+      updatedAt: patch.updatedAt ?? new Date().toISOString(),
+    });
+
+    await this.db.query(
+      `UPDATE chat.agent_runs
+       SET state = $2,
+           reservation_id = $3,
+           reserved_credits = $4,
+           settled_credits = $5,
+           assistant_message_id = $6,
+           error_code = $7,
+           updated_at = $8
+       WHERE request_id = $1`,
+      [
+        requestId,
+        updated.state,
+        updated.reservationId,
+        updated.reservedCredits,
+        updated.settledCredits,
+        updated.assistantMessageId,
+        updated.errorCode,
+        updated.updatedAt,
+      ],
+    );
+
+    return updated;
+  }
+
+  public async getAgentRunByRequestId(
+    userId: string,
+    requestId: string,
+  ): Promise<AgentRunRecord | null> {
+    const res = await this.db.query<AgentRunRow>(
+      `SELECT * FROM chat.agent_runs
+       WHERE request_id = $1 AND user_id = $2
+       LIMIT 1`,
+      [requestId, userId],
+    );
+    const row = res.rows[0];
+    return row ? mapAgentRunRow(row) : null;
   }
 }
+

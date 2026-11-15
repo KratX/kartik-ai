@@ -15,13 +15,20 @@ packages:
 # with ERR_PNPM_IGNORED_BUILDS rather than silently skipping its build.
 allowBuilds:
   esbuild: true # Vite / bundler step
+  protobufjs: true # Firebase / gRPC transitive dependency
+  "@firebase/util": true
+  "@google/genai": true
+  "@scarf/scarf": false
 
 # Refuse anything published in the last 24 hours unless explicitly excluded.
 # Override per package with minimumReleaseAgeExclude, never globally.
 minimumReleaseAge: 1440
 
-# CI still pins this explicitly with --frozen-lockfile.
-frozenLockfile: true
+# Allow local pnpm install / pnpm typecheck to sync lockfile cleanly.
+frozenLockfile: false
+
+# Hoist dependencies so workspace packages resolve root @types/node, react, pg, express, and vite cleanly.
+nodeLinker: hoisted
 
 # The React ecosystem publishes peer ranges that will never agree.
 strictPeerDependencies: false

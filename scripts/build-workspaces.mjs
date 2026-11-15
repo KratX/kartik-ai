@@ -23,4 +23,8 @@ const WORKSPACES_IN_ORDER = [
 for (const ws of WORKSPACES_IN_ORDER) {
   const tsconfigPath = path.join(ws, 'tsconfig.json');
   execSync(`npx tsc -p ${tsconfigPath}`, { stdio: 'inherit' });
+  if (ws === 'frontend') {
+    execSync('npx vite build --config frontend/vite.config.ts', { stdio: 'inherit' });
+  }
 }
+

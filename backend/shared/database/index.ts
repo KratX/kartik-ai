@@ -268,3 +268,198 @@ export async function runForwardMigrations(
     { schema: validSchema },
   );
 }
+
+export interface ObjectDatabasePoolConfig {
+  readonly host: string;
+  readonly user: string;
+  readonly password?: string;
+  readonly database: string;
+  readonly port?: number;
+  readonly schema: DatabaseSchemaName;
+  readonly max?: number;
+  readonly idleTimeoutMillis?: number;
+  readonly connectionTimeoutMillis?: number;
+}
+
+export interface UnderlyingPgClientLike {
+  query(sql: string, values?: readonly unknown[]): Promise<{
+    readonly rows?: readonly unknown[];
+    readonly rowCount?: number | null;
+  }>;
+  release(): void;
+}
+
+export interface UnderlyingPgPoolLike {
+  connect(): Promise<UnderlyingPgClientLike>;
+  query(sql: string, values?: readonly unknown[]): Promise<{
+    readonly rows?: readonly unknown[];
+    readonly rowCount?: number | null;
+  }>;
+  end(): Promise<void>;
+  on?(event: 'error', listener: (err: Error) => void): void;
+}
+
+/**
+ * Concrete `DatabasePool` adapter wrapping a `pg.Pool` instance with
+ * lazy on-demand query execution, schema `search_path` isolation, and sanitized error translation.
+ */
+export class PgDriverDatabasePool implements DatabasePool {
+  private readonly pool: UnderlyingPgPoolLike;
+  private readonly schema: DatabaseSchemaName;
+
+  constructor(pool: UnderlyingPgPoolLike, schema: DatabaseSchemaName) {
+    this.pool = pool;
+    this.schema = assertDatabaseSchema(schema);
+    if (typeof this.pool.on === 'function') {
+      this.pool.on('error', () => {
+        // Prevent unhandled idle client errors from crashing the process
+      });
+    }
+  }
+
+  public async connect(): Promise<DatabaseClient> {
+    try {
+      const rawClient = await this.pool.connect();
+      return {
+        query: async <TRow = QueryResultRow>(
+          sql: string,
+          params?: readonly unknown[],
+        ): Promise<DatabaseQueryResult<TRow>> => {
+          try {
+            const res = await rawClient.query(sql, params ? [...params] : undefined);
+            return {
+              rows: (res.rows ?? []) as readonly TRow[],
+              rowCount: typeof res.rowCount === 'number' ? res.rowCount : (res.rows?.length ?? 0),
+            };
+          } catch (error) {
+            if (error instanceof AppError) {
+              throw error;
+            }
+            throw new AppError('INTERNAL_ERROR', 'Database query failed. Please try again later.');
+          }
+        },
+        release: () => {
+          rawClient.release();
+        },
+      };
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      throw new AppError('INTERNAL_ERROR', 'Database connection failed. Please try again later.');
+    }
+  }
+
+  public async query<TRow = QueryResultRow>(
+    sql: string,
+    params?: readonly unknown[],
+  ): Promise<DatabaseQueryResult<TRow>> {
+    try {
+      const res = await this.pool.query(sql, params ? [...params] : undefined);
+      return {
+        rows: (res.rows ?? []) as readonly TRow[],
+        rowCount: typeof res.rowCount === 'number' ? res.rowCount : (res.rows?.length ?? 0),
+      };
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      throw new AppError('INTERNAL_ERROR', 'Database query failed. Please try again later.');
+    }
+  }
+
+  public async end(): Promise<void> {
+    await this.pool.end();
+  }
+
+  public getSchema(): DatabaseSchemaName {
+    return this.schema;
+  }
+}
+
+/**
+ * Lazily initializes a `DatabasePool` using the `pg` driver and the Object Method (`host`, `user`, `password`, `database`).
+ * Does NOT perform eager startup probes or reconnect loops.
+ */
+export function createLazyPostgresPool(options: {
+  readonly schema: DatabaseSchemaName;
+  readonly host?: string;
+  readonly user?: string;
+  readonly password?: string;
+  readonly database?: string;
+  readonly port?: number;
+  readonly connectionString?: string;
+  readonly max?: number;
+  readonly idleTimeoutMillis?: number;
+  readonly connectionTimeoutMillis?: number;
+}): DatabasePool {
+  const validSchema = assertDatabaseSchema(options.schema);
+  let resolvedPoolPromise: Promise<DatabasePool> | null = null;
+
+  const getPool = async (): Promise<DatabasePool> => {
+    if (!resolvedPoolPromise) {
+      resolvedPoolPromise = (async () => {
+        const pgModule = (await import('pg')) as {
+          default?: { Pool: new (cfg: Record<string, unknown>) => UnderlyingPgPoolLike };
+          Pool?: new (cfg: Record<string, unknown>) => UnderlyingPgPoolLike;
+        };
+        const PoolCtor = pgModule.Pool ?? pgModule.default?.Pool;
+        if (!PoolCtor) {
+          throw new AppError('INTERNAL_ERROR', 'pg.Pool constructor is unavailable');
+        }
+
+        let host = options.host ?? process.env.SQL_HOST ?? '127.0.0.1';
+        let user = options.user ?? process.env.SQL_USER ?? 'postgres';
+        let password = options.password ?? process.env.SQL_PASSWORD ?? '';
+        let database = options.database ?? process.env.SQL_DB_NAME ?? 'kartik';
+        let port = options.port ?? 5432;
+
+        if (!options.host && !process.env.SQL_HOST && options.connectionString) {
+          try {
+            const parsed = new URL(options.connectionString);
+            host = parsed.hostname || host;
+            user = decodeURIComponent(parsed.username || user);
+            password = decodeURIComponent(parsed.password || password);
+            database = parsed.pathname.replace(/^\/+/, '') || database;
+            port = parsed.port ? Number(parsed.port) : port;
+          } catch {
+            // Keep defaults if URL parse fails
+          }
+        }
+
+        const rawPool = new PoolCtor({
+          host,
+          user,
+          password,
+          database,
+          port,
+          max: options.max ?? DEFAULT_PGPOOL_MAX_CONNECTIONS,
+          idleTimeoutMillis: options.idleTimeoutMillis ?? DEFAULT_PGPOOL_IDLE_TIMEOUT_MS,
+          connectionTimeoutMillis: options.connectionTimeoutMillis ?? 15_000,
+          options: `-c search_path=${validSchema},public`,
+        });
+
+        return new PgDriverDatabasePool(rawPool, validSchema);
+      })();
+    }
+    return resolvedPoolPromise;
+  };
+
+  return {
+    connect: async () => {
+      const pool = await getPool();
+      return pool.connect();
+    },
+    query: async <TRow = QueryResultRow>(sql: string, params?: readonly unknown[]) => {
+      const pool = await getPool();
+      return pool.query<TRow>(sql, params);
+    },
+    end: async () => {
+      if (resolvedPoolPromise) {
+        const pool = await resolvedPoolPromise;
+        await pool.end();
+      }
+    },
+  };
+}
+

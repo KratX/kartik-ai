@@ -10,7 +10,10 @@
  */
 
 import crypto from 'node:crypto';
-import { InMemoryObjectStorage } from '../../backend/shared/storage/index.js';
+import os from 'node:os';
+import path from 'node:path';
+import { createObjectStorageFromEnv } from '../../backend/shared/storage/index.js';
+import { createRedisClientFromUrl } from '../../backend/shared/redis/index.js';
 import { AppError } from '../../backend/shared/errors/index.js';
 import { OPERATION_CREDIT_COSTS } from '../../backend/services/billing/src/services/credit-service.js';
 import {
@@ -20,12 +23,9 @@ import {
 import {
   AgentGraphExecutor,
   AgentSlidingWindowRateLimiter,
+  createVectorStoreFromEnv,
   DailyLiveBudgetGuard,
   FileIngestionAndArtifactService,
-  InMemoryAgentRateLimitStore,
-  InMemoryAgentRepository,
-  InMemoryDailyBudgetStore,
-  InMemoryVectorStore,
   LiveGeminiChatModelProvider,
   LiveGeminiCodingModelProvider,
   LiveGeminiEmbeddingProvider,
@@ -35,12 +35,22 @@ import {
   LiveGeminiSearchProvider,
   LiveGeminiVisionProvider,
   loadAgentConfig,
+  RedisAgentRateLimitStore,
+  RedisDailyBudgetStore,
   type AgentCitation,
   type ArtifactRecord,
   type SearchImageGalleryItem,
   type UploadedFileRecord,
 } from '../../backend/services/agent/src/index.js';
 import type { SpecialistAgentName } from '../../backend/shared/contracts/index.js';
+import {
+  DrizzleCloudSqlAgentRepository,
+  syncPlatformBillingLedgerToCloudSql,
+  syncPlatformConversationToCloudSql,
+  syncPlatformMessageToCloudSql,
+  syncPlatformPaymentOrderToCloudSql,
+} from '../db/platform-repository.ts';
+import { getOrCreateUser } from '../db/users.ts';
 
 export interface PlatformUser {
   readonly userId: string;
@@ -127,11 +137,32 @@ export interface PlatformLedgerEntry {
 }
 
 export class KartikPlatformRuntime {
-  public readonly repository = new InMemoryAgentRepository();
-  public readonly objectStorage = new InMemoryObjectStorage();
-  public readonly vectorStore = new InMemoryVectorStore();
+  private readonly redisClient = createRedisClientFromUrl(process.env.REDIS_URL);
+  public readonly repository = new DrizzleCloudSqlAgentRepository();
+  public readonly objectStorage = createObjectStorageFromEnv(
+    process.env.NODE_ENV === 'test'
+      ? {
+          ...process.env,
+          OBJECT_STORAGE_ROOT_DIR: path.join(
+            os.tmpdir(),
+            `kartik-platform-objects-${process.pid}-${Date.now()}`,
+          ),
+        }
+      : process.env,
+  );
+  public readonly vectorStore = createVectorStoreFromEnv(
+    process.env.NODE_ENV === 'test'
+      ? {
+          ...process.env,
+          QDRANT_STORAGE_FILE: path.join(
+            os.tmpdir(),
+            `kartik-platform-vectors-${process.pid}-${Date.now()}.json`,
+          ),
+        }
+      : process.env,
+  );
   public readonly rateLimiter = new AgentSlidingWindowRateLimiter({
-    store: new InMemoryAgentRateLimitStore(),
+    store: new RedisAgentRateLimitStore(this.redisClient),
     windowSeconds: 60,
   });
   public readonly searchProvider = new LiveGeminiSearchProvider();
@@ -201,7 +232,7 @@ export class KartikPlatformRuntime {
     });
 
     const budgetGuard = new DailyLiveBudgetGuard({
-      store: new InMemoryDailyBudgetStore(),
+      store: new RedisDailyBudgetStore(this.redisClient),
       dailyLimit: 100,
       mockAiDefault: false,
     });
@@ -287,17 +318,28 @@ export class KartikPlatformRuntime {
   }
 
   public loginWithGoogle(input?: {
+    readonly uid?: string;
     readonly email?: string;
     readonly displayName?: string;
+    readonly avatarUrl?: string | null;
   }) {
     this.isAuthenticated = true;
-    if (input?.email || input?.displayName) {
+    if (input?.uid || input?.email || input?.displayName) {
       this.currentUser = {
         ...this.currentUser,
+        userId: input.uid?.trim() || this.currentUser.userId,
         email: input.email?.trim() || this.currentUser.email,
         displayName: input.displayName?.trim() || this.currentUser.displayName,
+        avatarUrl: input.avatarUrl ?? this.currentUser.avatarUrl,
       };
     }
+    void getOrCreateUser(
+      this.currentUser.userId,
+      this.currentUser.email,
+      this.currentUser.displayName,
+      this.currentUser.avatarUrl,
+    ).catch(() => undefined);
+
     return {
       isAuthenticated: true,
       sessionId: `sess_${crypto.randomBytes(12).toString('hex')}`,
@@ -352,6 +394,15 @@ export class KartikPlatformRuntime {
     };
     this.conversations.set(convId, record);
     this.messagesByConversation.set(convId, []);
+    void syncPlatformConversationToCloudSql({
+      conversationId: record.conversationId,
+      userId: this.currentUser.userId,
+      email: this.currentUser.email,
+      displayName: this.currentUser.displayName,
+      title: record.title,
+      deletionState: 'active',
+      messageCount: 0,
+    }).catch(() => undefined);
     return record;
   }
 
@@ -404,6 +455,16 @@ export class KartikPlatformRuntime {
 
     conv.deletionState = 'deleted';
     this.messagesByConversation.delete(conversationId);
+
+    void syncPlatformConversationToCloudSql({
+      conversationId: conv.conversationId,
+      userId: this.currentUser.userId,
+      email: this.currentUser.email,
+      displayName: this.currentUser.displayName,
+      title: conv.title,
+      deletionState: 'deleted',
+      messageCount: 0,
+    }).catch(() => undefined);
 
     return {
       conversationId,
@@ -544,14 +605,15 @@ export class KartikPlatformRuntime {
 
     // Deduct credits atomically after durable execution
     this.availableCredits -= creditCost;
-    this.ledger.unshift({
+    const ledgerEntry: PlatformLedgerEntry = {
       entryId: `led_${crypto.randomBytes(6).toString('hex')}`,
       timestamp: new Date().toISOString(),
       description: `${execResult.agent.toUpperCase()} Agent (${billingOp})`,
       deltaCredits: -creditCost,
       balanceAfter: this.availableCredits,
       requestId: input.requestId,
-    });
+    };
+    this.ledger.unshift(ledgerEntry);
 
     const hydratedArtifacts: ArtifactRecord[] = [];
     for (const artId of execResult.artifactIds ?? []) {
@@ -589,6 +651,53 @@ export class KartikPlatformRuntime {
       conv.title = input.prompt.trim().slice(0, 56) || conv.title;
     }
     conv.updatedAt = assistantMessage.createdAt;
+
+    void (async () => {
+      await syncPlatformConversationToCloudSql({
+        conversationId: conv.conversationId,
+        userId: this.currentUser.userId,
+        email: this.currentUser.email,
+        displayName: this.currentUser.displayName,
+        title: conv.title,
+        deletionState: 'active',
+        messageCount: list.length,
+      });
+      await syncPlatformMessageToCloudSql({
+        messageId: userMessage.messageId,
+        conversationId: conv.conversationId,
+        userId: this.currentUser.userId,
+        role: 'user',
+        content: userMessage.content,
+        requestId: input.requestId,
+        attachedFileIdsJson: input.attachmentFileIds ?? [],
+      });
+      await syncPlatformMessageToCloudSql({
+        messageId: assistantMessage.messageId,
+        conversationId: conv.conversationId,
+        userId: this.currentUser.userId,
+        role: 'assistant',
+        content: assistantMessage.content,
+        agentUsed: assistantMessage.agentUsed,
+        requestId: input.requestId,
+        creditsCharged: creditCost,
+        idempotentReplay: false,
+        citationsJson: assistantMessage.citations ?? [],
+        searchImagesJson: assistantMessage.searchImages ?? [],
+        artifactIdsJson: assistantMessage.artifactIds ?? [],
+      });
+      await syncPlatformBillingLedgerToCloudSql({
+        userId: this.currentUser.userId,
+        email: this.currentUser.email,
+        displayName: this.currentUser.displayName,
+        planId: this.currentUser.planId,
+        availableCredits: this.availableCredits,
+        entryId: ledgerEntry.entryId,
+        requestId: ledgerEntry.requestId,
+        description: ledgerEntry.description,
+        deltaCredits: ledgerEntry.deltaCredits,
+        balanceAfter: ledgerEntry.balanceAfter,
+      });
+    })().catch(() => undefined);
 
     const turnResult = {
       conversationId: conv.conversationId,
@@ -638,6 +747,18 @@ export class KartikPlatformRuntime {
       userId: this.currentUser.userId,
       settled: false,
     });
+
+    void syncPlatformPaymentOrderToCloudSql({
+      orderId,
+      userId: this.currentUser.userId,
+      email: this.currentUser.email,
+      displayName: this.currentUser.displayName,
+      planId: plan.planId,
+      requestId: input.requestId,
+      amountPaise: plan.amountPaise,
+      creditsGranted: plan.creditsGranted,
+      settled: false,
+    }).catch(() => undefined);
 
     return {
       orderId,
@@ -692,14 +813,42 @@ export class KartikPlatformRuntime {
       planId: order.plan.planId,
     };
 
-    this.ledger.unshift({
+    const ledgerEntry: PlatformLedgerEntry = {
       entryId: `led_${crypto.randomBytes(6).toString('hex')}`,
       timestamp: new Date().toISOString(),
       description: `Razorpay Purchase — ${order.plan.name} (${order.plan.amountInrLabel}, ${paymentId})`,
       deltaCredits: order.plan.creditsGranted,
       balanceAfter: this.availableCredits,
       requestId: input.requestId,
-    });
+    };
+    this.ledger.unshift(ledgerEntry);
+
+    void (async () => {
+      await syncPlatformPaymentOrderToCloudSql({
+        orderId: order.orderId,
+        userId: this.currentUser.userId,
+        email: this.currentUser.email,
+        displayName: this.currentUser.displayName,
+        planId: order.plan.planId,
+        requestId: input.requestId,
+        amountPaise: order.plan.amountPaise,
+        creditsGranted: order.plan.creditsGranted,
+        paymentId,
+        settled: true,
+      });
+      await syncPlatformBillingLedgerToCloudSql({
+        userId: this.currentUser.userId,
+        email: this.currentUser.email,
+        displayName: this.currentUser.displayName,
+        planId: this.currentUser.planId,
+        availableCredits: this.availableCredits,
+        entryId: ledgerEntry.entryId,
+        requestId: ledgerEntry.requestId,
+        description: ledgerEntry.description,
+        deltaCredits: ledgerEntry.deltaCredits,
+        balanceAfter: ledgerEntry.balanceAfter,
+      });
+    })().catch(() => undefined);
 
     return {
       verified: true,

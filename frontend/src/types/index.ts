@@ -151,3 +151,126 @@ export interface UploadedFileSummary {
   readonly sizeBytes: number;
   readonly signedDownloadUrl?: string;
 }
+
+export type UploadedFileStatus = 'ready' | 'deleted';
+
+export interface UploadedFileRecord {
+  readonly fileId: string;
+  readonly userId: string;
+  readonly originalFilename: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly storageKey: string;
+  readonly sha256Hex: string;
+  readonly pageCount: number | null;
+  readonly chunkCount: number;
+  readonly status: UploadedFileStatus;
+  readonly createdAt: string;
+}
+
+export interface CodingArtifactFile {
+  readonly path: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly content?: string;
+}
+
+export type ArtifactType =
+  | 'code_bundle'
+  | 'pdf_document'
+  | 'ppt_presentation'
+  | 'generated_image';
+
+export interface ArtifactRecord {
+  readonly artifactId: string;
+  readonly userId: string;
+  readonly requestId: string;
+  readonly conversationId: string;
+  readonly artifactType: ArtifactType;
+  readonly title: string;
+  readonly entryFile: string;
+  readonly storageKey: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly filesManifest: readonly CodingArtifactFile[];
+  readonly createdAt: string;
+}
+
+export interface SearchImageGalleryItem {
+  readonly id: string;
+  readonly title: string;
+  readonly imageUrl: string;
+  readonly sourceUrl: string;
+  readonly domain: string;
+}
+
+export interface PlatformUser {
+  readonly userId: string;
+  readonly email: string;
+  readonly displayName: string;
+  readonly avatarUrl: string | null;
+  readonly planId: 'plan_free' | 'plan_starter_199' | 'plan_pro_499';
+}
+
+export interface PlatformMessage {
+  readonly messageId: string;
+  readonly conversationId: string;
+  readonly role: 'user' | 'assistant';
+  readonly content: string;
+  readonly agentUsed?: SpecialistAgentName;
+  readonly requestId?: string;
+  readonly creditsCharged?: number;
+  readonly idempotentReplay?: boolean;
+  readonly citations?: readonly MessageCitation[];
+  readonly searchImages?: readonly SearchImageGalleryItem[];
+  readonly artifactIds?: readonly string[];
+  readonly artifacts?: readonly ArtifactRecord[];
+  readonly attachedFiles?: readonly UploadedFileRecord[];
+  readonly createdAt: string;
+}
+
+export interface PlatformConversation {
+  readonly conversationId: string;
+  readonly userId: string;
+  readonly title: string;
+  readonly deletionState: 'active' | 'deleted';
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface PlatformCreditPlan {
+  readonly planId: 'plan_starter_199' | 'plan_pro_499';
+  readonly name: string;
+  readonly badge: string;
+  readonly amountPaise: number;
+  readonly amountInrLabel: string;
+  readonly creditsGranted: number;
+  readonly features: readonly string[];
+}
+
+export interface PlatformLedgerEntry {
+  readonly entryId: string;
+  readonly timestamp: string;
+  readonly description: string;
+  readonly deltaCredits: number;
+  readonly balanceAfter: number;
+  readonly requestId: string;
+}
+
+export type ApiEnvelope<T> =
+  | {
+      readonly ok: true;
+      readonly traceId: string;
+      readonly requestId?: string;
+      readonly data: T;
+    }
+  | {
+      readonly ok: false;
+      readonly traceId: string;
+      readonly error: {
+        readonly code: string;
+        readonly message: string;
+      };
+    };
+

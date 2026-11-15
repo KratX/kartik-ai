@@ -190,7 +190,20 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
       ) as {
         scripts: Record<string, string>;
       };
-      assert.equal(pkg.scripts.build, 'tsc', `${relPkg} build must be "tsc"`);
+      if (relPkg === 'frontend/package.json') {
+        assert.equal(
+          pkg.scripts.build,
+          'tsc && vite build --config vite.config.ts',
+          'frontend/package.json build must run tsc and vite build --config vite.config.ts',
+        );
+        assert.equal(
+          pkg.scripts.dev,
+          'vite --config vite.config.ts',
+          'frontend/package.json dev must run vite --config vite.config.ts',
+        );
+      } else {
+        assert.equal(pkg.scripts.build, 'tsc', `${relPkg} build must be "tsc"`);
+      }
       assert.equal(
         pkg.scripts.typecheck,
         'tsc --noEmit',
@@ -205,6 +218,25 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
         `${relPkg} must not contain inline tsconfig.tsbuildinfo hacks`,
       );
     }
+
+    const frontendDockerfile = fs.readFileSync(
+      path.join(repoRoot, 'frontend/Dockerfile'),
+      'utf8',
+    );
+    assert.ok(frontendDockerfile.includes('frontend/vite.config.ts'));
+    assert.ok(frontendDockerfile.includes('frontend/index.html'));
+    assert.ok(
+      frontendDockerfile.includes('test -f /usr/share/nginx/html/index.html'),
+    );
+
+    const nginxConf = fs.readFileSync(
+      path.join(repoRoot, 'infra/nginx/default.conf'),
+      'utf8',
+    );
+    assert.ok(nginxConf.includes('location = /nginx-healthz'));
+    assert.ok(nginxConf.includes('location /assets/'));
+    assert.ok(nginxConf.includes('proxy_buffering off;'));
+    assert.ok(nginxConf.includes('try_files $uri $uri/ /index.html;'));
 
     const { pathToFileURL } = await import('node:url');
     const lintScriptPath = path.join(repoRoot, 'scripts/lint-workspace.mjs');

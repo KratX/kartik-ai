@@ -51,3 +51,7 @@ Thumbs.db
 !**/*.example.key
 .git-credentials
 .netrc
+firebase-applet-config.json
+.local-object-storage/
+.local-qdrant/
+public/__downloads/

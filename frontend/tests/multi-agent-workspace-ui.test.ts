@@ -44,4 +44,23 @@ describe('@kartik/frontend Multi-Agent Selector Pills & Multi-File Sandbox Assem
     assert.ok(preview.srcDoc.includes('<div id="calc">0</div>'));
     assert.ok(preview.srcDoc.includes('<\\/script>'));
   });
+
+  it('exports the deployable React 19 App component and ships frontend/index.html + frontend/vite.config.ts', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { App, FrontendApp } = await import('../src/index.js');
+
+    assert.equal(typeof App, 'function');
+    assert.equal(App, FrontendApp);
+
+    const indexHtmlPath = path.resolve(process.cwd(), 'index.html');
+    const fallbackRootHtmlPath = path.resolve(process.cwd(), 'frontend/index.html');
+    const resolvedIndexHtml = fs.existsSync(fallbackRootHtmlPath)
+      ? fallbackRootHtmlPath
+      : indexHtmlPath;
+    assert.ok(fs.existsSync(resolvedIndexHtml), 'frontend/index.html must exist');
+    const htmlContent = fs.readFileSync(resolvedIndexHtml, 'utf8');
+    assert.ok(htmlContent.includes('<div id="root"></div>'));
+    assert.ok(htmlContent.includes('/src/main.tsx'));
+  });
 });

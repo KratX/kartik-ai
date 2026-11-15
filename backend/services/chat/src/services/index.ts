@@ -225,6 +225,73 @@ export class InMemoryChatLockStore implements ChatLockStore {
   }
 }
 
+/**
+ * Production Redis-backed 24-hour Chat Idempotency store (`idem:{userId}:{requestId}`, TTL 86,400s per §5.2).
+ */
+export class RedisChatIdempotencyStore implements ChatIdempotencyStore {
+  private readonly redis: Pick<import('@kartik/shared').RedisClient, 'get' | 'setEx'>;
+
+  constructor(redis: Pick<import('@kartik/shared').RedisClient, 'get' | 'setEx'>) {
+    this.redis = redis;
+  }
+
+  public async get(key: string): Promise<ChatIdempotencyEntry | null> {
+    const raw = await this.redis.get(key);
+    if (!raw) {
+      return null;
+    }
+    try {
+      return JSON.parse(raw) as ChatIdempotencyEntry;
+    } catch {
+      return null;
+    }
+  }
+
+  public async set(
+    entry: Omit<ChatIdempotencyEntry, 'expiresAtMs'>,
+  ): Promise<void> {
+    const fullEntry: ChatIdempotencyEntry = Object.freeze({
+      ...entry,
+      expiresAtMs: Date.now() + entry.ttlSeconds * 1000,
+    });
+    await this.redis.setEx(entry.key, JSON.stringify(fullEntry), entry.ttlSeconds);
+  }
+}
+
+/**
+ * Production Redis-backed distributed lock store (`SET key token NX EX ttl` + token-verified release)
+ * supporting `lock:settle:{reservationId}` (5m TTL) and `lock:cleanup:{conversationId}` (10m TTL) per §5.2.
+ */
+export class RedisChatLockStore implements ChatLockStore {
+  private readonly redis: Pick<
+    import('@kartik/shared').RedisClient,
+    'get' | 'setNxEx' | 'delIfEquals'
+  >;
+
+  constructor(
+    redis: Pick<import('@kartik/shared').RedisClient, 'get' | 'setNxEx' | 'delIfEquals'>,
+  ) {
+    this.redis = redis;
+  }
+
+  public async acquire(
+    key: string,
+    token: string,
+    ttlSeconds: number,
+  ): Promise<boolean> {
+    return this.redis.setNxEx(key, token, ttlSeconds);
+  }
+
+  public async release(key: string, token: string): Promise<void> {
+    await this.redis.delIfEquals(key, token);
+  }
+
+  public async isLocked(key: string): Promise<boolean> {
+    const current = await this.redis.get(key);
+    return current !== null;
+  }
+}
+
 export interface BillingSettleResult {
   readonly reservationId: string;
   readonly requestId: string;

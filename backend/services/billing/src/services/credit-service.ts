@@ -83,6 +83,33 @@ export class InMemoryMoneyIdempotencyStore implements MoneyIdempotencyStore {
   }
 }
 
+/**
+ * Production Redis-backed 30-day money idempotency cache (`idem:{userId}:{requestId}`, TTL 2,592,000s per §5.2).
+ */
+export class RedisMoneyIdempotencyStore implements MoneyIdempotencyStore {
+  private readonly redis: Pick<import('@kartik/shared').RedisClient, 'get' | 'setEx'>;
+
+  constructor(redis: Pick<import('@kartik/shared').RedisClient, 'get' | 'setEx'>) {
+    this.redis = redis;
+  }
+
+  async get(key: string): Promise<MoneyIdempotencyRecord | null> {
+    const raw = await this.redis.get(key);
+    if (!raw) {
+      return null;
+    }
+    try {
+      return JSON.parse(raw) as MoneyIdempotencyRecord;
+    } catch {
+      return null;
+    }
+  }
+
+  async set(record: MoneyIdempotencyRecord): Promise<void> {
+    await this.redis.setEx(record.key, JSON.stringify(record), record.ttlSeconds);
+  }
+}
+
 export interface CreditSettleResponse {
   readonly reservationId: string;
   readonly requestId: string;

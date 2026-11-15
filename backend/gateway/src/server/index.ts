@@ -7,9 +7,11 @@
 import {
   createLogger,
   createManagedHttpServer,
+  createRedisClientFromUrl,
   DEV_SHARED_BOOTSTRAP_DEFAULTS,
   InMemoryRateLimitStore,
   isExecutedAsMainModule,
+  RedisRateLimitStore,
   type ExecutableServiceRouter,
   type Logger,
   type ManagedHttpServer,
@@ -105,8 +107,9 @@ export function bootstrapGatewayService(
 
   const upstreamClient =
     options.upstreamClient ?? new FetchUpstreamHttpClient(config);
+  const redisClient = createRedisClientFromUrl(config.REDIS_URL);
   const rateLimitStore =
-    options.rateLimitStore ?? new InMemoryRateLimitStore();
+    options.rateLimitStore ?? new RedisRateLimitStore(redisClient);
   const healthAggregator = new CrossServiceHealthAggregator(upstreamClient);
 
   const router = createGatewayRouter({

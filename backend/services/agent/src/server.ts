@@ -10,11 +10,16 @@
  * 2. `startAgentServer` + `isExecutedAsMainModule` auto-start with `SIGINT`/`SIGTERM` graceful shutdown.
  */
 
+import os from 'node:os';
+import path from 'node:path';
 import {
+  AppError,
   DEV_SHARED_BOOTSTRAP_DEFAULTS,
-  InMemoryObjectStorage,
+  createLazyPostgresPool,
   createLogger,
   createManagedHttpServer,
+  createObjectStorageFromEnv,
+  createRedisClientFromUrl,
   isExecutedAsMainModule,
   type Logger,
   type ManagedHttpServer,
@@ -31,24 +36,31 @@ import {
 import { loadAgentConfig, type AgentConfig } from './config/index.js';
 import { AgentGraphExecutor } from './graph/index.js';
 import type {
+  ArtifactRecord,
   ChatModelProvider,
   CodingModelProvider,
+  DocumentChunkRecord,
   EmbeddingProvider,
   ImageGenerationProvider,
   SearchProvider,
+  UploadedFileRecord,
   VectorStore,
   VisionProvider,
 } from './models/index.js';
 import { FileIngestionAndArtifactService } from './rag/index.js';
-import { InMemoryAgentRepository, type AgentRepository } from './repositories/index.js';
+import {
+  InMemoryAgentRepository,
+  PostgresAgentRepository,
+  type AgentRepository,
+} from './repositories/index.js';
 import { createAgentRouter } from './routes/index.js';
 import {
   AgentSlidingWindowRateLimiter,
-  InMemoryAgentRateLimitStore,
+  RedisAgentRateLimitStore,
 } from './services/agent-rate-limiter.js';
 import {
   DailyLiveBudgetGuard,
-  InMemoryDailyBudgetStore,
+  RedisDailyBudgetStore,
   type DailyBudgetStore,
 } from './services/budget-guard.js';
 import {
@@ -62,7 +74,6 @@ import {
   LiveGeminiVisionProvider,
 } from './services/live-gemini-providers.js';
 import {
-  InMemoryVectorStore,
   MockChatModelProvider,
   MockCodingModelProvider,
   MockEmbeddingProvider,
@@ -70,6 +81,116 @@ import {
   MockSearchProvider,
   MockVisionProvider,
 } from './services/mock-providers.js';
+import { createVectorStoreFromEnv } from './services/qdrant-vector-store.js';
+
+class ResilientAgentRepository implements AgentRepository {
+  private readonly primary: PostgresAgentRepository;
+  private readonly fallback: InMemoryAgentRepository;
+  private readonly failHard: boolean;
+  private primaryHealthy = true;
+
+  constructor(primary: PostgresAgentRepository, failHard: boolean) {
+    this.primary = primary;
+    this.fallback = new InMemoryAgentRepository();
+    this.failHard = failHard;
+  }
+
+  private async run<T>(
+    primaryFn: () => Promise<T>,
+    fallbackFn: () => Promise<T>,
+  ): Promise<T> {
+    if (this.failHard) {
+      return primaryFn();
+    }
+    if (this.primaryHealthy) {
+      try {
+        return await primaryFn();
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw err;
+        }
+        this.primaryHealthy = false;
+      }
+    }
+    return fallbackFn();
+  }
+
+  public saveFile(file: UploadedFileRecord): Promise<void> {
+    return this.run(
+      () => this.primary.saveFile(file),
+      () => this.fallback.saveFile(file),
+    );
+  }
+
+  public getFileById(userId: string, fileId: string): Promise<UploadedFileRecord | null> {
+    return this.run(
+      () => this.primary.getFileById(userId, fileId),
+      () => this.fallback.getFileById(userId, fileId),
+    );
+  }
+
+  public listFilesByUser(userId: string): Promise<readonly UploadedFileRecord[]> {
+    return this.run(
+      () => this.primary.listFilesByUser(userId),
+      () => this.fallback.listFilesByUser(userId),
+    );
+  }
+
+  public saveArtifact(artifact: ArtifactRecord): Promise<void> {
+    return this.run(
+      () => this.primary.saveArtifact(artifact),
+      () => this.fallback.saveArtifact(artifact),
+    );
+  }
+
+  public getArtifactById(userId: string, artifactId: string): Promise<ArtifactRecord | null> {
+    return this.run(
+      () => this.primary.getArtifactById(userId, artifactId),
+      () => this.fallback.getArtifactById(userId, artifactId),
+    );
+  }
+
+  public getArtifactByRequestId(
+    userId: string,
+    requestId: string,
+  ): Promise<ArtifactRecord | null> {
+    return this.run(
+      () => this.primary.getArtifactByRequestId(userId, requestId),
+      () => this.fallback.getArtifactByRequestId(userId, requestId),
+    );
+  }
+
+  public listArtifactsByConversation(
+    userId: string,
+    conversationId: string,
+  ): Promise<readonly ArtifactRecord[]> {
+    return this.run(
+      () => this.primary.listArtifactsByConversation(userId, conversationId),
+      () => this.fallback.listArtifactsByConversation(userId, conversationId),
+    );
+  }
+
+  public saveDocumentChunks(chunks: readonly DocumentChunkRecord[]): Promise<void> {
+    return this.run(
+      () => this.primary.saveDocumentChunks(chunks),
+      () => this.fallback.saveDocumentChunks(chunks),
+    );
+  }
+
+  public deleteFileMetadata(userId: string, fileId: string): Promise<boolean> {
+    return this.run(
+      () => this.primary.deleteFileMetadata(userId, fileId),
+      () => this.fallback.deleteFileMetadata(userId, fileId),
+    );
+  }
+
+  public deleteArtifactMetadata(userId: string, artifactId: string): Promise<boolean> {
+    return this.run(
+      () => this.primary.deleteArtifactMetadata(userId, artifactId),
+      () => this.fallback.deleteArtifactMetadata(userId, artifactId),
+    );
+  }
+}
 
 export interface AgentServiceBootstrapOptions {
   readonly env?: Record<string, string | undefined>;
@@ -132,7 +253,8 @@ export function buildAgentBootstrapEnv(
 export function bootstrapAgentService(
   options: AgentServiceBootstrapOptions = {},
 ): AgentServiceRuntime {
-  const config = loadAgentConfig(buildAgentBootstrapEnv(options.env ?? process.env));
+  const effectiveEnv = buildAgentBootstrapEnv(options.env ?? process.env);
+  const config = loadAgentConfig(effectiveEnv);
   const logger =
     options.logger ??
     createLogger({
@@ -140,18 +262,54 @@ export function bootstrapAgentService(
       level: config.nodeEnv === 'test' ? 'error' : 'info',
     });
 
-  const repository = options.repository ?? new InMemoryAgentRepository();
-  const objectStorage = options.objectStorage ?? new InMemoryObjectStorage();
-  const vectorStore = options.vectorStore ?? new InMemoryVectorStore();
+  const dbPool = createLazyPostgresPool({
+    schema: 'agent',
+    connectionString: config.databaseUrl,
+  });
+  const postgresAgentRepo = new PostgresAgentRepository(dbPool);
+  const redisClient = createRedisClientFromUrl(config.redisUrl);
+
+  const testRunSuffix =
+    config.nodeEnv === 'test'
+      ? `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+      : null;
+
+  const storageEnv =
+    testRunSuffix && !effectiveEnv.OBJECT_STORAGE_ROOT_DIR
+      ? {
+          ...effectiveEnv,
+          OBJECT_STORAGE_ROOT_DIR: path.join(
+            os.tmpdir(),
+            `kartik-agent-objects-${testRunSuffix}`,
+          ),
+        }
+      : effectiveEnv;
+
+  const vectorEnv =
+    testRunSuffix && !effectiveEnv.QDRANT_STORAGE_FILE
+      ? {
+          ...effectiveEnv,
+          QDRANT_STORAGE_FILE: path.join(
+            os.tmpdir(),
+            `kartik-agent-vectors-${testRunSuffix}.json`,
+          ),
+        }
+      : effectiveEnv;
+
+  const repository =
+    options.repository ??
+    new ResilientAgentRepository(postgresAgentRepo, config.nodeEnv === 'production');
+  const objectStorage = options.objectStorage ?? createObjectStorageFromEnv(storageEnv);
+  const vectorStore = options.vectorStore ?? createVectorStoreFromEnv(vectorEnv);
   const budgetGuard = new DailyLiveBudgetGuard({
-    store: options.budgetStore ?? new InMemoryDailyBudgetStore(),
+    store: options.budgetStore ?? new RedisDailyBudgetStore(redisClient),
     dailyLimit: config.dailyLiveCallBudget,
     mockAiDefault: config.mockAi,
   });
   const rateLimiter =
     options.rateLimiter ??
     new AgentSlidingWindowRateLimiter({
-      store: new InMemoryAgentRateLimitStore(),
+      store: new RedisAgentRateLimitStore(redisClient),
     });
 
   const useLiveProviders = !config.mockAi;

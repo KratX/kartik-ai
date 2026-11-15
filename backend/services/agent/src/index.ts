@@ -42,6 +42,7 @@ export {
 export {
   DailyLiveBudgetGuard,
   InMemoryDailyBudgetStore,
+  RedisDailyBudgetStore,
   type DailyBudgetStore,
   type BudgetCheckDecision,
 } from './services/budget-guard.js';
@@ -139,10 +140,20 @@ export {
 export {
   AGENT_RATE_LIMITS_PER_MINUTE,
   InMemoryAgentRateLimitStore,
+  RedisAgentRateLimitStore,
   AgentSlidingWindowRateLimiter,
   type AgentRateLimitStore,
   type AgentRateLimitDecision,
 } from './services/agent-rate-limiter.js';
+
+export {
+  chunkIdToQdrantPointUuid,
+  QdrantHttpVectorStore,
+  PersistentDiskVectorStore,
+  ResilientQdrantVectorStore,
+  createVectorStoreFromEnv,
+  type QdrantHttpVectorStoreOptions,
+} from './services/qdrant-vector-store.js';
 
 export {
   LiveGeminiChatModelProvider,

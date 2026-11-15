@@ -210,6 +210,23 @@ export class InMemoryRateLimitStore implements RateLimitCounterStore {
   }
 }
 
+/**
+ * Production Redis-backed fixed-window rate-limit store (`INCR` + `EXPIRE`) enforcing Blueprint §5.2.
+ */
+export class RedisRateLimitStore implements RateLimitCounterStore {
+  private readonly redis: Pick<import('../redis/index.js').RedisClient, 'incrWithTtl'>;
+
+  constructor(redis: Pick<import('../redis/index.js').RedisClient, 'incrWithTtl'>) {
+    this.redis = redis;
+  }
+
+  async incrementAndGet(
+    keySpec: RedisKeySpec,
+  ): Promise<{ readonly count: number; readonly ttlSeconds: number }> {
+    return this.redis.incrWithTtl(keySpec.key, keySpec.ttlSeconds);
+  }
+}
+
 export interface RateLimitMiddlewareOptions {
   readonly store: RateLimitCounterStore;
   readonly mode: 'user' | 'ip';

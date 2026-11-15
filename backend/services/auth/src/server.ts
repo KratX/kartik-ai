@@ -5,28 +5,94 @@
  */
 
 import {
+  AppError,
+  createLazyPostgresPool,
   createLogger,
   createManagedHttpServer,
+  createRedisClientFromUrl,
   DEV_SHARED_BOOTSTRAP_DEFAULTS,
-  InMemoryRateLimitStore,
   isExecutedAsMainModule,
+  RedisRateLimitStore,
   type Logger,
   type ManagedHttpServer,
   type RateLimitCounterStore,
 } from '@kartik/shared';
 import { loadAuthConfig, type AuthServiceConfig } from './config/index.js';
+import type { AuthUser, UpsertGoogleUserInput, UserStatus } from './models/index.js';
 import {
   InMemoryUserRepository,
+  PostgresUserRepository,
   type UserRepository,
 } from './repositories/index.js';
 import { createAuthRouter, type AuthRouter } from './routes/index.js';
 import {
   createFirebaseTokenVerifier,
-  InMemorySessionStore,
+  RedisHashSessionStore,
   SessionService,
   type FirebaseTokenVerifier,
   type SessionStore,
 } from './services/index.js';
+
+class ResilientUserRepository implements UserRepository {
+  private readonly primary: PostgresUserRepository;
+  private readonly fallback: InMemoryUserRepository;
+  private readonly failHard: boolean;
+  private primaryHealthy = true;
+
+  constructor(primary: PostgresUserRepository, failHard: boolean) {
+    this.primary = primary;
+    this.fallback = new InMemoryUserRepository();
+    this.failHard = failHard;
+  }
+
+  private async run<T>(
+    primaryFn: () => Promise<T>,
+    fallbackFn: () => Promise<T>,
+  ): Promise<T> {
+    if (this.failHard) {
+      return primaryFn();
+    }
+    if (this.primaryHealthy) {
+      try {
+        return await primaryFn();
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw err;
+        }
+        this.primaryHealthy = false;
+      }
+    }
+    return fallbackFn();
+  }
+
+  public upsertUserFromGoogleIdentity(input: UpsertGoogleUserInput): Promise<AuthUser> {
+    return this.run(
+      () => this.primary.upsertUserFromGoogleIdentity(input),
+      () => this.fallback.upsertUserFromGoogleIdentity(input),
+    );
+  }
+
+  public findById(userId: string): Promise<AuthUser | null> {
+    return this.run(
+      () => this.primary.findById(userId),
+      () => this.fallback.findById(userId),
+    );
+  }
+
+  public findByFirebaseUid(firebaseUid: string): Promise<AuthUser | null> {
+    return this.run(
+      () => this.primary.findByFirebaseUid(firebaseUid),
+      () => this.fallback.findByFirebaseUid(firebaseUid),
+    );
+  }
+
+  public setUserStatus(userId: string, status: UserStatus): Promise<AuthUser> {
+    return this.run(
+      () => this.primary.setUserStatus(userId, status),
+      () => this.fallback.setUserStatus(userId, status),
+    );
+  }
+}
 
 export interface AuthServiceBootstrapOptions {
   readonly env?: Record<string, string | undefined>;
@@ -93,17 +159,26 @@ export function bootstrapAuthService(
       level: config.LOG_LEVEL,
     });
 
+  const dbPool = createLazyPostgresPool({
+    schema: 'auth',
+    connectionString: config.DATABASE_URL,
+  });
+  const postgresUserRepo = new PostgresUserRepository(dbPool);
+  const redisClient = createRedisClientFromUrl(config.REDIS_URL);
+
   const firebaseVerifier =
     options.firebaseVerifier ?? createFirebaseTokenVerifier(config);
   const userRepository =
-    options.userRepository ?? new InMemoryUserRepository();
-  const sessionStore = options.sessionStore ?? new InMemorySessionStore();
+    options.userRepository ??
+    new ResilientUserRepository(postgresUserRepo, config.NODE_ENV === 'production');
+  const sessionStore =
+    options.sessionStore ?? new RedisHashSessionStore(redisClient);
   const sessionService = new SessionService({
     store: sessionStore,
     sessionTtlSeconds: config.SESSION_TTL_SECONDS,
   });
   const rateLimitStore =
-    options.rateLimitStore ?? new InMemoryRateLimitStore();
+    options.rateLimitStore ?? new RedisRateLimitStore(redisClient);
 
   const router = createAuthRouter({
     config,

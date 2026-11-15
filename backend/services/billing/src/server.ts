@@ -10,26 +10,99 @@
  */
 
 import {
+  AppError,
   DEV_SHARED_BOOTSTRAP_DEFAULTS,
-  InMemoryRateLimitStore,
+  RedisRateLimitStore,
+  createLazyPostgresPool,
   createLogger,
   createManagedHttpServer,
+  createRedisClientFromUrl,
   isExecutedAsMainModule,
   type Logger,
   type ManagedHttpServer,
   type RateLimitCounterStore,
 } from '@kartik/shared';
 import { loadBillingConfig, type BillingServiceConfig } from './config/index.js';
-import { InMemoryBillingRepository, type BillingRepository } from './repositories/index.js';
+import type {
+  CreditAccountRecord,
+  CreditLedgerEntryRecord,
+} from './models/index.js';
+import {
+  InMemoryBillingRepository,
+  PostgresBillingRepository,
+  type BillingRepository,
+  type LockedBillingAccountTx,
+} from './repositories/index.js';
 import { createBillingRouter, type BillingRouter } from './routes/index.js';
 import {
   CreditReservationService,
-  InMemoryMoneyIdempotencyStore,
   MockPaymentProvider,
   PaymentOrderService,
+  RedisMoneyIdempotencyStore,
   type MoneyIdempotencyStore,
   type PaymentProvider,
 } from './services/index.js';
+
+class ResilientBillingRepository implements BillingRepository {
+  private readonly primary: PostgresBillingRepository;
+  private readonly fallback: InMemoryBillingRepository;
+  private readonly failHard: boolean;
+  private primaryHealthy = true;
+
+  constructor(primary: PostgresBillingRepository, failHard: boolean) {
+    this.primary = primary;
+    this.fallback = new InMemoryBillingRepository();
+    this.failHard = failHard;
+  }
+
+  private async run<T>(
+    primaryFn: () => Promise<T>,
+    fallbackFn: () => Promise<T>,
+  ): Promise<T> {
+    if (this.failHard) {
+      return primaryFn();
+    }
+    if (this.primaryHealthy) {
+      try {
+        return await primaryFn();
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw err;
+        }
+        this.primaryHealthy = false;
+      }
+    }
+    return fallbackFn();
+  }
+
+  public ensureAccount(userId: string, initialCredits: number): Promise<CreditAccountRecord> {
+    return this.run(
+      () => this.primary.ensureAccount(userId, initialCredits),
+      () => this.fallback.ensureAccount(userId, initialCredits),
+    );
+  }
+
+  public withLockedAccount<T>(
+    userId: string,
+    initialCredits: number,
+    fn: (tx: LockedBillingAccountTx) => Promise<T>,
+  ): Promise<T> {
+    return this.run(
+      () => this.primary.withLockedAccount(userId, initialCredits, fn),
+      () => this.fallback.withLockedAccount(userId, initialCredits, fn),
+    );
+  }
+
+  public listLedgerEntries(
+    userId: string,
+    limit?: number,
+  ): Promise<readonly CreditLedgerEntryRecord[]> {
+    return this.run(
+      () => this.primary.listLedgerEntries(userId, limit),
+      () => this.fallback.listLedgerEntries(userId, limit),
+    );
+  }
+}
 
 export interface BillingServiceBootstrapOptions {
   readonly env?: Record<string, string | undefined>;
@@ -95,10 +168,21 @@ export function bootstrapBillingService(
       level: config.NODE_ENV === 'test' ? 'error' : 'info',
     });
 
-  const repository = options.repository ?? new InMemoryBillingRepository();
-  const idempotencyStore = options.idempotencyStore ?? new InMemoryMoneyIdempotencyStore();
+  const dbPool = createLazyPostgresPool({
+    schema: 'billing',
+    connectionString: config.BILLING_DATABASE_URL,
+  });
+  const postgresBillingRepo = new PostgresBillingRepository(dbPool);
+  const redisClient = createRedisClientFromUrl(config.REDIS_URL);
+
+  const repository =
+    options.repository ??
+    new ResilientBillingRepository(postgresBillingRepo, config.NODE_ENV === 'production');
+  const idempotencyStore =
+    options.idempotencyStore ?? new RedisMoneyIdempotencyStore(redisClient);
   const paymentProvider = options.paymentProvider ?? new MockPaymentProvider();
-  const rateLimitStore = options.rateLimitStore ?? new InMemoryRateLimitStore();
+  const rateLimitStore =
+    options.rateLimitStore ?? new RedisRateLimitStore(redisClient);
 
   const creditService = new CreditReservationService({
     repository,

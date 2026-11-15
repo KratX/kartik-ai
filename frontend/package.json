@@ -10,7 +10,9 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "dev": "vite --config vite.config.ts",
+    "build": "tsc && vite build --config vite.config.ts",
+    "preview": "vite preview --config vite.config.ts --port 4173",
     "typecheck": "tsc --noEmit",
     "lint": "node ../scripts/lint-workspace.mjs .",
     "test": "tsc && node --test --test-reporter=spec \"./dist/tests/*.test.js\""

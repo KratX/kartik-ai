@@ -13,9 +13,11 @@ import {
   AppError,
   DEV_SHARED_BOOTSTRAP_DEFAULTS,
   INTERNAL_AUTH_HEADERS,
-  InMemoryRateLimitStore,
+  RedisRateLimitStore,
+  createLazyPostgresPool,
   createLogger,
   createManagedHttpServer,
+  createRedisClientFromUrl,
   isExecutedAsMainModule,
   signUserContextAssertion,
   type AgentExecuteRequest,
@@ -32,12 +34,22 @@ import {
   type SpecialistAgentName,
 } from '@kartik/shared';
 import { loadChatConfig, type ChatConfig } from './config/index.js';
-import { InMemoryChatRepository, type ChatRepository } from './repositories/index.js';
+import type {
+  AgentRunRecord,
+  ConversationRecord,
+  MessageRecord,
+  PaginatedResult,
+} from './models/index.js';
+import {
+  InMemoryChatRepository,
+  PostgresChatRepository,
+  type ChatRepository,
+} from './repositories/index.js';
 import { createChatRouter } from './routes/index.js';
 import {
   ChatOrchestratorService,
-  InMemoryChatIdempotencyStore,
-  InMemoryChatLockStore,
+  RedisChatIdempotencyStore,
+  RedisChatLockStore,
   type AgentPurgeCascadeResult,
   type AgentServiceClient,
   type BillingReleaseResult,
@@ -46,6 +58,173 @@ import {
   type ChatIdempotencyStore,
   type ChatLockStore,
 } from './services/index.js';
+
+import type {
+  AgentRunState,
+  DeletionState,
+} from '@kartik/shared';
+
+class ResilientChatRepository implements ChatRepository {
+  private readonly primary: PostgresChatRepository;
+  private readonly fallback: InMemoryChatRepository;
+  private readonly failHard: boolean;
+  private primaryHealthy = true;
+
+  constructor(primary: PostgresChatRepository, failHard: boolean) {
+    this.primary = primary;
+    this.fallback = new InMemoryChatRepository();
+    this.failHard = failHard;
+  }
+
+  private async run<T>(
+    primaryFn: () => Promise<T>,
+    fallbackFn: () => Promise<T>,
+  ): Promise<T> {
+    if (this.failHard) {
+      return primaryFn();
+    }
+    if (this.primaryHealthy) {
+      try {
+        return await primaryFn();
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw err;
+        }
+        this.primaryHealthy = false;
+      }
+    }
+    return fallbackFn();
+  }
+
+  public createConversation(
+    conversation: ConversationRecord,
+  ): Promise<ConversationRecord> {
+    return this.run(
+      () => this.primary.createConversation(conversation),
+      () => this.fallback.createConversation(conversation),
+    );
+  }
+
+  public getConversationForUser(
+    userId: string,
+    conversationId: string,
+    options?: { readonly includePurging?: boolean },
+  ): Promise<ConversationRecord> {
+    return this.run(
+      () => this.primary.getConversationForUser(userId, conversationId, options),
+      () => this.fallback.getConversationForUser(userId, conversationId, options),
+    );
+  }
+
+  public listConversationsForUser(input: {
+    readonly userId: string;
+    readonly limit?: unknown;
+    readonly cursor?: unknown;
+    readonly cursorSecret?: string;
+  }): Promise<PaginatedResult<ConversationRecord>> {
+    return this.run(
+      () => this.primary.listConversationsForUser(input),
+      () => this.fallback.listConversationsForUser(input),
+    );
+  }
+
+  public updateConversationDeletionState(
+    userId: string,
+    conversationId: string,
+    state: DeletionState,
+  ): Promise<ConversationRecord> {
+    return this.run(
+      () =>
+        this.primary.updateConversationDeletionState(
+          userId,
+          conversationId,
+          state,
+        ),
+      () =>
+        this.fallback.updateConversationDeletionState(
+          userId,
+          conversationId,
+          state,
+        ),
+    );
+  }
+
+  public saveMessage(message: MessageRecord): Promise<MessageRecord> {
+    return this.run(
+      () => this.primary.saveMessage(message),
+      () => this.fallback.saveMessage(message),
+    );
+  }
+
+  public listMessagesForConversation(input: {
+    readonly userId: string;
+    readonly conversationId: string;
+    readonly limit?: unknown;
+    readonly cursor?: unknown;
+    readonly cursorSecret?: string;
+  }): Promise<PaginatedResult<MessageRecord>> {
+    return this.run(
+      () => this.primary.listMessagesForConversation(input),
+      () => this.fallback.listMessagesForConversation(input),
+    );
+  }
+
+  public listAllFileAndArtifactIdsForConversation(
+    userId: string,
+    conversationId: string,
+  ): Promise<{
+    readonly fileIds: readonly string[];
+    readonly artifactIds: readonly string[];
+  }> {
+    return this.run(
+      () =>
+        this.primary.listAllFileAndArtifactIdsForConversation(
+          userId,
+          conversationId,
+        ),
+      () =>
+        this.fallback.listAllFileAndArtifactIdsForConversation(
+          userId,
+          conversationId,
+        ),
+    );
+  }
+
+  public saveAgentRun(run: AgentRunRecord): Promise<AgentRunRecord> {
+    return this.run(
+      () => this.primary.saveAgentRun(run),
+      () => this.fallback.saveAgentRun(run),
+    );
+  }
+
+  public updateAgentRun(
+    requestId: string,
+    patch: {
+      readonly state?: AgentRunState;
+      readonly reservationId?: string | null;
+      readonly reservedCredits?: number;
+      readonly settledCredits?: number | null;
+      readonly assistantMessageId?: string | null;
+      readonly errorCode?: string | null;
+      readonly updatedAt?: string;
+    },
+  ): Promise<AgentRunRecord> {
+    return this.run(
+      () => this.primary.updateAgentRun(requestId, patch),
+      () => this.fallback.updateAgentRun(requestId, patch),
+    );
+  }
+
+  public getAgentRunByRequestId(
+    userId: string,
+    requestId: string,
+  ): Promise<AgentRunRecord | null> {
+    return this.run(
+      () => this.primary.getAgentRunByRequestId(userId, requestId),
+      () => this.fallback.getAgentRunByRequestId(userId, requestId),
+    );
+  }
+}
 
 interface StandardHttpEnvelope<T = unknown> {
   readonly ok?: boolean;
@@ -407,7 +586,16 @@ export function bootstrapChatService(
       level: config.nodeEnv === 'test' ? 'error' : 'info',
     });
 
-  const repository = options.repository ?? new InMemoryChatRepository();
+  const dbPool = createLazyPostgresPool({
+    schema: 'chat',
+    connectionString: config.databaseUrl,
+  });
+  const postgresChatRepo = new PostgresChatRepository(dbPool);
+  const redisClient = createRedisClientFromUrl(config.redisUrl);
+
+  const repository =
+    options.repository ??
+    new ResilientChatRepository(postgresChatRepo, config.nodeEnv === 'production');
 
   const billingClient =
     options.billingClient ??
@@ -423,9 +611,11 @@ export function bootstrapChatService(
       serviceToken: config.chatToAgentToken,
     });
 
-  const idempotencyStore = options.idempotencyStore ?? new InMemoryChatIdempotencyStore();
-  const lockStore = options.lockStore ?? new InMemoryChatLockStore();
-  const rateLimitStore = options.rateLimitStore ?? new InMemoryRateLimitStore();
+  const idempotencyStore =
+    options.idempotencyStore ?? new RedisChatIdempotencyStore(redisClient);
+  const lockStore = options.lockStore ?? new RedisChatLockStore(redisClient);
+  const rateLimitStore =
+    options.rateLimitStore ?? new RedisRateLimitStore(redisClient);
 
   const orchestrator = new ChatOrchestratorService({
     repo: repository,

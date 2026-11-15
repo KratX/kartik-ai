@@ -46,6 +46,35 @@ export class InMemoryDailyBudgetStore implements DailyBudgetStore {
   }
 }
 
+/**
+ * Production Redis-backed daily provider quota hash counter store (`HINCRBY` + `EXPIRE` on `quota:{userId}:{day}`, 48h TTL per §5.2).
+ */
+export class RedisDailyBudgetStore implements DailyBudgetStore {
+  private readonly redis: Pick<
+    import('@kartik/shared/redis').RedisClient,
+    'hIncrByWithTtl' | 'hGet'
+  >;
+
+  constructor(
+    redis: Pick<import('@kartik/shared/redis').RedisClient, 'hIncrByWithTtl' | 'hGet'>,
+  ) {
+    this.redis = redis;
+  }
+
+  public async incrementHashCounter(
+    key: string,
+    field: string,
+    ttlSeconds: number,
+  ): Promise<number> {
+    return this.redis.hIncrByWithTtl(key, field, 1, ttlSeconds);
+  }
+
+  public async getHashCounter(key: string, field: string): Promise<number> {
+    const raw = await this.redis.hGet(key, field);
+    return raw ? Number.parseInt(raw, 10) || 0 : 0;
+  }
+}
+
 export interface BudgetCheckDecision {
   readonly allowLive: boolean;
   readonly degradedToMock: boolean;

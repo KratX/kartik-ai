@@ -4,23 +4,43 @@ import { Download } from 'lucide-react';
 export function StepFileDownloads() {
   return (
     <div className="flex flex-col gap-2.5">
-      <div className="bg-slate-900 border border-emerald-500/40 text-slate-100 rounded-lg px-5 py-3.5 flex items-center justify-between gap-4">
+      <div className="bg-slate-900 border border-emerald-500/50 text-slate-100 rounded-lg px-5 py-3.5 flex items-center justify-between gap-4">
         <div>
           <div className="text-sm font-semibold text-slate-100">
-            Micro-step 9.6.a (Phase 16 &amp; 18 Final — 6 Multi-Stage pnpm Dockerfiles &amp; AWS Profile P / S Infrastructure) — Affected Files
+            Executable Backend Patch — Bootstraps, HTTP Listeners &amp; Corrected Docker CMDs
           </div>
           <div className="text-xs text-slate-400 font-mono mt-0.5">
-            step-9.6.a.zip (16 files · IST-aligned timestamps · 42 Suites / 147 Tests Passing · 100% Complete)
+            executable-backend-patch.zip (35 files · IST-aligned timestamps · Drop-in overwrite from repo root)
+          </div>
+        </div>
+
+        <a
+          href="/__downloads/executable-backend-patch.zip"
+          download="executable-backend-patch.zip"
+          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-emerald-500 text-slate-950 hover:bg-emerald-400 rounded-md transition-colors whitespace-nowrap shrink-0"
+        >
+          <Download className="w-3.5 h-3.5" />
+          Download Patch ZIP
+        </a>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 text-slate-100 rounded-lg px-5 py-3.5 flex items-center justify-between gap-4">
+        <div>
+          <div className="text-sm font-semibold text-slate-100">
+            Micro-step 9.6.a (Phase 16 &amp; 18 Final — Executable Backend + 6 Multi-Stage Dockerfiles &amp; AWS Infra)
+          </div>
+          <div className="text-xs text-slate-400 font-mono mt-0.5">
+            step-9.6.a.zip (41 files · IST-aligned timestamps · 42 Suites / 152 Tests Passing · 100% Complete)
           </div>
         </div>
 
         <a
           href="/__downloads/step-9.6.a.zip"
           download="step-9.6.a.zip"
-          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-emerald-500 text-slate-950 hover:bg-emerald-400 rounded-md transition-colors whitespace-nowrap shrink-0"
+          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-slate-800 border border-emerald-500/40 text-emerald-300 hover:bg-slate-700 rounded-md transition-colors whitespace-nowrap shrink-0"
         >
           <Download className="w-3.5 h-3.5" />
-          Download ZIP
+          Download step-9.6.a.zip
         </a>
       </div>
 

@@ -23,6 +23,7 @@ import {
 } from './backend/shared/errors/index.js';
 import type { SpecialistAgentName } from './backend/shared/contracts/index.js';
 import { sharedPlatformRuntime } from './src/server/platform-api-runtime.js';
+import { optionalAuth, type AuthRequest } from './src/middleware/auth.ts';
 
 function readHeaderString(req: Request, headerName: string): string | undefined {
   const raw = req.headers[headerName.toLowerCase()];
@@ -38,6 +39,7 @@ function readHeaderString(req: Request, headerName: string): string | undefined 
 export function createKartikExpressApp() {
   const app = express();
   app.use(express.json({ limit: '15mb' }));
+  app.use(optionalAuth);
 
   const sendEnvelope = <T>(
     req: Request,
@@ -92,8 +94,19 @@ export function createKartikExpressApp() {
   // 2. Auth Routes (/api/v1/auth/google, /api/v1/auth/me, /api/v1/auth/logout)
   app.post('/api/v1/auth/google', (req, res) => {
     try {
-      const body = (req.body ?? {}) as { email?: string; displayName?: string };
-      const session = sharedPlatformRuntime.loginWithGoogle(body);
+      const authReq = req as AuthRequest;
+      const body = (req.body ?? {}) as {
+        uid?: string;
+        email?: string;
+        displayName?: string;
+        avatarUrl?: string | null;
+      };
+      const session = sharedPlatformRuntime.loginWithGoogle({
+        uid: authReq.user?.uid ?? body.uid,
+        email: authReq.user?.email ?? body.email,
+        displayName: authReq.user?.name ?? body.displayName,
+        avatarUrl: authReq.user?.picture ?? body.avatarUrl ?? null,
+      });
       res.setHeader(
         'Set-Cookie',
         `kartik_session=${session.sessionId}; Path=/; HttpOnly; SameSite=Lax`,
@@ -362,7 +375,7 @@ async function startServer() {
   }
 
   app.listen(port, '0.0.0.0', () => {
-    console.log(`[Kartik.ai] Full-stack platform server listening on http://0.0.0.0:${port}`);
+    console.log(`[Kartik.ai] Full-stack platform server ready at http://localhost:${port}`);
   });
 }
 
