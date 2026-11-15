@@ -41,6 +41,17 @@ interface QdrantSearchResponsePayload {
   }>;
 }
 
+function stripEnvQuotes(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  return trimmed.replace(/^["']|["']$/g, '');
+}
+
 /**
  * Production Qdrant HTTP REST API (`v1`) adapter implementing `VectorStore`
  * and strictly enforcing Invariant #9:
@@ -56,13 +67,14 @@ export class QdrantHttpVectorStore implements VectorStore {
   private ensuredDimension: number | null = null;
 
   constructor(options: QdrantHttpVectorStoreOptions) {
-    if (!options.baseUrl || options.baseUrl.trim().length === 0) {
+    const cleanUrl = stripEnvQuotes(options.baseUrl);
+    if (!cleanUrl || cleanUrl.length === 0) {
       throw new AppError('INTERNAL_ERROR', 'QdrantHttpVectorStore requires a non-empty baseUrl');
     }
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
-    this.collectionName = options.collectionName ?? 'kartik_document_chunks';
-    this.apiKey = options.apiKey;
-    this.defaultVectorSize = options.vectorSize ?? 16;
+    this.baseUrl = cleanUrl.replace(/\/+$/, '');
+    this.collectionName = stripEnvQuotes(options.collectionName) ?? 'kartik_document_chunks';
+    this.apiKey = stripEnvQuotes(options.apiKey);
+    this.defaultVectorSize = options.vectorSize ?? 768;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
   }
 
@@ -77,6 +89,20 @@ export class QdrantHttpVectorStore implements VectorStore {
     return headers;
   }
 
+  private async ensurePayloadIndexes(): Promise<void> {
+    const indexUrl = `${this.baseUrl}/collections/${encodeURIComponent(this.collectionName)}/index?wait=true`;
+    for (const fieldName of ['userId', 'fileId'] as const) {
+      await this.fetchImpl(indexUrl, {
+        method: 'PUT',
+        headers: this.buildHeaders(),
+        body: JSON.stringify({
+          field_name: fieldName,
+          field_schema: 'keyword',
+        }),
+      }).catch(() => undefined);
+    }
+  }
+
   private async ensureCollection(vectorSize: number): Promise<void> {
     const dim = Math.max(1, vectorSize || this.defaultVectorSize);
     if (this.ensuredDimension === dim) {
@@ -89,7 +115,37 @@ export class QdrantHttpVectorStore implements VectorStore {
       headers: this.buildHeaders(),
     });
 
-    if (getResp.status === 404) {
+    let needsCreate = getResp.status === 404;
+    if (getResp.ok) {
+      try {
+        const info = (await getResp.json()) as {
+          readonly result?: {
+            readonly config?: {
+              readonly params?: {
+                readonly vectors?: { readonly size?: number };
+              };
+            };
+          };
+        };
+        const existingSize = info.result?.config?.params?.vectors?.size;
+        if (typeof existingSize === 'number' && existingSize !== dim) {
+          await this.fetchImpl(collectionUrl, {
+            method: 'DELETE',
+            headers: this.buildHeaders(),
+          });
+          needsCreate = true;
+        }
+      } catch {
+        // Ignore JSON inspection error on mock responses that return minimal JSON
+      }
+    } else if (getResp.status !== 404) {
+      throw new AppError(
+        'PROVIDER_UNAVAILABLE',
+        `Failed to inspect Qdrant collection "${this.collectionName}" (HTTP ${getResp.status})`,
+      );
+    }
+
+    if (needsCreate) {
       const createResp = await this.fetchImpl(collectionUrl, {
         method: 'PUT',
         headers: this.buildHeaders(),
@@ -106,11 +162,7 @@ export class QdrantHttpVectorStore implements VectorStore {
           `Failed to create Qdrant collection "${this.collectionName}" (HTTP ${createResp.status})`,
         );
       }
-    } else if (!getResp.ok) {
-      throw new AppError(
-        'PROVIDER_UNAVAILABLE',
-        `Failed to inspect Qdrant collection "${this.collectionName}" (HTTP ${getResp.status})`,
-      );
+      await this.ensurePayloadIndexes();
     }
 
     this.ensuredDimension = dim;
@@ -539,10 +591,10 @@ export class ResilientQdrantVectorStore implements VectorStore {
 export function createVectorStoreFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): VectorStore {
-  const qdrantUrl = env.QDRANT_URL?.trim();
-  const collectionName = env.QDRANT_COLLECTION?.trim();
-  const apiKey = env.QDRANT_API_KEY?.trim();
-  const storageFilePath = env.QDRANT_STORAGE_FILE?.trim();
+  const qdrantUrl = stripEnvQuotes(env.QDRANT_URL);
+  const collectionName = stripEnvQuotes(env.QDRANT_COLLECTION);
+  const apiKey = stripEnvQuotes(env.QDRANT_API_KEY);
+  const storageFilePath = stripEnvQuotes(env.QDRANT_STORAGE_FILE);
 
   if (qdrantUrl && qdrantUrl.length > 0) {
     return new ResilientQdrantVectorStore({
