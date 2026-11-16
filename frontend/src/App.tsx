@@ -505,14 +505,28 @@ export function App() {
 
   // Google Session Login & Logout
   const handleLoginWithGoogle = async (input: {
+    readonly uid?: string;
     readonly email: string;
     readonly displayName: string;
+    readonly avatarUrl?: string | null;
+    readonly idToken?: string;
   }) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (input.idToken) {
+      headers['Authorization'] = `Bearer ${input.idToken}`;
+    }
     const res = await fetch('/api/v1/auth/google', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
+      headers,
+      body: JSON.stringify({
+        uid: input.uid,
+        email: input.email,
+        displayName: input.displayName,
+        avatarUrl: input.avatarUrl,
+      }),
     });
     const json = (await res.json()) as ApiEnvelope<{
       sessionId: string;
@@ -524,6 +538,7 @@ export function App() {
       setStatusBanner(
         `Signed in as ${json.data.user.displayName} (HttpOnly session ${json.data.sessionId.slice(0, 12)}…).`,
       );
+      await refreshConversations(activeConversationId);
     }
   };
 

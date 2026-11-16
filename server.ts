@@ -92,7 +92,34 @@ export function createKartikExpressApp() {
     });
   });
 
-  // 2. Auth Routes (/api/v1/auth/google, /api/v1/auth/me, /api/v1/auth/logout)
+  // 2. Auth Routes (/api/v1/auth/firebase-config, /api/v1/auth/google, /api/v1/auth/me, /api/v1/auth/logout)
+  app.get('/api/v1/auth/firebase-config', (req, res) => {
+    try {
+      const stripQuotes = (v?: string) => (v ?? '').trim().replace(/^["']|["']$/g, '');
+      const apiKey = stripQuotes(process.env.VITE_FIREBASE_API_KEY);
+      const authDomain = stripQuotes(process.env.VITE_FIREBASE_AUTH_DOMAIN);
+      const projectId = stripQuotes(
+        process.env.VITE_FIREBASE_PROJECT_ID ?? process.env.FIREBASE_PROJECT_ID,
+      );
+      const appId = stripQuotes(process.env.VITE_FIREBASE_APP_ID);
+
+      sendEnvelope(req, res, 200, {
+        apiKey,
+        authDomain,
+        projectId,
+        appId,
+        enabled: Boolean(
+          apiKey &&
+            apiKey !== 'your_firebase_web_api_key' &&
+            apiKey !== 'demo-firebase-api-key' &&
+            projectId,
+        ),
+      });
+    } catch (err) {
+      sendError(req, res, err);
+    }
+  });
+
   app.post('/api/v1/auth/google', (req, res) => {
     try {
       const authReq = req as AuthRequest;
