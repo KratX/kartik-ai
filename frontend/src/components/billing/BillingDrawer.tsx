@@ -24,12 +24,53 @@ export interface BillingDrawerProps {
   readonly demoReadOnly: boolean;
   readonly onCreateOrder: (planId: string) => Promise<{
     readonly orderId: string;
+    readonly razorpayKeyId?: string;
+    readonly liveRazorpayOrder?: boolean;
     readonly planName: string;
     readonly amountPaise: number;
     readonly amountInrLabel: string;
     readonly creditsGranted: number;
   }>;
-  readonly onVerifyPayment: (orderId: string) => Promise<void>;
+  readonly onVerifyPayment: (
+    orderId: string,
+    paymentDetails?: {
+      readonly paymentId?: string;
+      readonly signature?: string;
+    },
+  ) => Promise<void>;
+}
+
+interface RazorpayCheckoutResponse {
+  readonly razorpay_order_id?: string;
+  readonly razorpay_payment_id?: string;
+  readonly razorpay_signature?: string;
+}
+
+interface RazorpayInstance {
+  open: () => void;
+}
+
+interface WindowWithRazorpay {
+  Razorpay?: new (options: Record<string, unknown>) => RazorpayInstance;
+}
+
+function loadRazorpayCheckoutScript(): Promise<void> {
+  if (typeof window === 'undefined') {
+    return Promise.reject(new Error('Window is unavailable'));
+  }
+  const win = window as unknown as WindowWithRazorpay;
+  if (typeof win.Razorpay === 'function') {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () =>
+      reject(new Error('Failed to load Razorpay Checkout SDK'));
+    document.head.appendChild(script);
+  });
 }
 
 export function BillingDrawer({
@@ -45,6 +86,8 @@ export function BillingDrawer({
 }: BillingDrawerProps) {
   const [pendingCheckoutOrder, setPendingCheckoutOrder] = useState<{
     readonly orderId: string;
+    readonly razorpayKeyId?: string;
+    readonly liveRazorpayOrder?: boolean;
     readonly planName: string;
     readonly amountPaise: number;
     readonly amountInrLabel: string;
@@ -63,6 +106,54 @@ export function BillingDrawer({
     try {
       const order = await onCreateOrder(planId);
       setPendingCheckoutOrder(order);
+
+      if (
+        order.liveRazorpayOrder &&
+        order.razorpayKeyId &&
+        order.razorpayKeyId !== 'rzp_test_kartik_ai_demo'
+      ) {
+        try {
+          await loadRazorpayCheckoutScript();
+          const win = window as unknown as WindowWithRazorpay;
+          if (typeof win.Razorpay === 'function') {
+            const rzp = new win.Razorpay({
+              key: order.razorpayKeyId,
+              amount: order.amountPaise,
+              currency: 'INR',
+              name: 'kartik-ai',
+              description: `${order.planName} (+${order.creditsGranted} Credits)`,
+              order_id: order.orderId,
+              theme: { color: '#0ea5e9' },
+              handler: (response: RazorpayCheckoutResponse) => {
+                void (async () => {
+                  setIsProcessing(true);
+                  try {
+                    await onVerifyPayment(
+                      response.razorpay_order_id ?? order.orderId,
+                      {
+                        paymentId: response.razorpay_payment_id,
+                        signature: response.razorpay_signature,
+                      },
+                    );
+                    setPendingCheckoutOrder(null);
+                  } catch (verifyErr) {
+                    setErrorMessage(
+                      verifyErr instanceof Error
+                        ? verifyErr.message
+                        : 'Payment verification failed',
+                    );
+                  } finally {
+                    setIsProcessing(false);
+                  }
+                })();
+              },
+            });
+            rzp.open();
+          }
+        } catch {
+          // Keep interactive checkout card open if popup script blocked
+        }
+      }
     } catch (err) {
       setErrorMessage(
         err instanceof Error ? err.message : 'Unable to create Razorpay order',

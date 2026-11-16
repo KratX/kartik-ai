@@ -458,6 +458,7 @@ export function App() {
     const json = (await res.json()) as ApiEnvelope<{
       orderId: string;
       razorpayKeyId: string;
+      liveRazorpayOrder?: boolean;
       plan: PlatformCreditPlan;
       amountPaise: number;
       currency: 'INR';
@@ -467,6 +468,8 @@ export function App() {
     }
     return {
       orderId: json.data.orderId,
+      razorpayKeyId: json.data.razorpayKeyId,
+      liveRazorpayOrder: Boolean(json.data.liveRazorpayOrder),
       planName: json.data.plan.name,
       amountPaise: json.data.amountPaise,
       amountInrLabel: json.data.plan.amountInrLabel,
@@ -474,7 +477,13 @@ export function App() {
     };
   };
 
-  const handleVerifyPayment = async (orderId: string) => {
+  const handleVerifyPayment = async (
+    orderId: string,
+    paymentDetails?: {
+      readonly paymentId?: string;
+      readonly signature?: string;
+    },
+  ) => {
     const res = await fetch('/api/v1/billing/verify-checkout', {
       method: 'POST',
       credentials: 'include',
@@ -482,7 +491,11 @@ export function App() {
         'Content-Type': 'application/json',
         'Idempotency-Key': createClientIdempotencyKey(),
       },
-      body: JSON.stringify({ orderId }),
+      body: JSON.stringify({
+        orderId,
+        paymentId: paymentDetails?.paymentId,
+        signature: paymentDetails?.signature,
+      }),
     });
     const json = (await res.json()) as ApiEnvelope<{
       verified: boolean;

@@ -743,7 +743,7 @@ export class KartikPlatformRuntime {
     };
   }
 
-  public createBillingOrder(input: {
+  public async createBillingOrder(input: {
     readonly planId: string;
     readonly requestId: string;
   }) {
@@ -756,7 +756,51 @@ export class KartikPlatformRuntime {
       );
     }
 
-    const orderId = `order_rzp_${crypto.randomBytes(8).toString('hex')}`;
+    const stripQuotes = (v?: string) => (v ?? '').trim().replace(/^["']|["']$/g, '');
+    const keyId = stripQuotes(process.env.RAZORPAY_KEY_ID);
+    const keySecret = stripQuotes(process.env.RAZORPAY_KEY_SECRET);
+
+    let orderId = `order_rzp_${crypto.randomBytes(8).toString('hex')}`;
+    let liveRazorpayOrder = false;
+
+    if (
+      keyId &&
+      keySecret &&
+      keyId !== 'rzp_test_kartik_ai_demo' &&
+      !keyId.includes('placeholder') &&
+      process.env.NODE_ENV !== 'test'
+    ) {
+      try {
+        const basicAuth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+        const rzpRes = await fetch('https://api.razorpay.com/v1/orders', {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${basicAuth}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            amount: plan.amountPaise,
+            currency: 'INR',
+            receipt: input.requestId.slice(0, 40),
+            notes: {
+              planId: plan.planId,
+              userId: this.currentUser.userId,
+            },
+          }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (rzpRes.ok) {
+          const rzpData = (await rzpRes.json()) as { id?: string };
+          if (rzpData.id) {
+            orderId = rzpData.id;
+            liveRazorpayOrder = true;
+          }
+        }
+      } catch {
+        // Fall back to local orderId if offline or unreachable
+      }
+    }
+
     this.pendingOrders.set(orderId, {
       orderId,
       plan,
@@ -779,7 +823,8 @@ export class KartikPlatformRuntime {
     return {
       orderId,
       razorpayOrderId: orderId,
-      razorpayKeyId: process.env.RAZORPAY_KEY_ID ?? 'rzp_test_kartik_ai_demo',
+      razorpayKeyId: keyId || 'rzp_test_kartik_ai_demo',
+      liveRazorpayOrder,
       plan,
       planId: plan.planId,
       planName: plan.name,
@@ -794,6 +839,7 @@ export class KartikPlatformRuntime {
   public verifyCheckoutAndCredit(input: {
     readonly orderId: string;
     readonly paymentId?: string;
+    readonly signature?: string;
     readonly requestId: string;
   }) {
     this.assertWritable();
@@ -802,12 +848,30 @@ export class KartikPlatformRuntime {
       throw new AppError('NOT_FOUND', `Order "${input.orderId}" was not found`);
     }
 
+    const stripQuotes = (v?: string) => (v ?? '').trim().replace(/^["']|["']$/g, '');
+    const secret = stripQuotes(process.env.RAZORPAY_KEY_SECRET) || 'rzp_test_secret_kartik';
+
     const paymentId =
       input.paymentId ?? `pay_rzp_${crypto.randomBytes(6).toString('hex')}`;
-    const signature = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET ?? 'rzp_test_secret_kartik')
+    const expectedSignature = crypto
+      .createHmac('sha256', secret)
       .update(`${order.orderId}|${paymentId}`)
       .digest('hex');
+
+    if (input.signature && input.paymentId) {
+      const expectedBuf = Buffer.from(expectedSignature, 'utf8');
+      const actualBuf = Buffer.from(input.signature, 'utf8');
+      if (
+        expectedBuf.length !== actualBuf.length ||
+        !crypto.timingSafeEqual(expectedBuf, actualBuf)
+      ) {
+        throw new AppError(
+          'VALIDATION_FAILED',
+          'Razorpay HMAC-SHA256 payment signature verification failed.',
+        );
+      }
+    }
+    const signature = expectedSignature;
 
     if (order.settled) {
       return {

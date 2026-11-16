@@ -374,13 +374,13 @@ export function createKartikExpressApp() {
     }
   });
 
-  app.post('/api/v1/billing/orders', (req, res) => {
+  app.post('/api/v1/billing/orders', async (req, res) => {
     try {
       const requestId =
         readHeaderString(req, 'idempotency-key') ??
         `req_ord_${crypto.randomBytes(8).toString('hex')}`;
       const body = (req.body ?? {}) as { planId?: string };
-      const order = sharedPlatformRuntime.createBillingOrder({
+      const order = await sharedPlatformRuntime.createBillingOrder({
         planId: String(body.planId ?? ''),
         requestId,
       });
@@ -395,10 +395,15 @@ export function createKartikExpressApp() {
       const requestId =
         readHeaderString(req, 'idempotency-key') ??
         `req_chk_${crypto.randomBytes(8).toString('hex')}`;
-      const body = (req.body ?? {}) as { orderId?: string; paymentId?: string };
+      const body = (req.body ?? {}) as {
+        orderId?: string;
+        paymentId?: string;
+        signature?: string;
+      };
       const verified = sharedPlatformRuntime.verifyCheckoutAndCredit({
         orderId: String(body.orderId ?? ''),
         paymentId: body.paymentId,
+        signature: body.signature,
         requestId,
       });
       sendEnvelope(req, res, 200, verified, requestId);
