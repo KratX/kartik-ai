@@ -103,38 +103,37 @@ export function createKartikExpressApp() {
         process.env.VITE_FIREBASE_PROJECT_ID ?? process.env.FIREBASE_PROJECT_ID,
       );
       let appId = stripQuotes(process.env.VITE_FIREBASE_APP_ID);
+      let oAuthClientId = stripQuotes(process.env.VITE_GOOGLE_OAUTH_CLIENT_ID);
 
-      if (
-        !apiKey ||
-        apiKey === 'your_firebase_web_api_key' ||
-        apiKey === 'demo-firebase-api-key' ||
-        !projectId
-      ) {
-        try {
-          const appletCfgPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
-          if (fs.existsSync(appletCfgPath)) {
-            const raw = JSON.parse(fs.readFileSync(appletCfgPath, 'utf8')) as Record<
-              string,
-              string | undefined
-            >;
-            apiKey =
-              apiKey && apiKey !== 'your_firebase_web_api_key'
-                ? apiKey
-                : stripQuotes(raw.apiKey);
-            authDomain = authDomain || stripQuotes(raw.authDomain);
-            projectId = projectId || stripQuotes(raw.projectId);
-            appId = appId || stripQuotes(raw.appId);
-          }
-        } catch {
-          // Optional fallback file not present
+      try {
+        const appletCfgPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
+        if (fs.existsSync(appletCfgPath)) {
+          const raw = JSON.parse(fs.readFileSync(appletCfgPath, 'utf8')) as Record<
+            string,
+            string | undefined
+          >;
+          apiKey =
+            apiKey &&
+            apiKey !== 'your_firebase_web_api_key' &&
+            apiKey !== 'demo-firebase-api-key'
+              ? apiKey
+              : stripQuotes(raw.apiKey);
+          authDomain = authDomain || stripQuotes(raw.authDomain);
+          projectId = projectId || stripQuotes(raw.projectId);
+          appId = appId || stripQuotes(raw.appId);
+          oAuthClientId = oAuthClientId || stripQuotes(raw.oAuthClientId);
         }
+      } catch {
+        // Optional fallback file not present
       }
 
       sendEnvelope(req, res, 200, {
+        brandName: 'kartik-ai',
         apiKey,
         authDomain: authDomain || (projectId ? `${projectId}.firebaseapp.com` : ''),
         projectId,
         appId,
+        oAuthClientId,
         enabled: Boolean(
           apiKey &&
             apiKey !== 'your_firebase_web_api_key' &&

@@ -27,7 +27,7 @@ function resolveFirebaseProjectId(): string {
       // Ignore malformed optional local config
     }
   }
-  return 'dependable-analogy-sc62s';
+  return 'kartik-ai';
 }
 
 if (!getApps().length) {

@@ -34,6 +34,11 @@ function loadOptionalFirebaseAppletEnv(): Record<string, string> {
     if (!process.env.VITE_FIREBASE_APP_ID && raw.appId) {
       defs['import.meta.env.VITE_FIREBASE_APP_ID'] = JSON.stringify(raw.appId);
     }
+    if (!process.env.VITE_GOOGLE_OAUTH_CLIENT_ID && raw.oAuthClientId) {
+      defs['import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID'] = JSON.stringify(
+        raw.oAuthClientId,
+      );
+    }
     return defs;
   } catch {
     return {};
