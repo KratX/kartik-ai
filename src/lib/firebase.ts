@@ -219,9 +219,17 @@ export async function signInWithFirebaseGooglePopup(): Promise<FirebaseGooglePop
     });
   }
 
-  // Prefer Google Identity Services popup when oAuthClientId is present so the
-  // consent screen displays the "kartik-ai" brand instead of *.firebaseapp.com
-  if (cfg.oAuthClientId) {
+  const isLocalhostOrigin =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1');
+  const localhostGsiEnabled =
+    stripQuotes(String(import.meta.env.VITE_GOOGLE_OAUTH_LOCALHOST_READY ?? '')) ===
+    'true';
+
+  // Prefer Google Identity Services popup when oAuthClientId is present on
+  // authorized origins (or on localhost once added to Authorized JS Origins in GCP)
+  if (cfg.oAuthClientId && (!isLocalhostOrigin || localhostGsiEnabled)) {
     try {
       const accessToken = await requestGoogleTokenViaGsiBrandPopup(
         cfg.oAuthClientId,
