@@ -14,6 +14,7 @@
 
 import 'dotenv/config';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import express, { type Request, type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
@@ -96,16 +97,42 @@ export function createKartikExpressApp() {
   app.get('/api/v1/auth/firebase-config', (req, res) => {
     try {
       const stripQuotes = (v?: string) => (v ?? '').trim().replace(/^["']|["']$/g, '');
-      const apiKey = stripQuotes(process.env.VITE_FIREBASE_API_KEY);
-      const authDomain = stripQuotes(process.env.VITE_FIREBASE_AUTH_DOMAIN);
-      const projectId = stripQuotes(
+      let apiKey = stripQuotes(process.env.VITE_FIREBASE_API_KEY);
+      let authDomain = stripQuotes(process.env.VITE_FIREBASE_AUTH_DOMAIN);
+      let projectId = stripQuotes(
         process.env.VITE_FIREBASE_PROJECT_ID ?? process.env.FIREBASE_PROJECT_ID,
       );
-      const appId = stripQuotes(process.env.VITE_FIREBASE_APP_ID);
+      let appId = stripQuotes(process.env.VITE_FIREBASE_APP_ID);
+
+      if (
+        !apiKey ||
+        apiKey === 'your_firebase_web_api_key' ||
+        apiKey === 'demo-firebase-api-key' ||
+        !projectId
+      ) {
+        try {
+          const appletCfgPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
+          if (fs.existsSync(appletCfgPath)) {
+            const raw = JSON.parse(fs.readFileSync(appletCfgPath, 'utf8')) as Record<
+              string,
+              string | undefined
+            >;
+            apiKey =
+              apiKey && apiKey !== 'your_firebase_web_api_key'
+                ? apiKey
+                : stripQuotes(raw.apiKey);
+            authDomain = authDomain || stripQuotes(raw.authDomain);
+            projectId = projectId || stripQuotes(raw.projectId);
+            appId = appId || stripQuotes(raw.appId);
+          }
+        } catch {
+          // Optional fallback file not present
+        }
+      }
 
       sendEnvelope(req, res, 200, {
         apiKey,
-        authDomain,
+        authDomain: authDomain || (projectId ? `${projectId}.firebaseapp.com` : ''),
         projectId,
         appId,
         enabled: Boolean(
