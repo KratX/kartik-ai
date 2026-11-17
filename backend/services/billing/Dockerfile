@@ -12,7 +12,7 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 COPY backend/shared/package.json backend/shared/tsconfig.json ./backend/shared/
 COPY backend/services/billing/package.json backend/services/billing/tsconfig.json ./backend/services/billing/
 
-RUN pnpm install --frozen-lockfile --filter @kartik/shared --filter @kartik/billing
+RUN pnpm install --frozen-lockfile --filter . --filter @kartik/shared --filter @kartik/billing
 
 COPY backend/shared ./backend/shared
 COPY backend/services/billing ./backend/services/billing
@@ -28,6 +28,7 @@ ENV PORT=8004
 ENV PORT_BILLING=8004
 ENV BILLING_MODE=mock
 
+COPY --from=builder /workspace/package.json ./package.json
 COPY --from=builder /workspace/node_modules ./node_modules
 COPY --from=builder /workspace/backend/shared/package.json ./backend/shared/package.json
 COPY --from=builder /workspace/backend/shared/dist ./backend/shared/dist

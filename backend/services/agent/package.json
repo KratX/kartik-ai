@@ -4,7 +4,14 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@kartik/shared": "workspace:*"
+    "@google/genai": "^2.4.0",
+    "@kartik/shared": "workspace:*",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/pg": "8.23.1",
+    "typescript": "^7.0.2"
   },
   "scripts": {
     "start": "node ./dist/src/server.js",

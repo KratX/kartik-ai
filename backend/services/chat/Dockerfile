@@ -12,7 +12,7 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 COPY backend/shared/package.json backend/shared/tsconfig.json ./backend/shared/
 COPY backend/services/chat/package.json backend/services/chat/tsconfig.json ./backend/services/chat/
 
-RUN pnpm install --frozen-lockfile --filter @kartik/shared --filter @kartik/chat
+RUN pnpm install --frozen-lockfile --filter . --filter @kartik/shared --filter @kartik/chat
 
 COPY backend/shared ./backend/shared
 COPY backend/services/chat ./backend/services/chat
@@ -27,6 +27,7 @@ ENV HOST=0.0.0.0
 ENV PORT=8002
 ENV PORT_CHAT=8002
 
+COPY --from=builder /workspace/package.json ./package.json
 COPY --from=builder /workspace/node_modules ./node_modules
 COPY --from=builder /workspace/backend/shared/package.json ./backend/shared/package.json
 COPY --from=builder /workspace/backend/shared/dist ./backend/shared/dist

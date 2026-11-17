@@ -12,7 +12,7 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 COPY backend/shared/package.json backend/shared/tsconfig.json ./backend/shared/
 COPY backend/services/agent/package.json backend/services/agent/tsconfig.json ./backend/services/agent/
 
-RUN pnpm install --frozen-lockfile --filter @kartik/shared --filter @kartik/agent
+RUN pnpm install --frozen-lockfile --filter . --filter @kartik/shared --filter @kartik/agent
 
 COPY backend/shared ./backend/shared
 COPY backend/services/agent ./backend/services/agent
@@ -29,6 +29,7 @@ ENV PORT_AGENT=8003
 ENV MOCK_AI=true
 ENV IMAGE_PROVIDER=mock
 
+COPY --from=builder /workspace/package.json ./package.json
 COPY --from=builder /workspace/node_modules ./node_modules
 COPY --from=builder /workspace/backend/shared/package.json ./backend/shared/package.json
 COPY --from=builder /workspace/backend/shared/dist ./backend/shared/dist

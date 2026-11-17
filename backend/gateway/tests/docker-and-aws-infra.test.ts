@@ -94,8 +94,10 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
         `${item.relPath} must pin pnpm@12.18.0`,
       );
       assert.ok(
-        content.includes('--frozen-lockfile'),
-        `${item.relPath} must enforce --frozen-lockfile`,
+        content.includes(
+          `pnpm install --frozen-lockfile --filter . --filter @kartik/shared --filter ${item.filterPkg}`,
+        ),
+        `${item.relPath} must install root and filtered workspace dependencies with --frozen-lockfile --filter . --filter @kartik/shared --filter ${item.filterPkg}`,
       );
       assert.ok(
         content.includes(item.filterPkg),
@@ -188,8 +190,30 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
       const pkg = JSON.parse(
         fs.readFileSync(path.join(repoRoot, relPkg), 'utf8'),
       ) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
         scripts: Record<string, string>;
       };
+      assert.ok(
+        pkg.devDependencies?.typescript,
+        `${relPkg} must explicitly declare typescript in devDependencies`,
+      );
+      assert.ok(
+        pkg.devDependencies?.['@types/node'],
+        `${relPkg} must explicitly declare @types/node in devDependencies`,
+      );
+      if (relPkg === 'backend/shared/package.json') {
+        assert.ok(
+          pkg.dependencies?.pg,
+          'backend/shared/package.json must declare runtime dependency pg',
+        );
+      } else {
+        assert.equal(
+          pkg.dependencies?.['@kartik/shared'],
+          'workspace:*',
+          `${relPkg} must declare @kartik/shared workspace dependency`,
+        );
+      }
       if (relPkg === 'frontend/package.json') {
         assert.equal(
           pkg.scripts.build,
