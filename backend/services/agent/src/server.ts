@@ -21,6 +21,9 @@ import {
   createObjectStorageFromEnv,
   createRedisClientFromUrl,
   isExecutedAsMainModule,
+  verifyDatabaseConnectivity,
+  type DatabaseConnectivityCheckResult,
+  type DatabasePool,
   type Logger,
   type ManagedHttpServer,
   type ObjectStorage,
@@ -194,6 +197,8 @@ class ResilientAgentRepository implements AgentRepository {
 
 export interface AgentServiceBootstrapOptions {
   readonly env?: Record<string, string | undefined>;
+  readonly dbPool?: DatabasePool;
+  readonly verifyDatabaseOnStart?: boolean;
   readonly repository?: AgentRepository;
   readonly objectStorage?: ObjectStorage;
   readonly vectorStore?: VectorStore;
@@ -214,6 +219,7 @@ export interface AgentServiceBootstrapOptions {
 export interface AgentServiceRuntime {
   readonly config: AgentConfig;
   readonly logger: Logger;
+  readonly dbPool: DatabasePool;
   readonly repository: AgentRepository;
   readonly objectStorage: ObjectStorage;
   readonly vectorStore: VectorStore;
@@ -222,6 +228,7 @@ export interface AgentServiceRuntime {
   readonly graphExecutor: AgentGraphExecutor;
   readonly router: ReturnType<typeof createAgentRouter>;
   readonly httpServer: ManagedHttpServer;
+  verifyDatabaseConnection(): Promise<DatabaseConnectivityCheckResult>;
 }
 
 export function buildAgentBootstrapEnv(
@@ -262,10 +269,12 @@ export function bootstrapAgentService(
       level: config.nodeEnv === 'test' ? 'error' : 'info',
     });
 
-  const dbPool = createLazyPostgresPool({
-    schema: 'agent',
-    connectionString: config.databaseUrl,
-  });
+  const dbPool =
+    options.dbPool ??
+    createLazyPostgresPool({
+      schema: 'agent',
+      connectionString: config.databaseUrl,
+    });
   const postgresAgentRepo = new PostgresAgentRepository(dbPool);
   const redisClient = createRedisClientFromUrl(config.redisUrl);
 
@@ -385,12 +394,28 @@ export function bootstrapAgentService(
     },
   });
 
+  async function verifyDatabaseConnection(): Promise<DatabaseConnectivityCheckResult> {
+    const check = await verifyDatabaseConnectivity(dbPool, 'agent');
+    logger.info('Agent Service database connectivity verified', {
+      schema: check.schema,
+      latencyMs: check.latencyMs,
+    });
+    return check;
+  }
+
+  const defaultReadiness = async (): Promise<boolean> => {
+    if (config.nodeEnv === 'production' || options.verifyDatabaseOnStart) {
+      await verifyDatabaseConnectivity(dbPool, 'agent');
+    }
+    return true;
+  };
+
   const router = createAgentRouter({
     config,
     repository,
     ingestionService,
     graphExecutor,
-    ...(options.checkReadiness ? { checkReadiness: options.checkReadiness } : {}),
+    checkReadiness: options.checkReadiness ?? defaultReadiness,
   });
 
   const httpServer = createManagedHttpServer({
@@ -398,11 +423,15 @@ export function bootstrapAgentService(
     router,
     logger,
     maxBodyBytes: config.maxUploadBytes + 2 * 1024 * 1024,
+    onShutdown: async () => {
+      await dbPool.end().catch(() => undefined);
+    },
   });
 
   return Object.freeze({
     config,
     logger,
+    dbPool,
     repository,
     objectStorage,
     vectorStore,
@@ -411,6 +440,7 @@ export function bootstrapAgentService(
     graphExecutor,
     router,
     httpServer,
+    verifyDatabaseConnection,
   });
 }
 
@@ -421,6 +451,11 @@ export async function startAgentServer(
   options: AgentServiceBootstrapOptions & { readonly host?: string; readonly port?: number } = {},
 ): Promise<AgentServiceRuntime & { readonly boundPort: number }> {
   const runtime = bootstrapAgentService(options);
+  const shouldVerifyDb =
+    options.verifyDatabaseOnStart ?? runtime.config.nodeEnv === 'production';
+  if (shouldVerifyDb) {
+    await runtime.verifyDatabaseConnection();
+  }
   const host = options.host ?? process.env.HOST ?? '0.0.0.0';
   const port = options.port ?? runtime.config.port;
   const { port: boundPort } = await runtime.httpServer.listen(port, host);
@@ -429,6 +464,7 @@ export async function startAgentServer(
     runtime.logger.info('Received shutdown signal; closing Agent HTTP server', { signal });
     try {
       await runtime.httpServer.close();
+      await runtime.dbPool.end().catch(() => undefined);
     } finally {
       process.exit(0);
     }

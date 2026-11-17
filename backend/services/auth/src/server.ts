@@ -13,6 +13,9 @@ import {
   DEV_SHARED_BOOTSTRAP_DEFAULTS,
   isExecutedAsMainModule,
   RedisRateLimitStore,
+  verifyDatabaseConnectivity,
+  type DatabaseConnectivityCheckResult,
+  type DatabasePool,
   type Logger,
   type ManagedHttpServer,
   type RateLimitCounterStore,
@@ -98,6 +101,9 @@ export interface AuthServiceBootstrapOptions {
   readonly env?: Record<string, string | undefined>;
   readonly host?: string;
   readonly port?: number;
+  readonly dbPool?: DatabasePool;
+  readonly verifyDatabaseOnStart?: boolean;
+  readonly checkReadiness?: () => Promise<boolean>;
   readonly firebaseVerifier?: FirebaseTokenVerifier;
   readonly userRepository?: UserRepository;
   readonly sessionStore?: SessionStore;
@@ -108,12 +114,14 @@ export interface AuthServiceBootstrapOptions {
 export interface BootstrappedAuthService {
   readonly config: AuthServiceConfig;
   readonly logger: Logger;
+  readonly dbPool: DatabasePool;
   readonly firebaseVerifier: FirebaseTokenVerifier;
   readonly userRepository: UserRepository;
   readonly sessionStore: SessionStore;
   readonly sessionService: SessionService;
   readonly router: AuthRouter;
   readonly httpServer: ManagedHttpServer;
+  verifyDatabaseConnection(): Promise<DatabaseConnectivityCheckResult>;
   start(
     port?: number,
     host?: string,
@@ -122,12 +130,19 @@ export interface BootstrappedAuthService {
 }
 
 /**
- * Applies deterministic development/container defaults when variables are not explicitly set
- * so the Auth Service boots cleanly in local dev and container smoke tests.
+ * Applies deterministic development/test defaults when variables are not explicitly set.
+ * In production (`NODE_ENV === 'production'`), requires explicit `DATABASE_URL` and `REDIS_URL`.
  */
 export function buildAuthBootstrapEnv(
   env: Record<string, string | undefined> = process.env,
 ): Record<string, string | undefined> {
+  if (env.NODE_ENV === 'production') {
+    return {
+      DATABASE_SCHEMA: 'auth',
+      PORT_AUTH: env.PORT_AUTH ?? env.PORT ?? '8001',
+      ...env,
+    };
+  }
   return {
     NODE_ENV: env.NODE_ENV ?? 'development',
     LOG_LEVEL: env.LOG_LEVEL ?? 'info',
@@ -144,7 +159,7 @@ export function buildAuthBootstrapEnv(
 }
 
 /**
- * Initializes the Auth Service dependency graph (`config`, `logger`, `firebaseVerifier`,
+ * Initializes the Auth Service dependency graph (`config`, `logger`, `dbPool`, `firebaseVerifier`,
  * `userRepository`, `sessionStore`, `sessionService`, `router`, and `httpServer`).
  */
 export function bootstrapAuthService(
@@ -159,10 +174,12 @@ export function bootstrapAuthService(
       level: config.LOG_LEVEL,
     });
 
-  const dbPool = createLazyPostgresPool({
-    schema: 'auth',
-    connectionString: config.DATABASE_URL,
-  });
+  const dbPool =
+    options.dbPool ??
+    createLazyPostgresPool({
+      schema: 'auth',
+      connectionString: config.DATABASE_URL,
+    });
   const postgresUserRepo = new PostgresUserRepository(dbPool);
   const redisClient = createRedisClientFromUrl(config.REDIS_URL);
 
@@ -180,6 +197,22 @@ export function bootstrapAuthService(
   const rateLimitStore =
     options.rateLimitStore ?? new RedisRateLimitStore(redisClient);
 
+  async function verifyDatabaseConnection(): Promise<DatabaseConnectivityCheckResult> {
+    const check = await verifyDatabaseConnectivity(dbPool, 'auth');
+    logger.info('Auth Service database connectivity verified', {
+      schema: check.schema,
+      latencyMs: check.latencyMs,
+    });
+    return check;
+  }
+
+  const defaultReadiness = async (): Promise<boolean> => {
+    if (config.NODE_ENV === 'production' || options.verifyDatabaseOnStart) {
+      await verifyDatabaseConnectivity(dbPool, 'auth');
+    }
+    return true;
+  };
+
   const router = createAuthRouter({
     config,
     firebaseVerifier,
@@ -187,13 +220,14 @@ export function bootstrapAuthService(
     sessionService,
     rateLimitStore,
     logger,
-    checkReadiness: async () => true,
+    checkReadiness: options.checkReadiness ?? defaultReadiness,
   });
 
   const httpServer = createManagedHttpServer({
     serviceName: 'auth',
     router,
     onShutdown: async () => {
+      await dbPool.end().catch(() => undefined);
       logger.info('Auth Service HTTP server shut down cleanly');
     },
   });
@@ -202,6 +236,11 @@ export function bootstrapAuthService(
     port = options.port ?? config.PORT_AUTH,
     host = options.host ?? effectiveEnv.HOST ?? '0.0.0.0',
   ): Promise<{ readonly port: number; readonly host: string }> {
+    const shouldVerifyDb =
+      options.verifyDatabaseOnStart ?? config.NODE_ENV === 'production';
+    if (shouldVerifyDb) {
+      await verifyDatabaseConnection();
+    }
     const bound = await httpServer.listen(port, host);
     logger.info('Auth Service HTTP listener started', {
       host: bound.host,
@@ -213,17 +252,20 @@ export function bootstrapAuthService(
 
   async function stop(): Promise<void> {
     await httpServer.close();
+    await dbPool.end().catch(() => undefined);
   }
 
   return Object.freeze({
     config,
     logger,
+    dbPool,
     firebaseVerifier,
     userRepository,
     sessionStore,
     sessionService,
     router,
     httpServer,
+    verifyDatabaseConnection,
     start,
     stop,
   });

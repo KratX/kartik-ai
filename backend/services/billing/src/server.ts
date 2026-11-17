@@ -18,6 +18,9 @@ import {
   createManagedHttpServer,
   createRedisClientFromUrl,
   isExecutedAsMainModule,
+  verifyDatabaseConnectivity,
+  type DatabaseConnectivityCheckResult,
+  type DatabasePool,
   type Logger,
   type ManagedHttpServer,
   type RateLimitCounterStore,
@@ -106,6 +109,8 @@ class ResilientBillingRepository implements BillingRepository {
 
 export interface BillingServiceBootstrapOptions {
   readonly env?: Record<string, string | undefined>;
+  readonly dbPool?: DatabasePool;
+  readonly verifyDatabaseOnStart?: boolean;
   readonly repository?: BillingRepository;
   readonly idempotencyStore?: MoneyIdempotencyStore;
   readonly paymentProvider?: PaymentProvider;
@@ -117,11 +122,13 @@ export interface BillingServiceBootstrapOptions {
 export interface BillingServiceRuntime {
   readonly config: BillingServiceConfig;
   readonly logger: Logger;
+  readonly dbPool: DatabasePool;
   readonly repository: BillingRepository;
   readonly creditService: CreditReservationService;
   readonly paymentService: PaymentOrderService;
   readonly router: BillingRouter;
   readonly httpServer: ManagedHttpServer;
+  verifyDatabaseConnection(): Promise<DatabaseConnectivityCheckResult>;
 }
 
 export function buildBillingBootstrapEnv(
@@ -168,10 +175,12 @@ export function bootstrapBillingService(
       level: config.NODE_ENV === 'test' ? 'error' : 'info',
     });
 
-  const dbPool = createLazyPostgresPool({
-    schema: 'billing',
-    connectionString: config.BILLING_DATABASE_URL,
-  });
+  const dbPool =
+    options.dbPool ??
+    createLazyPostgresPool({
+      schema: 'billing',
+      connectionString: config.BILLING_DATABASE_URL,
+    });
   const postgresBillingRepo = new PostgresBillingRepository(dbPool);
   const redisClient = createRedisClientFromUrl(config.REDIS_URL);
 
@@ -200,6 +209,22 @@ export function bootstrapBillingService(
       config.RAZORPAY_WEBHOOK_SECRET || DEV_SHARED_BOOTSTRAP_DEFAULTS.razorpayWebhookSecret,
   });
 
+  async function verifyDatabaseConnection(): Promise<DatabaseConnectivityCheckResult> {
+    const check = await verifyDatabaseConnectivity(dbPool, 'billing');
+    logger.info('Billing Service database connectivity verified', {
+      schema: check.schema,
+      latencyMs: check.latencyMs,
+    });
+    return check;
+  }
+
+  const defaultReadiness = async (): Promise<boolean> => {
+    if (config.NODE_ENV === 'production' || options.verifyDatabaseOnStart) {
+      await verifyDatabaseConnectivity(dbPool, 'billing');
+    }
+    return true;
+  };
+
   const router = createBillingRouter({
     config,
     repository,
@@ -207,23 +232,28 @@ export function bootstrapBillingService(
     paymentService,
     rateLimitStore,
     logger,
-    ...(options.checkReadiness ? { checkReadiness: options.checkReadiness } : {}),
+    checkReadiness: options.checkReadiness ?? defaultReadiness,
   });
 
   const httpServer = createManagedHttpServer({
     serviceName: 'billing',
     router,
     logger,
+    onShutdown: async () => {
+      await dbPool.end().catch(() => undefined);
+    },
   });
 
   return Object.freeze({
     config,
     logger,
+    dbPool,
     repository,
     creditService,
     paymentService,
     router,
     httpServer,
+    verifyDatabaseConnection,
   });
 }
 
@@ -234,6 +264,11 @@ export async function startBillingServer(
   options: BillingServiceBootstrapOptions & { readonly host?: string; readonly port?: number } = {},
 ): Promise<BillingServiceRuntime & { readonly boundPort: number }> {
   const runtime = bootstrapBillingService(options);
+  const shouldVerifyDb =
+    options.verifyDatabaseOnStart ?? runtime.config.NODE_ENV === 'production';
+  if (shouldVerifyDb) {
+    await runtime.verifyDatabaseConnection();
+  }
   const host = options.host ?? process.env.HOST ?? '0.0.0.0';
   const port = options.port ?? runtime.config.PORT;
   const { port: boundPort } = await runtime.httpServer.listen(port, host);
@@ -242,6 +277,7 @@ export async function startBillingServer(
     runtime.logger.info('Received shutdown signal; closing Billing HTTP server', { signal });
     try {
       await runtime.httpServer.close();
+      await runtime.dbPool.end().catch(() => undefined);
     } finally {
       process.exit(0);
     }

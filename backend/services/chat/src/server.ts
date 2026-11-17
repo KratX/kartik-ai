@@ -20,12 +20,15 @@ import {
   createRedisClientFromUrl,
   isExecutedAsMainModule,
   signUserContextAssertion,
+  verifyDatabaseConnectivity,
   type AgentExecuteRequest,
   type AgentExecuteResponse,
   type CreditReleaseRequest,
   type CreditReserveRequest,
   type CreditReserveResponse,
   type CreditSettleRequest,
+  type DatabaseConnectivityCheckResult,
+  type DatabasePool,
   type ErrorCode,
   type Logger,
   type ManagedHttpServer,
@@ -524,6 +527,8 @@ export class HttpAgentServiceClient implements AgentServiceClient {
 
 export interface ChatServiceBootstrapOptions {
   readonly env?: Record<string, string | undefined>;
+  readonly dbPool?: DatabasePool;
+  readonly verifyDatabaseOnStart?: boolean;
   readonly repository?: ChatRepository;
   readonly billingClient?: BillingServiceClient;
   readonly agentClient?: AgentServiceClient;
@@ -537,12 +542,14 @@ export interface ChatServiceBootstrapOptions {
 export interface ChatServiceRuntime {
   readonly config: ChatConfig;
   readonly logger: Logger;
+  readonly dbPool: DatabasePool;
   readonly repository: ChatRepository;
   readonly billingClient: BillingServiceClient;
   readonly agentClient: AgentServiceClient;
   readonly orchestrator: ChatOrchestratorService;
   readonly router: ReturnType<typeof createChatRouter>;
   readonly httpServer: ManagedHttpServer;
+  verifyDatabaseConnection(): Promise<DatabaseConnectivityCheckResult>;
 }
 
 export function buildChatBootstrapEnv(
@@ -586,10 +593,12 @@ export function bootstrapChatService(
       level: config.nodeEnv === 'test' ? 'error' : 'info',
     });
 
-  const dbPool = createLazyPostgresPool({
-    schema: 'chat',
-    connectionString: config.databaseUrl,
-  });
+  const dbPool =
+    options.dbPool ??
+    createLazyPostgresPool({
+      schema: 'chat',
+      connectionString: config.databaseUrl,
+    });
   const postgresChatRepo = new PostgresChatRepository(dbPool);
   const redisClient = createRedisClientFromUrl(config.redisUrl);
 
@@ -625,29 +634,50 @@ export function bootstrapChatService(
     lockStore,
   });
 
+  async function verifyDatabaseConnection(): Promise<DatabaseConnectivityCheckResult> {
+    const check = await verifyDatabaseConnectivity(dbPool, 'chat');
+    logger.info('Chat Service database connectivity verified', {
+      schema: check.schema,
+      latencyMs: check.latencyMs,
+    });
+    return check;
+  }
+
+  const defaultReadiness = async (): Promise<boolean> => {
+    if (config.nodeEnv === 'production' || options.verifyDatabaseOnStart) {
+      await verifyDatabaseConnectivity(dbPool, 'chat');
+    }
+    return true;
+  };
+
   const router = createChatRouter({
     config,
     repository,
     orchestrator,
     rateLimitStore,
-    ...(options.checkReadiness ? { checkReadiness: options.checkReadiness } : {}),
+    checkReadiness: options.checkReadiness ?? defaultReadiness,
   });
 
   const httpServer = createManagedHttpServer({
     serviceName: 'chat',
     router,
     logger,
+    onShutdown: async () => {
+      await dbPool.end().catch(() => undefined);
+    },
   });
 
   return Object.freeze({
     config,
     logger,
+    dbPool,
     repository,
     billingClient,
     agentClient,
     orchestrator,
     router,
     httpServer,
+    verifyDatabaseConnection,
   });
 }
 
@@ -658,6 +688,11 @@ export async function startChatServer(
   options: ChatServiceBootstrapOptions & { readonly host?: string; readonly port?: number } = {},
 ): Promise<ChatServiceRuntime & { readonly boundPort: number }> {
   const runtime = bootstrapChatService(options);
+  const shouldVerifyDb =
+    options.verifyDatabaseOnStart ?? runtime.config.nodeEnv === 'production';
+  if (shouldVerifyDb) {
+    await runtime.verifyDatabaseConnection();
+  }
   const host = options.host ?? process.env.HOST ?? '0.0.0.0';
   const port = options.port ?? runtime.config.port;
   const { port: boundPort } = await runtime.httpServer.listen(port, host);
@@ -666,6 +701,7 @@ export async function startChatServer(
     runtime.logger.info('Received shutdown signal; closing Chat HTTP server', { signal });
     try {
       await runtime.httpServer.close();
+      await runtime.dbPool.end().catch(() => undefined);
     } finally {
       process.exit(0);
     }

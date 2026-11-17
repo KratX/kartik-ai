@@ -154,6 +154,20 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
       'downstream services must receive USER_CONTEXT_PUBLIC_KEY_FILE secret',
     );
 
+    // Ensure nonexistent `postgres` host defaults are completely removed from production Compose
+    assert.ok(
+      !composeContent.includes('@postgres:5432'),
+      'docker-compose.prod.yml must not reference nonexistent postgres:5432 service host',
+    );
+    assert.ok(
+      composeContent.includes('DATABASE_URL:?'),
+      'docker-compose.prod.yml must require explicit production DATABASE_URL',
+    );
+    assert.ok(
+      composeContent.includes('BILLING_DATABASE_URL:?'),
+      'docker-compose.prod.yml must require explicit production BILLING_DATABASE_URL',
+    );
+
     const privSecretPath = path.join(
       repoRoot,
       'infra/aws/ec2-compose/secrets/user_context_signing_key.pem',

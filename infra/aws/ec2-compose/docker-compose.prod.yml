@@ -64,8 +64,12 @@ services:
     environment:
       NODE_ENV: production
       PORT: "8001"
-      DATABASE_URL: ${DATABASE_URL:-postgresql://kartik_auth:kartik_auth@postgres:5432/kartik}
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: ${AUTH_DATABASE_URL:-${DATABASE_URL:?DATABASE_URL or AUTH_DATABASE_URL must be set to a valid Neon PostgreSQL connection URI}}
+      DIRECT_DATABASE_URL: ${DIRECT_DATABASE_URL:-}
+      DATABASE_SCHEMA: auth
+      PGPOOL_IDLE_TIMEOUT_MS: ${PGPOOL_IDLE_TIMEOUT_MS:-10000}
+      PGPOOL_MAX: ${PGPOOL_MAX:-10}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       SERVICE_TO_SERVICE_TOKEN: ${SERVICE_TO_SERVICE_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
       USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"}
@@ -84,10 +88,14 @@ services:
     environment:
       NODE_ENV: production
       PORT: "8002"
-      DATABASE_URL: ${DATABASE_URL:-postgresql://kartik_chat:kartik_chat@postgres:5432/kartik}
+      DATABASE_URL: ${CHAT_DATABASE_URL:-${DATABASE_URL:?DATABASE_URL or CHAT_DATABASE_URL must be set to a valid Neon PostgreSQL connection URI}}
+      DIRECT_DATABASE_URL: ${DIRECT_DATABASE_URL:-}
+      DATABASE_SCHEMA: chat
+      PGPOOL_IDLE_TIMEOUT_MS: ${PGPOOL_IDLE_TIMEOUT_MS:-10000}
+      PGPOOL_MAX: ${PGPOOL_MAX:-10}
       AGENT_SERVICE_URL: http://agent:8003
       BILLING_SERVICE_URL: http://billing:8004
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       SERVICE_TO_SERVICE_TOKEN: ${SERVICE_TO_SERVICE_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
       CHAT_TO_AGENT_TOKEN: ${CHAT_TO_AGENT_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
       CHAT_TO_BILLING_TOKEN: ${CHAT_TO_BILLING_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
@@ -110,11 +118,15 @@ services:
     environment:
       NODE_ENV: production
       PORT: "8003"
-      DATABASE_URL: ${DATABASE_URL:-postgresql://kartik_agent:kartik_agent@postgres:5432/kartik}
+      DATABASE_URL: ${AGENT_DATABASE_URL:-${DATABASE_URL:?DATABASE_URL or AGENT_DATABASE_URL must be set to a valid Neon PostgreSQL connection URI}}
+      DIRECT_DATABASE_URL: ${DIRECT_DATABASE_URL:-}
+      DATABASE_SCHEMA: agent
+      PGPOOL_IDLE_TIMEOUT_MS: ${PGPOOL_IDLE_TIMEOUT_MS:-10000}
+      PGPOOL_MAX: ${PGPOOL_MAX:-10}
       MOCK_AI: ${MOCK_AI:-true}
       IMAGE_PROVIDER: ${IMAGE_PROVIDER:-mock}
-      QDRANT_URL: http://qdrant:6333
-      REDIS_URL: redis://redis:6379
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       INTERNAL_CALLER_TOKEN_CHAT: ${INTERNAL_CALLER_TOKEN_CHAT:-s2s-prod-compose-token-kartik-ai-v43}
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
       USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"}
@@ -134,10 +146,16 @@ services:
     environment:
       NODE_ENV: production
       PORT: "8004"
-      BILLING_DATABASE_URL: ${BILLING_DATABASE_URL:-postgresql://kartik_billing:kartik_billing@postgres:5432/kartik}
+      BILLING_DATABASE_URL: ${BILLING_DATABASE_URL:?BILLING_DATABASE_URL must be set to a valid Neon PostgreSQL connection URI}
+      DATABASE_URL: ${BILLING_DATABASE_URL:?BILLING_DATABASE_URL must be set to a valid Neon PostgreSQL connection URI}
+      DIRECT_DATABASE_URL: ${DIRECT_DATABASE_URL:-}
+      DATABASE_SCHEMA: billing
+      PGPOOL_IDLE_TIMEOUT_MS: ${PGPOOL_IDLE_TIMEOUT_MS:-10000}
+      PGPOOL_MAX: ${PGPOOL_MAX:-10}
       BILLING_MODE: ${BILLING_MODE:-mock}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       INTERNAL_CALLER_TOKEN_CHAT: ${INTERNAL_CALLER_TOKEN_CHAT:-s2s-prod-compose-token-kartik-ai-v43}
+      CHAT_TO_BILLING_TOKEN: ${CHAT_TO_BILLING_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
       GATEWAY_TO_BILLING_TOKEN: ${GATEWAY_TO_BILLING_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
       USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"}

@@ -15,6 +15,7 @@ import {
   isPlaceholderEd25519KeyMaterial,
   loadConfig,
   resolveSecretOrFileEnv,
+  validatePostgresConnectionUrl,
   type ConfigSchema,
 } from '@kartik/shared';
 
@@ -131,7 +132,7 @@ function isValidEd25519PublicKey(rawPemOrBase64: string): boolean {
 
 /**
  * Parses and validates the Auth service environment configuration at startup.
- * Enforces cross-field rules for live Firebase mode and production cookie security.
+ * Enforces cross-field rules for live Firebase mode, production database URL, and production cookie security.
  */
 export function loadAuthConfig(
   env: Record<string, string | undefined> = process.env,
@@ -149,6 +150,9 @@ export function loadAuthConfig(
     );
   const normalizedEnv: Record<string, string | undefined> = {
     ...env,
+    ...(env.DATABASE_URL === undefined && env.AUTH_DATABASE_URL !== undefined
+      ? { DATABASE_URL: env.AUTH_DATABASE_URL }
+      : {}),
     ...(env.PORT_AUTH === undefined && env.PORT !== undefined
       ? { PORT_AUTH: env.PORT }
       : {}),
@@ -156,6 +160,14 @@ export function loadAuthConfig(
   const parsed = loadConfig(AUTH_CONFIG_SCHEMA, normalizedEnv) as unknown as AuthServiceConfig;
 
   const crossFieldReasons: Record<string, string> = {};
+
+  const dbCheck = validatePostgresConnectionUrl(parsed.DATABASE_URL, {
+    envName: 'DATABASE_URL',
+    nodeEnv: parsed.NODE_ENV,
+  });
+  if (!dbCheck.valid) {
+    crossFieldReasons.DATABASE_URL = dbCheck.reason ?? 'must be a valid PostgreSQL connection URI';
+  }
 
   if (resolvedPublicKey !== undefined && !isValidEd25519PublicKey(resolvedPublicKey)) {
     crossFieldReasons.USER_CONTEXT_PUBLIC_KEY =

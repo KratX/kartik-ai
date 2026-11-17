@@ -34,6 +34,30 @@ export const ALLOWED_DATABASE_SCHEMAS = Object.freeze([
   'billing',
 ]);
 
+export function validatePostgresUriInEnv(rawUrl, envName, nodeEnv) {
+  if (!rawUrl || typeof rawUrl !== 'string' || rawUrl.trim() === '') {
+    return `${envName} is required and must be a valid postgres:// or postgresql:// URI`;
+  }
+  const trimmed = rawUrl.trim();
+  if (!/^postgres(ql)?:\/\/.+/i.test(trimmed)) {
+    return `${envName} must use the postgres:// or postgresql:// protocol`;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    const host = parsed.hostname.trim().toLowerCase();
+    const dbName = parsed.pathname.replace(/^\/+/, '').trim();
+    if (!host || !dbName) {
+      return `${envName} must include a valid hostname and database path`;
+    }
+    if (nodeEnv === 'production' && host === 'postgres') {
+      return `${envName} points to nonexistent Compose hostname "postgres"; production requires an explicit Neon PostgreSQL URI`;
+    }
+    return null;
+  } catch {
+    return `${envName} must be a valid postgres:// or postgresql:// URL`;
+  }
+}
+
 /**
  * Validates an environment map against Kartik.ai operational rules without leaking secret values.
  *
@@ -51,6 +75,15 @@ export function validateOperationalEnvironment(env = process.env) {
     }
   }
 
+  const nodeEnv = env.NODE_ENV?.trim() ?? 'development';
+  const dbUrl = env.DATABASE_URL?.trim();
+  if (dbUrl) {
+    const dbErr = validatePostgresUriInEnv(dbUrl, 'DATABASE_URL', nodeEnv);
+    if (dbErr) {
+      errors.push(dbErr);
+    }
+  }
+
   const schema = env.DATABASE_SCHEMA?.trim();
   if (schema && !ALLOWED_DATABASE_SCHEMAS.includes(schema)) {
     errors.push(
@@ -58,11 +91,36 @@ export function validateOperationalEnvironment(env = process.env) {
     );
   }
 
-  const directUrl = env.DIRECT_DATABASE_URL?.trim();
-  if (directUrl && directUrl.includes('-pooler')) {
-    errors.push(
-      'DIRECT_DATABASE_URL must be an unpooled PostgreSQL connection (found "-pooler" host — ADR 0004)',
+  const billingDbUrl = env.BILLING_DATABASE_URL?.trim();
+  if (billingDbUrl !== undefined && billingDbUrl !== '') {
+    const billingErr = validatePostgresUriInEnv(
+      billingDbUrl,
+      'BILLING_DATABASE_URL',
+      nodeEnv,
     );
+    if (billingErr) {
+      errors.push(billingErr);
+    }
+  } else if (schema === 'billing' && nodeEnv === 'production') {
+    errors.push(
+      'Missing required environment variable: BILLING_DATABASE_URL (required when DATABASE_SCHEMA=billing in production)',
+    );
+  }
+
+  const directUrl = env.DIRECT_DATABASE_URL?.trim();
+  if (directUrl) {
+    const directErr = validatePostgresUriInEnv(
+      directUrl,
+      'DIRECT_DATABASE_URL',
+      nodeEnv,
+    );
+    if (directErr) {
+      errors.push(directErr);
+    } else if (directUrl.includes('-pooler')) {
+      errors.push(
+        'DIRECT_DATABASE_URL must be an unpooled PostgreSQL connection (found "-pooler" host — ADR 0004)',
+      );
+    }
   }
 
   const idleTimeoutRaw = env.PGPOOL_IDLE_TIMEOUT_MS?.trim();
@@ -121,6 +179,7 @@ export function validateOperationalEnvironment(env = process.env) {
     NODE_ENV: env.NODE_ENV ?? '<unset>',
     DATABASE_SCHEMA: env.DATABASE_SCHEMA ?? '<unset>',
     DATABASE_URL: env.DATABASE_URL ? '[REDACTED_URL]' : '<unset>',
+    BILLING_DATABASE_URL: env.BILLING_DATABASE_URL ? '[REDACTED_URL]' : '<unset>',
     DIRECT_DATABASE_URL: env.DIRECT_DATABASE_URL ? '[REDACTED_URL]' : '<unset>',
     REDIS_URL: env.REDIS_URL ? '[REDACTED_URL]' : '<unset>',
     USER_CONTEXT_SIGNING_KEY: signingKey ? '[VALIDATED_ED25519_PRIVATE_KEY]' : '<unset>',

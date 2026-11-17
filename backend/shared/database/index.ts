@@ -54,14 +54,123 @@ export interface ResolvedDatabasePoolConfig {
   readonly options: string;
 }
 
+export interface PostgresUrlValidationOptions {
+  readonly envName?: string;
+  readonly nodeEnv?: string;
+  readonly forbidComposePostgresHost?: boolean;
+}
+
+export interface ValidatedPostgresUrlResult {
+  readonly valid: boolean;
+  readonly normalizedUrl?: string;
+  readonly hostname?: string;
+  readonly database?: string;
+  readonly requiresSsl?: boolean;
+  readonly isPoolerEndpoint?: boolean;
+  readonly reason?: string;
+}
+
+/**
+ * Validates that a PostgreSQL connection string is a well-formed `postgres://` or `postgresql://` URI
+ * with a non-empty database name, and rejects the nonexistent Docker Compose `postgres` service hostname
+ * in production environments.
+ */
+export function validatePostgresConnectionUrl(
+  rawUrl: unknown,
+  options: PostgresUrlValidationOptions = {},
+): ValidatedPostgresUrlResult {
+  const envName = options.envName ?? 'DATABASE_URL';
+  if (typeof rawUrl !== 'string' || rawUrl.trim() === '') {
+    return {
+      valid: false,
+      reason: `${envName} is required and must be a non-empty postgres:// or postgresql:// URI`,
+    };
+  }
+
+  const trimmed = rawUrl.trim();
+  if (!/^postgres(ql)?:\/\/.+/i.test(trimmed)) {
+    return {
+      valid: false,
+      reason: `${envName} must use the postgres:// or postgresql:// protocol`,
+    };
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return {
+      valid: false,
+      reason: `${envName} must be a valid postgres:// or postgresql:// URL`,
+    };
+  }
+
+  const hostname = parsed.hostname.trim().toLowerCase();
+  if (!hostname) {
+    return {
+      valid: false,
+      reason: `${envName} must include a valid database hostname`,
+    };
+  }
+
+  const database = parsed.pathname.replace(/^\/+/, '').trim();
+  if (!database) {
+    return {
+      valid: false,
+      reason: `${envName} must include a target database name in the URL path (e.g. /kartik)`,
+    };
+  }
+
+  const forbidPostgresHost =
+    options.forbidComposePostgresHost ?? options.nodeEnv === 'production';
+  if (forbidPostgresHost && hostname === 'postgres') {
+    return {
+      valid: false,
+      reason: `${envName} points to nonexistent Compose hostname "postgres"; production requires an explicit Neon PostgreSQL connection URI`,
+    };
+  }
+
+  const sslMode = parsed.searchParams.get('sslmode')?.toLowerCase();
+  const requiresSsl =
+    sslMode === 'require' ||
+    sslMode === 'verify-full' ||
+    sslMode === 'verify-ca' ||
+    parsed.searchParams.get('ssl') === 'true' ||
+    hostname.includes('neon.tech');
+  const isPoolerEndpoint = hostname.includes('-pooler');
+
+  return {
+    valid: true,
+    normalizedUrl: trimmed,
+    hostname,
+    database,
+    requiresSsl,
+    isPoolerEndpoint,
+  };
+}
+
+export function assertValidPostgresConnectionUrl(
+  rawUrl: unknown,
+  options: PostgresUrlValidationOptions = {},
+): string {
+  const result = validatePostgresConnectionUrl(rawUrl, options);
+  if (!result.valid || !result.normalizedUrl) {
+    throw new AppError(
+      'VALIDATION_FAILED',
+      result.reason ?? 'Invalid PostgreSQL connection URL',
+    );
+  }
+  return result.normalizedUrl;
+}
+
 /**
  * Builds and validates a PostgreSQL pool configuration that enforces schema search_path
  * isolation and Neon scale-to-zero idle timeout rules (ADR 0004).
  */
 export function buildDatabasePoolConfig(input: DatabasePoolConfigInput): ResolvedDatabasePoolConfig {
-  if (typeof input.connectionString !== 'string' || !/^postgres(ql)?:\/\/.+/i.test(input.connectionString.trim())) {
-    throw new AppError('VALIDATION_FAILED', 'DATABASE_URL must be a valid postgres:// or postgresql:// URI');
-  }
+  const validatedUrl = assertValidPostgresConnectionUrl(input.connectionString, {
+    envName: 'DATABASE_URL',
+  });
 
   const schema = assertDatabaseSchema(input.schema);
   const idleTimeoutMillis = input.idleTimeoutMillis ?? DEFAULT_PGPOOL_IDLE_TIMEOUT_MS;
@@ -88,7 +197,7 @@ export function buildDatabasePoolConfig(input: DatabasePoolConfigInput): Resolve
   }
 
   return Object.freeze({
-    connectionString: input.connectionString.trim(),
+    connectionString: validatedUrl,
     schema,
     idleTimeoutMillis,
     max,
@@ -377,9 +486,53 @@ export class PgDriverDatabasePool implements DatabasePool {
   }
 }
 
+export interface DatabaseConnectivityCheckResult {
+  readonly connected: true;
+  readonly schema: DatabaseSchemaName;
+  readonly latencyMs: number;
+}
+
 /**
- * Lazily initializes a `DatabasePool` using the `pg` driver and the Object Method (`host`, `user`, `password`, `database`).
- * Does NOT perform eager startup probes or reconnect loops.
+ * Performs a startup or readiness connectivity probe against the target PostgreSQL pool.
+ * Verifies the connection can execute `SELECT 1` and resolves the service schema.
+ */
+export async function verifyDatabaseConnectivity(
+  pool: DatabasePool,
+  schema: DatabaseSchemaName,
+): Promise<DatabaseConnectivityCheckResult> {
+  const validSchema = assertDatabaseSchema(schema);
+  const startedAt = Date.now();
+  try {
+    const res = await pool.query<{ readonly ok?: number }>(
+      'SELECT 1 AS ok',
+    );
+    const firstRow = res.rows[0];
+    if (firstRow && firstRow.ok !== undefined && Number(firstRow.ok) !== 1) {
+      throw new AppError(
+        'PROVIDER_UNAVAILABLE',
+        `Database connectivity check for schema "${validSchema}" returned unexpected probe response`,
+      );
+    }
+    return Object.freeze({
+      connected: true,
+      schema: validSchema,
+      latencyMs: Math.max(0, Date.now() - startedAt),
+    });
+  } catch (error) {
+    if (error instanceof AppError && error.code === 'PROVIDER_UNAVAILABLE') {
+      throw error;
+    }
+    throw new AppError(
+      'PROVIDER_UNAVAILABLE',
+      `Database startup connectivity check failed for schema "${validSchema}"`,
+    );
+  }
+}
+
+/**
+ * Lazily initializes a `DatabasePool` using the `pg` driver.
+ * When `connectionString` (`DATABASE_URL` / `BILLING_DATABASE_URL`) is provided, its host,
+ * credentials, database, and Neon TLS/pooler parameters take precedence over fallback `SQL_*` vars.
  */
 export function createLazyPostgresPool(options: {
   readonly schema: DatabaseSchemaName;
@@ -417,7 +570,7 @@ export function createLazyPostgresPool(options: {
         let requiresSsl = false;
         let isPoolerEndpoint = false;
 
-        if (!options.host && !process.env.SQL_HOST && options.connectionString) {
+        if (!options.host && options.connectionString) {
           try {
             const parsed = new URL(options.connectionString);
             host = parsed.hostname || host;
@@ -425,8 +578,12 @@ export function createLazyPostgresPool(options: {
             password = decodeURIComponent(parsed.password || password);
             database = parsed.pathname.replace(/^\/+/, '') || database;
             port = parsed.port ? Number(parsed.port) : port;
+            const sslMode = parsed.searchParams.get('sslmode')?.toLowerCase();
             requiresSsl =
-              parsed.searchParams.get('sslmode') === 'require' ||
+              sslMode === 'require' ||
+              sslMode === 'verify-full' ||
+              sslMode === 'verify-ca' ||
+              parsed.searchParams.get('ssl') === 'true' ||
               host.includes('neon.tech');
             isPoolerEndpoint = host.includes('-pooler');
           } catch {

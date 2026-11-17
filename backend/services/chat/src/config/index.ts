@@ -4,6 +4,7 @@ import {
   ConfigValidationError,
   isPlaceholderEd25519KeyMaterial,
   resolveSecretOrFileEnv,
+  validatePostgresConnectionUrl,
   type ConfigSchema,
 } from '@kartik/shared';
 
@@ -106,6 +107,7 @@ function normalizeEd25519PublicKeyPem(rawKey: string): string {
  *
  * Validates:
  * - Ed25519 `USER_CONTEXT_PUBLIC_KEY` (`aud === "chat"`).
+ * - PostgreSQL `DATABASE_URL` protocol and rejects nonexistent `postgres` host in production.
  * - Internal caller credentials (`CHAT_TO_AGENT_TOKEN`, `CHAT_TO_BILLING_TOKEN`) so Chat can
  *   coordinate Billing credit reservations around Agent specialist execution (Invariant #6).
  */
@@ -125,6 +127,9 @@ export function loadChatConfig(
     );
   const effectiveEnv: Record<string, string | undefined> = {
     ...env,
+    ...(env.DATABASE_URL === undefined && env.CHAT_DATABASE_URL !== undefined
+      ? { DATABASE_URL: env.CHAT_DATABASE_URL }
+      : {}),
     ...(resolvedPublicKey !== undefined
       ? { USER_CONTEXT_PUBLIC_KEY: resolvedPublicKey }
       : {}),
@@ -146,6 +151,14 @@ export function loadChatConfig(
   };
 
   const crossFieldErrors: Record<string, string> = {};
+  const dbCheck = validatePostgresConnectionUrl(raw.DATABASE_URL, {
+    envName: 'DATABASE_URL',
+    nodeEnv: raw.NODE_ENV,
+  });
+  if (!dbCheck.valid) {
+    crossFieldErrors.DATABASE_URL = dbCheck.reason ?? 'must be a valid PostgreSQL connection URI';
+  }
+
   const normalizedPublicKey = normalizeEd25519PublicKeyPem(raw.USER_CONTEXT_PUBLIC_KEY);
 
   if (isPlaceholderEd25519KeyMaterial(raw.USER_CONTEXT_PUBLIC_KEY)) {

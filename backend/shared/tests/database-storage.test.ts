@@ -2,13 +2,16 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assertDirectMigrationUrl,
+  assertValidPostgresConnectionUrl,
   buildDatabasePoolConfig,
   buildObjectStorageKey,
   computeMigrationChecksum,
   InMemoryObjectStorage,
   PostgresObjectStorage,
   runForwardMigrations,
+  validatePostgresConnectionUrl,
   validateUploadFile,
+  verifyDatabaseConnectivity,
   withTransaction,
   type DatabaseClient,
   type DatabasePool,
@@ -58,7 +61,7 @@ function createMockDatabasePool(initialAppliedMigrations: { version: string; fil
 }
 
 describe('@kartik/shared/database & @kartik/shared/storage (1.8.a)', () => {
-  it('enforces Neon 10s idleTimeoutMillis cap and schema search_path isolation in buildDatabasePoolConfig (ADR 0004)', () => {
+  it('enforces Neon 10s idleTimeoutMillis cap, rejects nonexistent production postgres host, and verifies startup connectivity (ADR 0004)', async () => {
     const cfg = buildDatabasePoolConfig({
       connectionString: 'postgresql://kartik_billing:secret@localhost:5432/kartik',
       schema: 'billing',
@@ -67,6 +70,39 @@ describe('@kartik/shared/database & @kartik/shared/storage (1.8.a)', () => {
     assert.equal(cfg.idleTimeoutMillis, 10_000);
     assert.equal(cfg.options, '-c search_path=billing');
     assert.equal(cfg.max, 10);
+
+    // Rejects nonexistent `postgres` host in production
+    const prodComposeDefaultCheck = validatePostgresConnectionUrl(
+      'postgresql://kartik_auth:kartik_auth@postgres:5432/kartik',
+      { envName: 'DATABASE_URL', nodeEnv: 'production' },
+    );
+    assert.equal(prodComposeDefaultCheck.valid, false);
+    assert.match(prodComposeDefaultCheck.reason ?? '', /nonexistent Compose hostname "postgres"/);
+
+    assert.throws(
+      () =>
+        assertValidPostgresConnectionUrl(
+          'postgresql://kartik_billing:kartik_billing@postgres:5432/kartik',
+          { envName: 'BILLING_DATABASE_URL', nodeEnv: 'production' },
+        ),
+      /nonexistent Compose hostname "postgres"/,
+    );
+
+    // Accepts valid Neon PostgreSQL pooled connection URI in production
+    const neonCheck = validatePostgresConnectionUrl(
+      'postgresql://neondb_owner:secret@ep-rapid-rain-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require',
+      { envName: 'DATABASE_URL', nodeEnv: 'production' },
+    );
+    assert.equal(neonCheck.valid, true);
+    assert.equal(neonCheck.requiresSsl, true);
+    assert.equal(neonCheck.isPoolerEndpoint, true);
+
+    // Startup connectivity check executes SELECT 1 AS ok and verifies schema
+    const probePool = createMockDatabasePool();
+    const connectivity = await verifyDatabaseConnectivity(probePool.pool, 'auth');
+    assert.equal(connectivity.connected, true);
+    assert.equal(connectivity.schema, 'auth');
+    assert.ok(probePool.executedQueries.includes('SELECT 1 AS ok'));
 
     // Reject idleTimeoutMillis > 15_000ms (protects Neon 100 CU-hour/month budget)
     assert.throws(

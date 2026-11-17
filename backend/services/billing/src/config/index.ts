@@ -15,6 +15,7 @@ import {
   ConfigValidationError,
   isPlaceholderEd25519KeyMaterial,
   resolveSecretOrFileEnv,
+  validatePostgresConnectionUrl,
   type ConfigSchema,
 } from '@kartik/shared';
 
@@ -130,13 +131,15 @@ function isValidEd25519PublicKey(rawPemOrBase64: string): boolean {
 
 /**
  * Validates the Billing Service environment at startup and verifies that:
- * 1. `USER_CONTEXT_PUBLIC_KEY` is a valid Ed25519 SPKI PEM key.
- * 2. When `BILLING_MODE === 'live'`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and
+ * 1. `BILLING_DATABASE_URL` is an explicit, valid PostgreSQL connection URI (and does not reference `postgres` in production).
+ * 2. `USER_CONTEXT_PUBLIC_KEY` is a valid Ed25519 SPKI PEM key.
+ * 3. When `BILLING_MODE === 'live'`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and
  *    `RAZORPAY_WEBHOOK_SECRET` are non-empty (§11).
  */
 export function loadBillingConfig(
   env: Record<string, string | undefined> = process.env,
 ): BillingServiceConfig {
+  const isProd = env.NODE_ENV === 'production';
   const resolvedPublicKey =
     resolveSecretOrFileEnv(
       env,
@@ -148,17 +151,33 @@ export function loadBillingConfig(
       'USER_CONTEXT_VERIFY_KEY',
       'USER_CONTEXT_VERIFY_KEY_FILE',
     );
+  const resolvedChatToken =
+    env.CHAT_TO_BILLING_TOKEN ?? env.INTERNAL_CALLER_TOKEN_CHAT;
   const effectiveEnv: Record<string, string | undefined> = {
     ...env,
     ...(resolvedPublicKey !== undefined
       ? { USER_CONTEXT_PUBLIC_KEY: resolvedPublicKey }
       : {}),
+    ...(resolvedChatToken !== undefined
+      ? { CHAT_TO_BILLING_TOKEN: resolvedChatToken }
+      : {}),
     PORT: env.PORT ?? env.PORT_BILLING,
-    BILLING_DATABASE_URL: env.BILLING_DATABASE_URL ?? env.DATABASE_URL,
+    BILLING_DATABASE_URL: isProd
+      ? env.BILLING_DATABASE_URL
+      : (env.BILLING_DATABASE_URL ?? env.DATABASE_URL),
   };
   const config = loadConfig(BILLING_CONFIG_SCHEMA, effectiveEnv) as unknown as BillingServiceConfig;
 
   const crossFieldErrors: Record<string, string> = {};
+
+  const dbCheck = validatePostgresConnectionUrl(config.BILLING_DATABASE_URL, {
+    envName: 'BILLING_DATABASE_URL',
+    nodeEnv: config.NODE_ENV,
+  });
+  if (!dbCheck.valid) {
+    crossFieldErrors.BILLING_DATABASE_URL =
+      dbCheck.reason ?? 'must be a valid PostgreSQL connection URI';
+  }
 
   if (!isValidEd25519PublicKey(config.USER_CONTEXT_PUBLIC_KEY)) {
     crossFieldErrors.USER_CONTEXT_PUBLIC_KEY =

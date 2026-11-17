@@ -4,6 +4,7 @@ import {
   ConfigValidationError,
   isPlaceholderEd25519KeyMaterial,
   resolveSecretOrFileEnv,
+  validatePostgresConnectionUrl,
   type ConfigSchema,
 } from '@kartik/shared';
 
@@ -192,6 +193,9 @@ export function loadAgentConfig(
     );
   const effectiveEnv: Record<string, string | undefined> = {
     ...env,
+    ...(env.DATABASE_URL === undefined && env.AGENT_DATABASE_URL !== undefined
+      ? { DATABASE_URL: env.AGENT_DATABASE_URL }
+      : {}),
     ...(resolvedPublicKey !== undefined
       ? { USER_CONTEXT_PUBLIC_KEY: resolvedPublicKey }
       : {}),
@@ -224,6 +228,14 @@ export function loadAgentConfig(
   };
 
   const crossFieldErrors: Record<string, string> = {};
+  const dbCheck = validatePostgresConnectionUrl(raw.DATABASE_URL, {
+    envName: 'DATABASE_URL',
+    nodeEnv: raw.NODE_ENV,
+  });
+  if (!dbCheck.valid) {
+    crossFieldErrors.DATABASE_URL = dbCheck.reason ?? 'must be a valid PostgreSQL connection URI';
+  }
+
   const normalizedPublicKey = normalizeEd25519PublicKeyPem(raw.USER_CONTEXT_PUBLIC_KEY);
 
   if (isPlaceholderEd25519KeyMaterial(raw.USER_CONTEXT_PUBLIC_KEY)) {

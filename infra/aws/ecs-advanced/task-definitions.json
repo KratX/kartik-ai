@@ -75,9 +75,17 @@
           "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/auth:latest",
           "portMappings": [{ "containerPort": 8001, "protocol": "tcp" }],
           "environment": [
+            { "name": "DATABASE_SCHEMA", "value": "auth" },
+            { "name": "PGPOOL_IDLE_TIMEOUT_MS", "value": "10000" },
             {
               "name": "USER_CONTEXT_PUBLIC_KEY",
               "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "DATABASE_URL",
+              "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:kartik-ai/prod/neon-database-url"
             }
           ]
         }
@@ -95,9 +103,17 @@
           "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/chat:latest",
           "portMappings": [{ "containerPort": 8002, "protocol": "tcp" }],
           "environment": [
+            { "name": "DATABASE_SCHEMA", "value": "chat" },
+            { "name": "PGPOOL_IDLE_TIMEOUT_MS", "value": "10000" },
             {
               "name": "USER_CONTEXT_PUBLIC_KEY",
               "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "DATABASE_URL",
+              "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:kartik-ai/prod/neon-database-url"
             }
           ]
         }
@@ -115,11 +131,19 @@
           "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/agent:latest",
           "portMappings": [{ "containerPort": 8003, "protocol": "tcp" }],
           "environment": [
+            { "name": "DATABASE_SCHEMA", "value": "agent" },
+            { "name": "PGPOOL_IDLE_TIMEOUT_MS", "value": "10000" },
             { "name": "MOCK_AI", "value": "true" },
             { "name": "IMAGE_PROVIDER", "value": "mock" },
             {
               "name": "USER_CONTEXT_PUBLIC_KEY",
               "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "DATABASE_URL",
+              "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:kartik-ai/prod/neon-database-url"
             }
           ]
         }
@@ -137,10 +161,18 @@
           "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/billing:latest",
           "portMappings": [{ "containerPort": 8004, "protocol": "tcp" }],
           "environment": [
+            { "name": "DATABASE_SCHEMA", "value": "billing" },
+            { "name": "PGPOOL_IDLE_TIMEOUT_MS", "value": "10000" },
             { "name": "BILLING_MODE", "value": "mock" },
             {
               "name": "USER_CONTEXT_PUBLIC_KEY",
               "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "BILLING_DATABASE_URL",
+              "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:kartik-ai/prod/neon-billing-database-url"
             }
           ]
         }
