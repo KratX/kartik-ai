@@ -13,6 +13,8 @@ import { createPublicKey } from 'node:crypto';
 import {
   loadConfig,
   ConfigValidationError,
+  isPlaceholderEd25519KeyMaterial,
+  resolveSecretOrFileEnv,
   type ConfigSchema,
 } from '@kartik/shared';
 
@@ -111,6 +113,9 @@ export interface BillingServiceConfig {
 }
 
 function isValidEd25519PublicKey(rawPemOrBase64: string): boolean {
+  if (isPlaceholderEd25519KeyMaterial(rawPemOrBase64)) {
+    return false;
+  }
   try {
     const trimmed = rawPemOrBase64.trim().replace(/\\n/g, '\n');
     const pem = trimmed.startsWith('-----BEGIN ')
@@ -132,8 +137,22 @@ function isValidEd25519PublicKey(rawPemOrBase64: string): boolean {
 export function loadBillingConfig(
   env: Record<string, string | undefined> = process.env,
 ): BillingServiceConfig {
+  const resolvedPublicKey =
+    resolveSecretOrFileEnv(
+      env,
+      'USER_CONTEXT_PUBLIC_KEY',
+      'USER_CONTEXT_PUBLIC_KEY_FILE',
+    ) ??
+    resolveSecretOrFileEnv(
+      env,
+      'USER_CONTEXT_VERIFY_KEY',
+      'USER_CONTEXT_VERIFY_KEY_FILE',
+    );
   const effectiveEnv: Record<string, string | undefined> = {
     ...env,
+    ...(resolvedPublicKey !== undefined
+      ? { USER_CONTEXT_PUBLIC_KEY: resolvedPublicKey }
+      : {}),
     PORT: env.PORT ?? env.PORT_BILLING,
     BILLING_DATABASE_URL: env.BILLING_DATABASE_URL ?? env.DATABASE_URL,
   };

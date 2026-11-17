@@ -48,7 +48,17 @@
             { "name": "AUTH_SERVICE_URL", "value": "http://auth.kartik.local:8001" },
             { "name": "CHAT_SERVICE_URL", "value": "http://chat.kartik.local:8002" },
             { "name": "AGENT_SERVICE_URL", "value": "http://agent.kartik.local:8003" },
-            { "name": "BILLING_SERVICE_URL", "value": "http://billing.kartik.local:8004" }
+            { "name": "BILLING_SERVICE_URL", "value": "http://billing.kartik.local:8004" },
+            {
+              "name": "USER_CONTEXT_PUBLIC_KEY",
+              "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "USER_CONTEXT_SIGNING_KEY",
+              "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:kartik-ai/prod/user-context-signing-key"
+            }
           ]
         }
       ]
@@ -63,7 +73,13 @@
         {
           "name": "auth",
           "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/auth:latest",
-          "portMappings": [{ "containerPort": 8001, "protocol": "tcp" }]
+          "portMappings": [{ "containerPort": 8001, "protocol": "tcp" }],
+          "environment": [
+            {
+              "name": "USER_CONTEXT_PUBLIC_KEY",
+              "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"
+            }
+          ]
         }
       ]
     },
@@ -77,7 +93,13 @@
         {
           "name": "chat",
           "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/chat:latest",
-          "portMappings": [{ "containerPort": 8002, "protocol": "tcp" }]
+          "portMappings": [{ "containerPort": 8002, "protocol": "tcp" }],
+          "environment": [
+            {
+              "name": "USER_CONTEXT_PUBLIC_KEY",
+              "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"
+            }
+          ]
         }
       ]
     },
@@ -94,7 +116,11 @@
           "portMappings": [{ "containerPort": 8003, "protocol": "tcp" }],
           "environment": [
             { "name": "MOCK_AI", "value": "true" },
-            { "name": "IMAGE_PROVIDER", "value": "mock" }
+            { "name": "IMAGE_PROVIDER", "value": "mock" },
+            {
+              "name": "USER_CONTEXT_PUBLIC_KEY",
+              "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"
+            }
           ]
         }
       ]
@@ -111,7 +137,11 @@
           "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/kartik-ai/billing:latest",
           "portMappings": [{ "containerPort": 8004, "protocol": "tcp" }],
           "environment": [
-            { "name": "BILLING_MODE", "value": "mock" }
+            { "name": "BILLING_MODE", "value": "mock" },
+            {
+              "name": "USER_CONTEXT_PUBLIC_KEY",
+              "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"
+            }
           ]
         }
       ]

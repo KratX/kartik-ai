@@ -28,6 +28,9 @@ services:
       context: ../../..
       dockerfile: backend/gateway/Dockerfile
     restart: unless-stopped
+    secrets:
+      - user_context_signing_key
+      - user_context_public_key
     environment:
       NODE_ENV: production
       PORT: "8000"
@@ -37,7 +40,9 @@ services:
       BILLING_SERVICE_URL: http://billing:8004
       REDIS_URL: redis://redis:6379
       SERVICE_TO_SERVICE_TOKEN: ${SERVICE_TO_SERVICE_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
-      USER_CONTEXT_SIGNING_KEY: ${USER_CONTEXT_SIGNING_KEY:-"-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIFlocalDevEd25519SeedForKartikAiGateway01\n-----END PRIVATE KEY-----"}
+      USER_CONTEXT_SIGNING_KEY_FILE: /run/secrets/user_context_signing_key
+      USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
+      USER_CONTEXT_SIGNING_KEY: ${USER_CONTEXT_SIGNING_KEY:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
       DEMO_READ_ONLY: ${DEMO_READ_ONLY:-false}
     depends_on:
@@ -54,13 +59,16 @@ services:
       context: ../../..
       dockerfile: backend/services/auth/Dockerfile
     restart: unless-stopped
+    secrets:
+      - user_context_public_key
     environment:
       NODE_ENV: production
       PORT: "8001"
       DATABASE_URL: ${DATABASE_URL:-postgresql://kartik_auth:kartik_auth@postgres:5432/kartik}
       REDIS_URL: redis://redis:6379
       SERVICE_TO_SERVICE_TOKEN: ${SERVICE_TO_SERVICE_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
-      USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAlocalDevEd25519PublicKeyForKartikAiServices0\n-----END PUBLIC KEY-----"}
+      USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
+      USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"}
     depends_on:
       - redis
     networks:
@@ -71,6 +79,8 @@ services:
       context: ../../..
       dockerfile: backend/services/chat/Dockerfile
     restart: unless-stopped
+    secrets:
+      - user_context_public_key
     environment:
       NODE_ENV: production
       PORT: "8002"
@@ -81,7 +91,8 @@ services:
       SERVICE_TO_SERVICE_TOKEN: ${SERVICE_TO_SERVICE_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
       CHAT_TO_AGENT_TOKEN: ${CHAT_TO_AGENT_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
       CHAT_TO_BILLING_TOKEN: ${CHAT_TO_BILLING_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
-      USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAlocalDevEd25519PublicKeyForKartikAiServices0\n-----END PUBLIC KEY-----"}
+      USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
+      USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"}
     depends_on:
       - agent
       - billing
@@ -94,6 +105,8 @@ services:
       context: ../../..
       dockerfile: backend/services/agent/Dockerfile
     restart: unless-stopped
+    secrets:
+      - user_context_public_key
     environment:
       NODE_ENV: production
       PORT: "8003"
@@ -103,7 +116,8 @@ services:
       QDRANT_URL: http://qdrant:6333
       REDIS_URL: redis://redis:6379
       INTERNAL_CALLER_TOKEN_CHAT: ${INTERNAL_CALLER_TOKEN_CHAT:-s2s-prod-compose-token-kartik-ai-v43}
-      USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAlocalDevEd25519PublicKeyForKartikAiServices0\n-----END PUBLIC KEY-----"}
+      USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
+      USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"}
     depends_on:
       - qdrant
       - redis
@@ -115,6 +129,8 @@ services:
       context: ../../..
       dockerfile: backend/services/billing/Dockerfile
     restart: unless-stopped
+    secrets:
+      - user_context_public_key
     environment:
       NODE_ENV: production
       PORT: "8004"
@@ -123,7 +139,8 @@ services:
       REDIS_URL: redis://redis:6379
       INTERNAL_CALLER_TOKEN_CHAT: ${INTERNAL_CALLER_TOKEN_CHAT:-s2s-prod-compose-token-kartik-ai-v43}
       GATEWAY_TO_BILLING_TOKEN: ${GATEWAY_TO_BILLING_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
-      USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAlocalDevEd25519PublicKeyForKartikAiServices0\n-----END PUBLIC KEY-----"}
+      USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
+      USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"}
     depends_on:
       - redis
     networks:
@@ -143,6 +160,12 @@ services:
       - qdrant_prod_data:/qdrant/storage
     networks:
       - kartik_internal
+
+secrets:
+  user_context_signing_key:
+    file: ${USER_CONTEXT_SIGNING_KEY_PATH:-./secrets/user_context_signing_key.pem}
+  user_context_public_key:
+    file: ${USER_CONTEXT_PUBLIC_KEY_PATH:-./secrets/user_context_public_key.pem}
 
 networks:
   kartik_internal:

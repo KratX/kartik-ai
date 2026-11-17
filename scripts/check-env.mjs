@@ -11,7 +11,14 @@
  *    and never prints secret values in error messages.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  isPlaceholderKeyMaterial,
+  resolveKeyFromEnvOrFile,
+  validateProductionEd25519KeyPair,
+} from './manage-ed25519-keys.mjs';
 
 export const CORE_REQUIRED_ENV_KEYS = Object.freeze([
   'NODE_ENV',
@@ -31,7 +38,7 @@ export const ALLOWED_DATABASE_SCHEMAS = Object.freeze([
  * Validates an environment map against Kartik.ai operational rules without leaking secret values.
  *
  * @param {Record<string, string | undefined>} env
- * @returns {{ valid: boolean; errors: string[]; redactedSummary: Record<string, string> }}
+ * @returns {{ valid: boolean; errors: readonly string[]; redactedSummary: Readonly<Record<string, string>> }}
  */
 export function validateOperationalEnvironment(env = process.env) {
   /** @type {string[]} */
@@ -75,12 +82,49 @@ export function validateOperationalEnvironment(env = process.env) {
     );
   }
 
+  const signingKey = resolveKeyFromEnvOrFile(
+    env,
+    'USER_CONTEXT_SIGNING_KEY',
+    'USER_CONTEXT_SIGNING_KEY_FILE',
+  );
+  const publicKey =
+    resolveKeyFromEnvOrFile(
+      env,
+      'USER_CONTEXT_PUBLIC_KEY',
+      'USER_CONTEXT_PUBLIC_KEY_FILE',
+    ) ??
+    resolveKeyFromEnvOrFile(
+      env,
+      'USER_CONTEXT_VERIFY_KEY',
+      'USER_CONTEXT_VERIFY_KEY_FILE',
+    );
+
+  if (signingKey !== undefined && publicKey !== undefined) {
+    const keyPairValidation = validateProductionEd25519KeyPair({
+      privateKey: signingKey,
+      publicKey,
+    });
+    if (!keyPairValidation.valid) {
+      errors.push(...keyPairValidation.errors);
+    }
+  } else if (signingKey !== undefined && isPlaceholderKeyMaterial(signingKey)) {
+    errors.push(
+      'USER_CONTEXT_SIGNING_KEY contains placeholder key material (must be a valid Ed25519 PKCS#8 private key)',
+    );
+  } else if (publicKey !== undefined && isPlaceholderKeyMaterial(publicKey)) {
+    errors.push(
+      'USER_CONTEXT_PUBLIC_KEY contains placeholder key material (must be a valid Ed25519 SPKI public key)',
+    );
+  }
+
   const redactedSummary = {
     NODE_ENV: env.NODE_ENV ?? '<unset>',
     DATABASE_SCHEMA: env.DATABASE_SCHEMA ?? '<unset>',
     DATABASE_URL: env.DATABASE_URL ? '[REDACTED_URL]' : '<unset>',
     DIRECT_DATABASE_URL: env.DIRECT_DATABASE_URL ? '[REDACTED_URL]' : '<unset>',
     REDIS_URL: env.REDIS_URL ? '[REDACTED_URL]' : '<unset>',
+    USER_CONTEXT_SIGNING_KEY: signingKey ? '[VALIDATED_ED25519_PRIVATE_KEY]' : '<unset>',
+    USER_CONTEXT_PUBLIC_KEY: publicKey ? '[VALIDATED_ED25519_PUBLIC_KEY]' : '<unset>',
     AI_PROVIDER_MODE: env.AI_PROVIDER_MODE ?? env.MOCK_AI ?? 'mock',
     BILLING_MODE: env.BILLING_MODE ?? 'mock',
   };
@@ -94,11 +138,28 @@ export function validateOperationalEnvironment(env = process.env) {
 
 const isMain =
   process.argv[1] &&
-  fileURLToPath(import.meta.url).toLowerCase() ===
+  (fileURLToPath(import.meta.url).toLowerCase() ===
     process.argv[1].replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase() ||
-  (process.argv[1] && process.argv[1].endsWith('check-env.mjs'));
+    process.argv[1].endsWith('check-env.mjs'));
 
 if (isMain) {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const defaultPrivPath = path.join(
+    repoRoot,
+    'infra',
+    'aws',
+    'ec2-compose',
+    'secrets',
+    'user_context_signing_key.pem',
+  );
+  const defaultPubPath = path.join(
+    repoRoot,
+    'infra',
+    'aws',
+    'ec2-compose',
+    'secrets',
+    'user_context_public_key.pem',
+  );
   const effectiveEnv = {
     NODE_ENV: process.env.NODE_ENV || 'development',
     DATABASE_URL:
@@ -108,6 +169,12 @@ if (isMain) {
       'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
     DATABASE_SCHEMA: process.env.DATABASE_SCHEMA || 'auth',
     REDIS_URL: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+    ...(fs.existsSync(defaultPrivPath)
+      ? { USER_CONTEXT_SIGNING_KEY_FILE: defaultPrivPath }
+      : {}),
+    ...(fs.existsSync(defaultPubPath)
+      ? { USER_CONTEXT_PUBLIC_KEY_FILE: defaultPubPath }
+      : {}),
     ...process.env,
   };
   const result = validateOperationalEnvironment(effectiveEnv);

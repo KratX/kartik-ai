@@ -136,6 +136,35 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
     assert.ok(!composeContent.includes('"8003:8003"'));
     assert.ok(!composeContent.includes('"8004:8004"'));
 
+    // Ensure placeholder Ed25519 keys are completely removed and Docker secrets are configured
+    assert.ok(
+      !composeContent.includes('MC4CAQAwBQYDK2VwBCIEIFlocalDevEd25519SeedForKartikAiGateway01'),
+      'docker-compose.prod.yml must not contain placeholder Ed25519 private key',
+    );
+    assert.ok(
+      !composeContent.includes('MCowBQYDK2VwAyEAlocalDevEd25519PublicKeyForKartikAiServices0'),
+      'docker-compose.prod.yml must not contain placeholder Ed25519 public key',
+    );
+    assert.ok(
+      composeContent.includes('USER_CONTEXT_SIGNING_KEY_FILE: /run/secrets/user_context_signing_key'),
+      'gateway must load USER_CONTEXT_SIGNING_KEY_FILE from Docker secret',
+    );
+    assert.ok(
+      composeContent.includes('USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key'),
+      'downstream services must receive USER_CONTEXT_PUBLIC_KEY_FILE secret',
+    );
+
+    const privSecretPath = path.join(
+      repoRoot,
+      'infra/aws/ec2-compose/secrets/user_context_signing_key.pem',
+    );
+    const pubSecretPath = path.join(
+      repoRoot,
+      'infra/aws/ec2-compose/secrets/user_context_public_key.pem',
+    );
+    assert.ok(fs.existsSync(privSecretPath), 'Missing production private key secret file');
+    assert.ok(fs.existsSync(pubSecretPath), 'Missing production public key secret file');
+
     const ecsPath = path.join(
       repoRoot,
       'infra/aws/ecs-advanced/task-definitions.json',

@@ -2,6 +2,8 @@ import { createPublicKey } from 'node:crypto';
 import {
   loadConfig,
   ConfigValidationError,
+  isPlaceholderEd25519KeyMaterial,
+  resolveSecretOrFileEnv,
   type ConfigSchema,
 } from '@kartik/shared';
 
@@ -177,8 +179,22 @@ function normalizeEd25519PublicKeyPem(rawKey: string): string {
 export function loadAgentConfig(
   env: Record<string, string | undefined> = process.env,
 ): AgentConfig {
+  const resolvedPublicKey =
+    resolveSecretOrFileEnv(
+      env,
+      'USER_CONTEXT_PUBLIC_KEY',
+      'USER_CONTEXT_PUBLIC_KEY_FILE',
+    ) ??
+    resolveSecretOrFileEnv(
+      env,
+      'USER_CONTEXT_VERIFY_KEY',
+      'USER_CONTEXT_VERIFY_KEY_FILE',
+    );
   const effectiveEnv: Record<string, string | undefined> = {
     ...env,
+    ...(resolvedPublicKey !== undefined
+      ? { USER_CONTEXT_PUBLIC_KEY: resolvedPublicKey }
+      : {}),
     PORT: env.PORT ?? env.PORT_AGENT,
   };
   const raw = loadConfig(AGENT_CONFIG_SCHEMA, effectiveEnv) as {
@@ -210,15 +226,20 @@ export function loadAgentConfig(
   const crossFieldErrors: Record<string, string> = {};
   const normalizedPublicKey = normalizeEd25519PublicKeyPem(raw.USER_CONTEXT_PUBLIC_KEY);
 
-  try {
-    const keyObj = createPublicKey(normalizedPublicKey);
-    if (keyObj.type !== 'public' || keyObj.asymmetricKeyType !== 'ed25519') {
-      crossFieldErrors.USER_CONTEXT_PUBLIC_KEY =
-        'must be an Ed25519 public key in SPKI PEM format';
-    }
-  } catch {
+  if (isPlaceholderEd25519KeyMaterial(raw.USER_CONTEXT_PUBLIC_KEY)) {
     crossFieldErrors.USER_CONTEXT_PUBLIC_KEY =
-      'invalid Ed25519 SPKI PEM public key format';
+      'placeholder Ed25519 public key defaults are forbidden (§6.4)';
+  } else {
+    try {
+      const keyObj = createPublicKey(normalizedPublicKey);
+      if (keyObj.type !== 'public' || keyObj.asymmetricKeyType !== 'ed25519') {
+        crossFieldErrors.USER_CONTEXT_PUBLIC_KEY =
+          'must be an Ed25519 public key in SPKI PEM format';
+      }
+    } catch {
+      crossFieldErrors.USER_CONTEXT_PUBLIC_KEY =
+        'invalid Ed25519 SPKI PEM public key format';
+    }
   }
 
   if (!raw.MOCK_AI) {

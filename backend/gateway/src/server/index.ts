@@ -67,6 +67,9 @@ export interface BootstrappedGatewayService {
 export function buildGatewayBootstrapEnv(
   env: Record<string, string | undefined> = process.env,
 ): Record<string, string | undefined> {
+  if (env.NODE_ENV === 'production') {
+    return env;
+  }
   return {
     NODE_ENV: env.NODE_ENV ?? 'development',
     LOG_LEVEL: env.LOG_LEVEL ?? 'info',
@@ -81,7 +84,9 @@ export function buildGatewayBootstrapEnv(
       DEV_SHARED_BOOTSTRAP_DEFAULTS.serviceToServiceToken,
     USER_CONTEXT_SIGNING_KEY:
       env.USER_CONTEXT_SIGNING_KEY ??
-      DEV_SHARED_BOOTSTRAP_DEFAULTS.userContextPrivateKeyPem,
+      (env.USER_CONTEXT_SIGNING_KEY_FILE
+        ? undefined
+        : DEV_SHARED_BOOTSTRAP_DEFAULTS.userContextPrivateKeyPem),
     CORS_ALLOWED_ORIGINS:
       env.CORS_ALLOWED_ORIGINS ??
       'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000',

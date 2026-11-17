@@ -19,6 +19,8 @@
     "typecheck": "node scripts/build-workspaces.mjs && tsc --noEmit",
     "test": "node scripts/build-workspaces.mjs && node --test --test-reporter=spec \"backend/**/dist/tests/*.test.js\" \"frontend/dist/tests/*.test.js\"",
     "check:env": "node scripts/check-env.mjs",
+    "keys:generate": "node scripts/manage-ed25519-keys.mjs --generate",
+    "keys:verify": "node scripts/manage-ed25519-keys.mjs --verify",
     "db:migrate": "node scripts/migrate.mjs",
     "db:seed": "node scripts/seed-dev-data.mjs",
     "toolchain": "node scripts/check-toolchain.mjs",

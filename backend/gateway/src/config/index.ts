@@ -16,7 +16,10 @@
 import { createPrivateKey } from 'node:crypto';
 import {
   ConfigValidationError,
+  isPlaceholderEd25519KeyMaterial,
   loadConfig,
+  resolveSecretOrFileEnv,
+  validateEd25519KeyPairMatch,
   type ConfigSchema,
 } from '@kartik/shared';
 
@@ -116,6 +119,9 @@ function normalizePemForValidation(raw: string): string {
 }
 
 function isValidEd25519PrivateKey(rawPemOrBase64: string): boolean {
+  if (isPlaceholderEd25519KeyMaterial(rawPemOrBase64)) {
+    return false;
+  }
   try {
     const pem = normalizePemForValidation(rawPemOrBase64);
     const keyObj = createPrivateKey(pem);
@@ -171,8 +177,16 @@ export function parseCorsAllowedOrigins(rawOrigins: string): readonly string[] {
 export function loadGatewayConfig(
   env: Record<string, string | undefined> = process.env,
 ): GatewayServiceConfig {
+  const resolvedSigningKey = resolveSecretOrFileEnv(
+    env,
+    'USER_CONTEXT_SIGNING_KEY',
+    'USER_CONTEXT_SIGNING_KEY_FILE',
+  );
   const normalizedEnv: Record<string, string | undefined> = {
     ...env,
+    ...(resolvedSigningKey !== undefined
+      ? { USER_CONTEXT_SIGNING_KEY: resolvedSigningKey }
+      : {}),
     ...(env.PORT_GATEWAY === undefined && env.PORT !== undefined
       ? { PORT_GATEWAY: env.PORT }
       : {}),
@@ -187,6 +201,29 @@ export function loadGatewayConfig(
   if (!isValidEd25519PrivateKey(parsed.USER_CONTEXT_SIGNING_KEY)) {
     crossFieldErrors.USER_CONTEXT_SIGNING_KEY =
       'must be a valid Ed25519 PKCS#8 private key in PEM or base64 format (§6.4)';
+  } else {
+    const configuredPublicKey =
+      resolveSecretOrFileEnv(
+        env,
+        'USER_CONTEXT_PUBLIC_KEY',
+        'USER_CONTEXT_PUBLIC_KEY_FILE',
+      ) ??
+      resolveSecretOrFileEnv(
+        env,
+        'USER_CONTEXT_VERIFY_KEY',
+        'USER_CONTEXT_VERIFY_KEY_FILE',
+      );
+    if (configuredPublicKey) {
+      const pairCheck = validateEd25519KeyPairMatch(
+        parsed.USER_CONTEXT_SIGNING_KEY,
+        configuredPublicKey,
+      );
+      if (!pairCheck.valid) {
+        crossFieldErrors.USER_CONTEXT_PUBLIC_KEY =
+          pairCheck.reason ??
+          'USER_CONTEXT_PUBLIC_KEY does not match USER_CONTEXT_SIGNING_KEY';
+      }
+    }
   }
 
   let allowedOrigins: readonly string[] = [];

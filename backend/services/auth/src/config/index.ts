@@ -9,9 +9,12 @@
  * 3. When `AUTH_PROVIDER_MODE === 'firebase'`, `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`,
  *    and `FIREBASE_PRIVATE_KEY` are strictly required at startup.
  */
+import { createPublicKey } from 'node:crypto';
 import {
   ConfigValidationError,
+  isPlaceholderEd25519KeyMaterial,
   loadConfig,
+  resolveSecretOrFileEnv,
   type ConfigSchema,
 } from '@kartik/shared';
 
@@ -107,6 +110,23 @@ export interface AuthServiceConfig {
   readonly SESSION_TTL_SECONDS: number;
   readonly COOKIE_SECURE: boolean;
   readonly COOKIE_SAME_SITE: 'lax' | 'strict';
+  readonly USER_CONTEXT_PUBLIC_KEY?: string;
+}
+
+function isValidEd25519PublicKey(rawPemOrBase64: string): boolean {
+  if (isPlaceholderEd25519KeyMaterial(rawPemOrBase64)) {
+    return false;
+  }
+  try {
+    const trimmed = rawPemOrBase64.trim().replace(/\\n/g, '\n');
+    const pem = trimmed.startsWith('-----BEGIN ')
+      ? trimmed
+      : Buffer.from(trimmed, 'base64').toString('utf8').replace(/\\n/g, '\n');
+    const keyObj = createPublicKey(pem);
+    return keyObj.type === 'public' && keyObj.asymmetricKeyType === 'ed25519';
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -116,6 +136,17 @@ export interface AuthServiceConfig {
 export function loadAuthConfig(
   env: Record<string, string | undefined> = process.env,
 ): AuthServiceConfig {
+  const resolvedPublicKey =
+    resolveSecretOrFileEnv(
+      env,
+      'USER_CONTEXT_PUBLIC_KEY',
+      'USER_CONTEXT_PUBLIC_KEY_FILE',
+    ) ??
+    resolveSecretOrFileEnv(
+      env,
+      'USER_CONTEXT_VERIFY_KEY',
+      'USER_CONTEXT_VERIFY_KEY_FILE',
+    );
   const normalizedEnv: Record<string, string | undefined> = {
     ...env,
     ...(env.PORT_AUTH === undefined && env.PORT !== undefined
@@ -125,6 +156,11 @@ export function loadAuthConfig(
   const parsed = loadConfig(AUTH_CONFIG_SCHEMA, normalizedEnv) as unknown as AuthServiceConfig;
 
   const crossFieldReasons: Record<string, string> = {};
+
+  if (resolvedPublicKey !== undefined && !isValidEd25519PublicKey(resolvedPublicKey)) {
+    crossFieldReasons.USER_CONTEXT_PUBLIC_KEY =
+      'must be a valid Ed25519 SPKI public key in PEM or base64 format (§6.4)';
+  }
 
   if (parsed.AUTH_PROVIDER_MODE === 'firebase') {
     if (!env.FIREBASE_PROJECT_ID || env.FIREBASE_PROJECT_ID.trim() === '') {
@@ -149,6 +185,9 @@ export function loadAuthConfig(
 
   return Object.freeze({
     ...parsed,
+    ...(resolvedPublicKey !== undefined
+      ? { USER_CONTEXT_PUBLIC_KEY: resolvedPublicKey }
+      : {}),
     COOKIE_SECURE: parsed.NODE_ENV === 'production' ? true : parsed.COOKIE_SECURE,
   });
 }

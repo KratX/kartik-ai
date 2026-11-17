@@ -6,9 +6,13 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import {
   ConfigValidationError,
   generateEd25519KeyPair,
+  signUserContextAssertion,
+  validateEd25519KeyPairMatch,
+  verifyUserContextAssertion,
 } from '@kartik/shared';
 import {
   loadGatewayConfig,
@@ -17,7 +21,7 @@ import {
 } from '../src/index.js';
 
 describe('@kartik/gateway config, Ed25519 key validation & service directory (3.1.a)', () => {
-  const { privateKeyPem } = generateEd25519KeyPair();
+  const { privateKeyPem, publicKeyPem } = generateEd25519KeyPair();
 
   it('loads valid Gateway config, validates Ed25519 private key, and normalizes service URLs (§6.1–§6.4)', () => {
     const config = loadGatewayConfig({
@@ -25,6 +29,7 @@ describe('@kartik/gateway config, Ed25519 key validation & service directory (3.
       REDIS_URL: 'redis://127.0.0.1:6379',
       SERVICE_TO_SERVICE_TOKEN: 's2s-gateway-token-at-least-16-chars',
       USER_CONTEXT_SIGNING_KEY: privateKeyPem,
+      USER_CONTEXT_PUBLIC_KEY: publicKeyPem,
       AUTH_SERVICE_URL: 'http://auth:8001///',
       CHAT_SERVICE_URL: 'http://chat:8002/',
       AGENT_SERVICE_URL: 'http://agent:8003',
@@ -45,27 +50,31 @@ describe('@kartik/gateway config, Ed25519 key validation & service directory (3.
     assert.equal(resolveUpstreamServiceUrl(config, 'billing'), 'http://billing:8004');
   });
 
-  it('fails startup when USER_CONTEXT_SIGNING_KEY is invalid without leaking raw key material (§6.4 & Gate G9)', () => {
+  it('fails startup when USER_CONTEXT_SIGNING_KEY is invalid or uses placeholder key material without leaking raw key material (§6.4 & Gate G9)', () => {
     const fakeSecretKey = 'not-a-valid-ed25519-pem-key-secret-value-1234567890';
+    const placeholderKey =
+      '-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIFlocalDevEd25519SeedForKartikAiGateway01\n-----END PRIVATE KEY-----';
 
-    assert.throws(
-      () =>
-        loadGatewayConfig({
-          REDIS_URL: 'redis://127.0.0.1:6379',
-          SERVICE_TO_SERVICE_TOKEN: 's2s-gateway-token-at-least-16-chars',
-          USER_CONTEXT_SIGNING_KEY: fakeSecretKey,
-        }),
-      (err: unknown) => {
-        assert.ok(err instanceof ConfigValidationError);
-        assert.ok(err.invalidVariables.includes('USER_CONTEXT_SIGNING_KEY'));
-        assert.equal(
-          err.message.includes(fakeSecretKey),
-          false,
-          'Error message must never leak raw secret values',
-        );
-        return true;
-      },
-    );
+    for (const invalidKey of [fakeSecretKey, placeholderKey]) {
+      assert.throws(
+        () =>
+          loadGatewayConfig({
+            REDIS_URL: 'redis://127.0.0.1:6379',
+            SERVICE_TO_SERVICE_TOKEN: 's2s-gateway-token-at-least-16-chars',
+            USER_CONTEXT_SIGNING_KEY: invalidKey,
+          }),
+        (err: unknown) => {
+          assert.ok(err instanceof ConfigValidationError);
+          assert.ok(err.invalidVariables.includes('USER_CONTEXT_SIGNING_KEY'));
+          assert.equal(
+            err.message.includes(invalidKey),
+            false,
+            'Error message must never leak raw secret values',
+          );
+          return true;
+        },
+      );
+    }
   });
 
   it('rejects wildcard "*" or malformed origins in CORS_ALLOWED_ORIGINS when credentialed cookies are used (§11)', () => {
@@ -93,5 +102,57 @@ describe('@kartik/gateway config, Ed25519 key validation & service directory (3.
     });
 
     assert.equal(config.PORT_GATEWAY, 8000);
+  });
+
+  it('loads production Ed25519 private/public keys from secrets files, signs assertions in Gateway, and verifies them across downstream services', () => {
+    const repoRoot = process.cwd().endsWith('gateway')
+      ? path.resolve(process.cwd(), '../..')
+      : process.cwd();
+    const privPath = path.join(
+      repoRoot,
+      'infra/aws/ec2-compose/secrets/user_context_signing_key.pem',
+    );
+    const pubPath = path.join(
+      repoRoot,
+      'infra/aws/ec2-compose/secrets/user_context_public_key.pem',
+    );
+
+    const config = loadGatewayConfig({
+      NODE_ENV: 'production',
+      REDIS_URL: 'redis://127.0.0.1:6379',
+      SERVICE_TO_SERVICE_TOKEN: 's2s-gateway-token-at-least-16-chars',
+      USER_CONTEXT_SIGNING_KEY_FILE: privPath,
+      USER_CONTEXT_PUBLIC_KEY_FILE: pubPath,
+      CORS_ALLOWED_ORIGINS: 'https://app.kartik.ai',
+    });
+
+    const pairResult = validateEd25519KeyPairMatch(
+      config.USER_CONTEXT_SIGNING_KEY,
+      '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----',
+    );
+    assert.equal(pairResult.valid, true);
+
+    for (const aud of ['chat', 'agent', 'billing'] as const) {
+      const assertion = signUserContextAssertion(
+        {
+          sub: 'usr_prod_verified',
+          aud,
+          traceId: 'trc_prod_verified',
+          nowSeconds: 1_750_000_000,
+          ttlSeconds: 60,
+        },
+        config.USER_CONTEXT_SIGNING_KEY,
+      );
+      const claims = verifyUserContextAssertion(
+        assertion,
+        pairResult.derivedPublicKeyPem ?? '',
+        {
+          expectedAudience: aud,
+          nowSeconds: 1_750_000_005,
+        },
+      );
+      assert.equal(claims.sub, 'usr_prod_verified');
+      assert.equal(claims.aud, aud);
+    }
   });
 });

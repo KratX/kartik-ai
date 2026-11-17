@@ -19,11 +19,12 @@ import {
   generateKeyPairSync,
   KeyObject,
   randomUUID,
-   createHash,
+  createHash,
   sign as cryptoSign,
   timingSafeEqual,
   verify as cryptoVerify,
 } from 'node:crypto';
+import fs from 'node:fs';
 import { AppError } from '../errors/index.js';
 
 export const USER_CONTEXT_ISSUER = 'gateway' as const;
@@ -92,6 +93,77 @@ export interface Ed25519KeyPairPem {
   readonly publicKeyPem: string;
 }
 
+export interface Ed25519KeyPairValidationResult {
+  readonly valid: boolean;
+  readonly reason?: string;
+  readonly derivedPublicKeyPem?: string;
+}
+
+const FORBIDDEN_PLACEHOLDER_KEY_MARKERS = Object.freeze([
+  'MC4CAQAwBQYDK2VwBCIEIFlocalDevEd25519SeedForKartikAiGateway01',
+  'MCowBQYDK2VwAyEAlocalDevEd25519PublicKeyForKartikAiServices0',
+  'REPLACE_ME',
+  'MOCK_KEY',
+  'PLACEHOLDER',
+  'changeme',
+]);
+
+/**
+ * Returns true when a raw key string is empty or contains known placeholder key material.
+ */
+export function isPlaceholderEd25519KeyMaterial(raw: string | undefined): boolean {
+  if (typeof raw !== 'string') {
+    return true;
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return true;
+  }
+  let candidate = trimmed;
+  try {
+    if (!trimmed.includes('-----BEGIN ')) {
+      const decoded = Buffer.from(trimmed, 'base64').toString('utf8');
+      if (decoded.includes('-----BEGIN ')) {
+        candidate = `${trimmed}\n${decoded}`;
+      }
+    }
+  } catch {
+    // Ignore base64 decode errors here
+  }
+  return FORBIDDEN_PLACEHOLDER_KEY_MARKERS.some((marker) =>
+    candidate.toLowerCase().includes(marker.toLowerCase()),
+  );
+}
+
+/**
+ * Resolves a secret or key value from either a direct environment variable (`valueKey`)
+ * or a mounted secret file path (`fileKey`, e.g. `/run/secrets/user_context_signing_key`).
+ */
+export function resolveSecretOrFileEnv(
+  env: Record<string, string | undefined>,
+  valueKey: string,
+  fileKey = `${valueKey}_FILE`,
+): string | undefined {
+  const direct = env[valueKey]?.trim();
+  if (direct && direct.length > 0) {
+    return direct;
+  }
+  const filePath = env[fileKey]?.trim();
+  if (filePath && filePath.length > 0) {
+    try {
+      if (fs.existsSync(filePath)) {
+        const content = fs.readFileSync(filePath, 'utf8').trim();
+        if (content.length > 0) {
+          return content;
+        }
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Generates an Ed25519 keypair in PKCS#8 (private) and SPKI (public) PEM format.
  * Useful for local development bootstrap and deterministic unit tests.
@@ -108,6 +180,12 @@ export function generateEd25519KeyPair(): Ed25519KeyPairPem {
 }
 
 function normalizePemInput(raw: string): string {
+  if (isPlaceholderEd25519KeyMaterial(raw)) {
+    throw new AppError(
+      'INTERNAL_ERROR',
+      'Invalid Ed25519 key material: placeholder key defaults are forbidden',
+    );
+  }
   const trimmed = raw.trim();
   if (trimmed.includes('-----BEGIN ')) {
     return trimmed.replace(/\\n/g, '\n');
@@ -116,7 +194,7 @@ function normalizePemInput(raw: string): string {
   try {
     const decoded = Buffer.from(trimmed, 'base64').toString('utf8').trim();
     if (decoded.includes('-----BEGIN ')) {
-      return decoded;
+      return decoded.replace(/\\n/g, '\n');
     }
   } catch {
     // Fall through to validation error
@@ -126,11 +204,14 @@ function normalizePemInput(raw: string): string {
 
 function resolvePrivateKey(key: string | KeyObject): KeyObject {
   if (typeof key !== 'string') {
+    if (key.type !== 'private' || key.asymmetricKeyType !== 'ed25519') {
+      throw new AppError('INTERNAL_ERROR', 'Invalid signing key object: expected ed25519 private key');
+    }
     return key;
   }
   const pem = normalizePemInput(key);
   const keyObj = createPrivateKey(pem);
-  if (keyObj.asymmetricKeyType !== 'ed25519') {
+  if (keyObj.type !== 'private' || keyObj.asymmetricKeyType !== 'ed25519') {
     throw new AppError('INTERNAL_ERROR', `Invalid signing key type: expected ed25519, got ${String(keyObj.asymmetricKeyType)}`);
   }
   return keyObj;
@@ -138,14 +219,124 @@ function resolvePrivateKey(key: string | KeyObject): KeyObject {
 
 function resolvePublicKey(key: string | KeyObject): KeyObject {
   if (typeof key !== 'string') {
+    if (key.type !== 'public' || key.asymmetricKeyType !== 'ed25519') {
+      throw new AppError('INTERNAL_ERROR', 'Invalid verification key object: expected ed25519 public key');
+    }
     return key;
   }
   const pem = normalizePemInput(key);
   const keyObj = createPublicKey(pem);
-  if (keyObj.asymmetricKeyType !== 'ed25519') {
+  if (keyObj.type !== 'public' || keyObj.asymmetricKeyType !== 'ed25519') {
     throw new AppError('INTERNAL_ERROR', `Invalid verification key type: expected ed25519, got ${String(keyObj.asymmetricKeyType)}`);
   }
   return keyObj;
+}
+
+/**
+ * Derives the canonical SPKI PEM Ed25519 public key from a private key.
+ */
+export function deriveEd25519PublicKeyFromPrivate(
+  privateKeyInput: string | KeyObject,
+): string {
+  const privKey = resolvePrivateKey(privateKeyInput);
+  const pubKey = createPublicKey(privKey);
+  return pubKey.export({ format: 'pem', type: 'spki' }).toString('utf8');
+}
+
+/**
+ * Validates that an Ed25519 private key and public key form a valid cryptographic pair
+ * and that user-context assertions signed by the Gateway verify across downstream audiences.
+ */
+export function validateEd25519KeyPairMatch(
+  privateKeyInput: string,
+  publicKeyInput: string,
+): Ed25519KeyPairValidationResult {
+  if (isPlaceholderEd25519KeyMaterial(privateKeyInput)) {
+    return Object.freeze({
+      valid: false,
+      reason: 'USER_CONTEXT_SIGNING_KEY contains placeholder or empty key material',
+    });
+  }
+  if (isPlaceholderEd25519KeyMaterial(publicKeyInput)) {
+    return Object.freeze({
+      valid: false,
+      reason: 'USER_CONTEXT_PUBLIC_KEY contains placeholder or empty key material',
+    });
+  }
+
+  let privKey: KeyObject;
+  try {
+    privKey = resolvePrivateKey(privateKeyInput);
+  } catch {
+    return Object.freeze({
+      valid: false,
+      reason: 'USER_CONTEXT_SIGNING_KEY is not a valid Ed25519 PKCS#8 private key',
+    });
+  }
+
+  let pubKey: KeyObject;
+  try {
+    pubKey = resolvePublicKey(publicKeyInput);
+  } catch {
+    return Object.freeze({
+      valid: false,
+      reason: 'USER_CONTEXT_PUBLIC_KEY is not a valid Ed25519 SPKI public key',
+    });
+  }
+
+  const derivedPubPem = createPublicKey(privKey)
+    .export({ format: 'pem', type: 'spki' })
+    .toString('utf8')
+    .trim();
+  const providedPubPem = pubKey
+    .export({ format: 'pem', type: 'spki' })
+    .toString('utf8')
+    .trim();
+
+  if (derivedPubPem !== providedPubPem) {
+    return Object.freeze({
+      valid: false,
+      reason:
+        'USER_CONTEXT_PUBLIC_KEY does not match the public key derived from USER_CONTEXT_SIGNING_KEY',
+      derivedPublicKeyPem: `${derivedPubPem}\n`,
+    });
+  }
+
+  // Perform cryptographic sign + verify round-trip across all downstream service audiences
+  try {
+    for (const aud of ['chat', 'agent', 'billing'] as const) {
+      const token = signUserContextAssertion(
+        {
+          sub: 'usr_preflight_validation',
+          aud,
+          traceId: 'trc_preflight_validation',
+          nowSeconds: 1_750_000_000,
+          ttlSeconds: 60,
+        },
+        privKey,
+      );
+      const verified = verifyUserContextAssertion(token, pubKey, {
+        expectedAudience: aud,
+        nowSeconds: 1_750_000_010,
+      });
+      if (verified.sub !== 'usr_preflight_validation' || verified.aud !== aud) {
+        return Object.freeze({
+          valid: false,
+          reason: `Cryptographic assertion verification failed for audience "${aud}"`,
+        });
+      }
+    }
+  } catch {
+    return Object.freeze({
+      valid: false,
+      reason: 'Failed Ed25519 user-context assertion sign/verify round-trip check',
+    });
+  }
+
+  return Object.freeze({
+    valid: true,
+    derivedPublicKeyPem: `${derivedPubPem}\n`,
+  });
 }
 
 function base64UrlEncode(input: Buffer | string): string {
