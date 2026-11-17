@@ -122,7 +122,7 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
     }
   });
 
-  it('verifies Profile P docker-compose.prod.yml and Profile S ECS / IAM definitions enforce private service isolation and deny public S3 ACLs', () => {
+  it('verifies Profile P docker-compose.prod.yml and Profile S ECS / IAM definitions enforce private service isolation and deny public S3 ACLs', async () => {
     const composePath = path.join(
       repoRoot,
       'infra/aws/ec2-compose/docker-compose.prod.yml',
@@ -168,6 +168,24 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
       'docker-compose.prod.yml must require explicit production BILLING_DATABASE_URL',
     );
 
+    // Ensure production Compose explicitly configures Firebase authentication and requires credentials
+    assert.ok(
+      composeContent.includes('AUTH_PROVIDER_MODE: ${AUTH_PROVIDER_MODE:-firebase}'),
+      'docker-compose.prod.yml must configure AUTH_PROVIDER_MODE=firebase for auth service',
+    );
+    assert.ok(
+      composeContent.includes('FIREBASE_PROJECT_ID:?'),
+      'docker-compose.prod.yml must require FIREBASE_PROJECT_ID in production',
+    );
+    assert.ok(
+      composeContent.includes('FIREBASE_CLIENT_EMAIL:?'),
+      'docker-compose.prod.yml must require FIREBASE_CLIENT_EMAIL in production',
+    );
+    assert.ok(
+      composeContent.includes('FIREBASE_PRIVATE_KEY:?'),
+      'docker-compose.prod.yml must require FIREBASE_PRIVATE_KEY in production',
+    );
+
     const privSecretPath = path.join(
       repoRoot,
       'infra/aws/ec2-compose/secrets/user_context_signing_key.pem',
@@ -176,6 +194,17 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
       repoRoot,
       'infra/aws/ec2-compose/secrets/user_context_public_key.pem',
     );
+    if (!fs.existsSync(privSecretPath) || !fs.existsSync(pubSecretPath)) {
+      const { pathToFileURL: toFileUrl } = await import('node:url');
+      const keyScriptPath = path.join(repoRoot, 'scripts/manage-ed25519-keys.mjs');
+      const keyMod = (await import(toFileUrl(keyScriptPath).href)) as {
+        provisionComposeEd25519Secrets: () => {
+          privateKeyPath: string;
+          publicKeyPath: string;
+        };
+      };
+      keyMod.provisionComposeEd25519Secrets();
+    }
     assert.ok(fs.existsSync(privSecretPath), 'Missing production private key secret file');
     assert.ok(fs.existsSync(pubSecretPath), 'Missing production public key secret file');
 

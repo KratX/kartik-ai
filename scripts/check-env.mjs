@@ -175,6 +175,58 @@ export function validateOperationalEnvironment(env = process.env) {
     );
   }
 
+  const authProviderMode = env.AUTH_PROVIDER_MODE?.trim();
+  if (nodeEnv === 'production' && authProviderMode === 'mock') {
+    errors.push(
+      'AUTH_PROVIDER_MODE=mock is forbidden in production; configure AUTH_PROVIDER_MODE=firebase',
+    );
+  }
+
+  const shouldValidateFirebase =
+    authProviderMode === 'firebase' ||
+    (nodeEnv === 'production' && schema === 'auth');
+  if (shouldValidateFirebase) {
+    const fbProjectId = env.FIREBASE_PROJECT_ID?.trim() ?? '';
+    if (
+      !fbProjectId ||
+      ['kartik-mock-project', 'your-firebase-project', 'replace_me', 'placeholder'].includes(
+        fbProjectId.toLowerCase(),
+      )
+    ) {
+      errors.push(
+        'FIREBASE_PROJECT_ID must be a valid non-placeholder Firebase project ID when AUTH_PROVIDER_MODE=firebase',
+      );
+    }
+
+    const fbClientEmail = env.FIREBASE_CLIENT_EMAIL?.trim() ?? '';
+    if (
+      !fbClientEmail ||
+      !fbClientEmail.includes('@') ||
+      [
+        'firebase-adminsdk@kartik-mock-project.iam.gserviceaccount.com',
+        'firebase-adminsdk@your-project.iam.gserviceaccount.com',
+      ].includes(fbClientEmail.toLowerCase())
+    ) {
+      errors.push(
+        'FIREBASE_CLIENT_EMAIL must be a valid non-placeholder service account email when AUTH_PROVIDER_MODE=firebase',
+      );
+    }
+
+    const fbPrivateKey =
+      resolveKeyFromEnvOrFile(env, 'FIREBASE_PRIVATE_KEY', 'FIREBASE_PRIVATE_KEY_FILE') ?? '';
+    if (
+      !fbPrivateKey ||
+      !fbPrivateKey.includes('BEGIN') ||
+      ['MOCK_KEY', 'REPLACE_ME', 'REPLACE_WITH_FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY'].some((m) =>
+        fbPrivateKey.includes(m),
+      )
+    ) {
+      errors.push(
+        'FIREBASE_PRIVATE_KEY must be a valid non-placeholder PEM private key when AUTH_PROVIDER_MODE=firebase',
+      );
+    }
+  }
+
   const redactedSummary = {
     NODE_ENV: env.NODE_ENV ?? '<unset>',
     DATABASE_SCHEMA: env.DATABASE_SCHEMA ?? '<unset>',
@@ -182,6 +234,9 @@ export function validateOperationalEnvironment(env = process.env) {
     BILLING_DATABASE_URL: env.BILLING_DATABASE_URL ? '[REDACTED_URL]' : '<unset>',
     DIRECT_DATABASE_URL: env.DIRECT_DATABASE_URL ? '[REDACTED_URL]' : '<unset>',
     REDIS_URL: env.REDIS_URL ? '[REDACTED_URL]' : '<unset>',
+    AUTH_PROVIDER_MODE: authProviderMode ?? (nodeEnv === 'production' ? 'firebase' : 'mock'),
+    FIREBASE_PROJECT_ID: env.FIREBASE_PROJECT_ID ?? '<unset>',
+    FIREBASE_PRIVATE_KEY: env.FIREBASE_PRIVATE_KEY ? '[REDACTED]' : '<unset>',
     USER_CONTEXT_SIGNING_KEY: signingKey ? '[VALIDATED_ED25519_PRIVATE_KEY]' : '<unset>',
     USER_CONTEXT_PUBLIC_KEY: publicKey ? '[VALIDATED_ED25519_PUBLIC_KEY]' : '<unset>',
     AI_PROVIDER_MODE: env.AI_PROVIDER_MODE ?? env.MOCK_AI ?? 'mock',

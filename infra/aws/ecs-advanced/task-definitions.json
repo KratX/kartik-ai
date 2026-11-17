@@ -77,6 +77,9 @@
           "environment": [
             { "name": "DATABASE_SCHEMA", "value": "auth" },
             { "name": "PGPOOL_IDLE_TIMEOUT_MS", "value": "10000" },
+            { "name": "AUTH_PROVIDER_MODE", "value": "firebase" },
+            { "name": "FIREBASE_PROJECT_ID", "value": "${FIREBASE_PROJECT_ID}" },
+            { "name": "FIREBASE_CLIENT_EMAIL", "value": "${FIREBASE_CLIENT_EMAIL}" },
             {
               "name": "USER_CONTEXT_PUBLIC_KEY",
               "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"
@@ -86,6 +89,10 @@
             {
               "name": "DATABASE_URL",
               "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:kartik-ai/prod/neon-database-url"
+            },
+            {
+              "name": "FIREBASE_PRIVATE_KEY",
+              "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:kartik-ai/prod/firebase-private-key"
             }
           ]
         }

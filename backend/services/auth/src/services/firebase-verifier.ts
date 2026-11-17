@@ -15,9 +15,9 @@
  * 3. Any invalid, expired, wrong-audience, or unverified-email token throws
  *    `AppError('UNAUTHENTICATED', ...)` (401). Never logs raw ID tokens (Gate G9).
  */
-import { createPublicKey, verify as cryptoVerify, type KeyObject } from 'node:crypto';
+import { createPrivateKey, createPublicKey, verify as cryptoVerify, type KeyObject } from 'node:crypto';
 import { AppError } from '@kartik/shared';
-import type { AuthServiceConfig } from '../config/index.js';
+import { validateFirebaseCredentials, type AuthServiceConfig } from '../config/index.js';
 
 export interface VerifiedGoogleIdentity {
   readonly firebaseUid: string;
@@ -134,12 +134,18 @@ const GOOGLE_CERTS_URL =
 
 /**
  * Default Google public-certificate resolver with in-memory caching for `AUTH_PROVIDER_MODE=firebase`.
+ * Also supports verifying tokens signed with the configured service account's `FIREBASE_PRIVATE_KEY`
+ * (`kid === "firebase-service-account"`).
  */
-export function createGooglePublicKeyResolver(): PublicKeyResolver {
+export function createGooglePublicKeyResolver(serviceAccountPublicKey?: KeyObject): PublicKeyResolver {
   let cachedKeys: Record<string, string> = {};
   let cacheExpiresAtMs = 0;
 
-  return async (kid: string): Promise<string | undefined> => {
+  return async (kid: string): Promise<string | KeyObject | undefined> => {
+    if (serviceAccountPublicKey && kid === 'firebase-service-account') {
+      return serviceAccountPublicKey;
+    }
+
     const now = Date.now();
     if (now < cacheExpiresAtMs && cachedKeys[kid]) {
       return cachedKeys[kid];
@@ -283,21 +289,54 @@ export class JwtFirebaseTokenVerifier implements FirebaseTokenVerifier {
 
 /**
  * Factory that builds the appropriate `FirebaseTokenVerifier` based on `config.AUTH_PROVIDER_MODE`.
+ * When `AUTH_PROVIDER_MODE === 'firebase'`, validates `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`,
+ * and `FIREBASE_PRIVATE_KEY` (when provided) and fails safely if credentials are invalid.
  */
 export function createFirebaseTokenVerifier(
-  config: Pick<AuthServiceConfig, 'AUTH_PROVIDER_MODE' | 'FIREBASE_PROJECT_ID'>,
+  config: Pick<AuthServiceConfig, 'AUTH_PROVIDER_MODE' | 'FIREBASE_PROJECT_ID'> &
+    Partial<Pick<AuthServiceConfig, 'FIREBASE_CLIENT_EMAIL' | 'FIREBASE_PRIVATE_KEY' | 'NODE_ENV'>>,
   options?: {
     readonly mockFixtures?: Readonly<Record<string, MockFixtureIdentity>>;
     readonly resolvePublicKey?: PublicKeyResolver;
     readonly nowSeconds?: () => number;
   },
 ): FirebaseTokenVerifier {
+  if (config.NODE_ENV === 'production' && config.AUTH_PROVIDER_MODE === 'mock') {
+    throw new AppError(
+      'VALIDATION_FAILED',
+      'AUTH_PROVIDER_MODE=mock is forbidden in production; configure AUTH_PROVIDER_MODE=firebase',
+    );
+  }
+
   if (config.AUTH_PROVIDER_MODE === 'mock') {
     return new MockFirebaseTokenVerifier(options?.mockFixtures);
   }
+
+  let serviceAccountPublicKey: KeyObject | undefined;
+  if (
+    config.FIREBASE_CLIENT_EMAIL !== undefined ||
+    config.FIREBASE_PRIVATE_KEY !== undefined
+  ) {
+    const validation = validateFirebaseCredentials({
+      projectId: config.FIREBASE_PROJECT_ID,
+      clientEmail: config.FIREBASE_CLIENT_EMAIL,
+      privateKey: config.FIREBASE_PRIVATE_KEY,
+    });
+    if (!validation.valid || !validation.normalizedPrivateKey) {
+      const failedKeys = Object.keys(validation.reasons).join(', ');
+      throw new AppError(
+        'VALIDATION_FAILED',
+        `Invalid Firebase credentials for [${failedKeys}]`,
+      );
+    }
+    const privKeyObj = createPrivateKey(validation.normalizedPrivateKey);
+    serviceAccountPublicKey = createPublicKey(privKeyObj);
+  }
+
   return new JwtFirebaseTokenVerifier({
     projectId: config.FIREBASE_PROJECT_ID,
-    resolvePublicKey: options?.resolvePublicKey ?? createGooglePublicKeyResolver(),
+    resolvePublicKey:
+      options?.resolvePublicKey ?? createGooglePublicKeyResolver(serviceAccountPublicKey),
     ...(options?.nowSeconds ? { nowSeconds: options.nowSeconds } : {}),
   });
 }

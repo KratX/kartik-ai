@@ -138,12 +138,52 @@ describe('@kartik/auth FirebaseTokenVerifier — Mock & RS256 JWT (2.2.a)', () =
     );
   });
 
-  it('selects MockFirebaseTokenVerifier vs JwtFirebaseTokenVerifier via createFirebaseTokenVerifier factory', async () => {
+  it('selects MockFirebaseTokenVerifier vs JwtFirebaseTokenVerifier via createFirebaseTokenVerifier factory and validates service account credentials', async () => {
     const mockVerifier = createFirebaseTokenVerifier({
       AUTH_PROVIDER_MODE: 'mock',
       FIREBASE_PROJECT_ID: 'kartik-mock',
     });
     const res = await mockVerifier.verifyIdToken('mock-google-token:alice');
     assert.equal(res.firebaseUid, 'fb_alice_02');
+
+    // Rejects mock mode in production
+    assert.throws(
+      () =>
+        createFirebaseTokenVerifier({
+          NODE_ENV: 'production',
+          AUTH_PROVIDER_MODE: 'mock',
+          FIREBASE_PROJECT_ID: 'kartik-prod',
+        }),
+      /AUTH_PROVIDER_MODE=mock is forbidden in production/,
+    );
+
+    // Verifies token signed with service account FIREBASE_PRIVATE_KEY when AUTH_PROVIDER_MODE=firebase
+    const liveVerifier = createFirebaseTokenVerifier(
+      {
+        NODE_ENV: 'production',
+        AUTH_PROVIDER_MODE: 'firebase',
+        FIREBASE_PROJECT_ID: 'kartik-prod',
+        FIREBASE_CLIENT_EMAIL: 'firebase-adminsdk@kartik-prod.iam.gserviceaccount.com',
+        FIREBASE_PRIVATE_KEY: rsaPrimary.privateKey,
+      },
+      { nowSeconds: () => fixedNow + 10 },
+    );
+    const liveToken = signTestFirebaseJwt(
+      {
+        iss: 'https://securetoken.google.com/kartik-prod',
+        aud: 'kartik-prod',
+        sub: 'fb_prod_sa_user_01',
+        email: 'prod@kartik.ai',
+        email_verified: true,
+        name: 'Prod User',
+        iat: fixedNow,
+        exp: fixedNow + 3600,
+      },
+      rsaPrimary.privateKey,
+      'firebase-service-account',
+    );
+    const verifiedProd = await liveVerifier.verifyIdToken(liveToken);
+    assert.equal(verifiedProd.firebaseUid, 'fb_prod_sa_user_01');
+    assert.equal(verifiedProd.email, 'prod@kartik.ai');
   });
 });

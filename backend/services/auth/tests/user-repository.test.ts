@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { generateKeyPairSync } from 'node:crypto';
 import { runForwardMigrations, type DatabaseClient, type DatabasePool, type DatabaseQueryResult } from '@kartik/shared';
 import {
   AUTH_MIGRATIONS,
@@ -8,8 +9,14 @@ import {
   PostgresUserRepository,
 } from '../src/index.js';
 
+const TEST_FIREBASE_RSA = generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+});
+
 describe('@kartik/auth config, 0001_auth_users migration & UserRepository (2.1.a)', () => {
-  it('loads Auth config in mock mode by default and enforces Firebase credentials when AUTH_PROVIDER_MODE=firebase', () => {
+  it('loads Auth config in mock mode in dev/test, defaults to AUTH_PROVIDER_MODE=firebase in production, and enforces valid Firebase credentials', () => {
     const mockCfg = loadAuthConfig({
       DATABASE_URL: 'postgresql://kartik_auth:secret@localhost:5432/kartik',
       REDIS_URL: 'redis://localhost:6379',
@@ -22,17 +29,35 @@ describe('@kartik/auth config, 0001_auth_users migration & UserRepository (2.1.a
     assert.equal(mockCfg.SESSION_COOKIE_NAME, 'kartik_session');
     assert.equal(mockCfg.SESSION_TTL_SECONDS, 604_800);
 
-    // Production forces COOKIE_SECURE=true
+    // Production defaults to AUTH_PROVIDER_MODE=firebase, forces COOKIE_SECURE=true, and validates RSA private key
     const prodCfg = loadAuthConfig({
       NODE_ENV: 'production',
       DATABASE_URL: 'postgresql://kartik_auth:secret@localhost:5432/kartik',
       REDIS_URL: 'redis://localhost:6379',
       SERVICE_TO_SERVICE_TOKEN: 'svc_secret_auth_token_1234567890',
+      FIREBASE_PROJECT_ID: 'gen-lang-client-0503610321',
+      FIREBASE_CLIENT_EMAIL: 'firebase-adminsdk@gen-lang-client-0503610321.iam.gserviceaccount.com',
+      FIREBASE_PRIVATE_KEY: TEST_FIREBASE_RSA.privateKey,
       COOKIE_SECURE: 'false',
     });
+    assert.equal(prodCfg.AUTH_PROVIDER_MODE, 'firebase');
     assert.equal(prodCfg.COOKIE_SECURE, true);
+    assert.equal(prodCfg.FIREBASE_PROJECT_ID, 'gen-lang-client-0503610321');
 
-    // Live firebase mode requires FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY
+    // Production rejects AUTH_PROVIDER_MODE=mock
+    assert.throws(
+      () =>
+        loadAuthConfig({
+          NODE_ENV: 'production',
+          AUTH_PROVIDER_MODE: 'mock',
+          DATABASE_URL: 'postgresql://kartik_auth:secret@localhost:5432/kartik',
+          REDIS_URL: 'redis://localhost:6379',
+          SERVICE_TO_SERVICE_TOKEN: 'svc_secret_auth_token_1234567890',
+        }),
+      /AUTH_PROVIDER_MODE/,
+    );
+
+    // Live firebase mode (or production without credentials) fails safely naming missing/placeholder variables
     assert.throws(
       () =>
         loadAuthConfig({

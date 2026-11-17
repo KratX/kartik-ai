@@ -87,6 +87,30 @@ describe('Operational CLI Scripts: check-env, db:migrate & db:seed (8.3.a)', () 
 
     assert.equal(invalid.valid, false);
     assert.equal(invalid.errors.length, 3);
+
+    // Rejects AUTH_PROVIDER_MODE=mock in production and placeholder Firebase credentials
+    const invalidProdAuth = checkEnvMod.validateOperationalEnvironment({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://kartik_auth:secret@ep-demo-pooler.neon.tech/kartik',
+      DIRECT_DATABASE_URL: 'postgresql://kartik:secret@ep-demo.neon.tech/kartik',
+      DATABASE_SCHEMA: 'auth',
+      REDIS_URL: 'redis://localhost:6379',
+      PGPOOL_IDLE_TIMEOUT_MS: '10000',
+      AUTH_PROVIDER_MODE: 'mock',
+    });
+    assert.equal(invalidProdAuth.valid, false);
+    assert.ok(
+      invalidProdAuth.errors.some((e) => e.includes('AUTH_PROVIDER_MODE=mock is forbidden')),
+    );
+    assert.ok(
+      invalidProdAuth.errors.some((e) => e.includes('FIREBASE_PROJECT_ID')),
+    );
+    assert.ok(
+      invalidProdAuth.errors.some((e) => e.includes('FIREBASE_CLIENT_EMAIL')),
+    );
+    assert.ok(
+      invalidProdAuth.errors.some((e) => e.includes('FIREBASE_PRIVATE_KEY')),
+    );
   });
 
   it('builds the ordered 4-schema migration plan (auth -> billing -> agent -> chat) and rejects -pooler endpoints (migrate.mjs, ADR 0004)', async () => {

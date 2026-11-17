@@ -140,6 +140,7 @@ export function buildAuthBootstrapEnv(
     return {
       DATABASE_SCHEMA: 'auth',
       PORT_AUTH: env.PORT_AUTH ?? env.PORT ?? '8001',
+      AUTH_PROVIDER_MODE: env.AUTH_PROVIDER_MODE ?? 'firebase',
       ...env,
     };
   }

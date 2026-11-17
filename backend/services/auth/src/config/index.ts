@@ -9,7 +9,7 @@
  * 3. When `AUTH_PROVIDER_MODE === 'firebase'`, `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`,
  *    and `FIREBASE_PRIVATE_KEY` are strictly required at startup.
  */
-import { createPublicKey } from 'node:crypto';
+import { createPrivateKey, createPublicKey } from 'node:crypto';
 import {
   ConfigValidationError,
   isPlaceholderEd25519KeyMaterial,
@@ -18,6 +18,25 @@ import {
   validatePostgresConnectionUrl,
   type ConfigSchema,
 } from '@kartik/shared';
+
+export const PLACEHOLDER_FIREBASE_PROJECT_IDS = Object.freeze([
+  'kartik-mock-project',
+  'your-firebase-project',
+  'replace_me',
+  'placeholder',
+]);
+
+export const PLACEHOLDER_FIREBASE_CLIENT_EMAILS = Object.freeze([
+  'firebase-adminsdk@kartik-mock-project.iam.gserviceaccount.com',
+  'firebase-adminsdk@your-project.iam.gserviceaccount.com',
+]);
+
+export const PLACEHOLDER_FIREBASE_PRIVATE_KEY_MARKERS = Object.freeze([
+  'MOCK_KEY',
+  'REPLACE_ME',
+  'REPLACE_WITH_FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY',
+  'YOUR_PRIVATE_KEY',
+]);
 
 export const AUTH_CONFIG_SCHEMA: ConfigSchema = {
   NODE_ENV: {
@@ -114,6 +133,97 @@ export interface AuthServiceConfig {
   readonly USER_CONTEXT_PUBLIC_KEY?: string;
 }
 
+export interface FirebaseCredentialsValidationResult {
+  readonly valid: boolean;
+  readonly normalizedPrivateKey?: string;
+  readonly reasons: Readonly<Record<string, string>>;
+}
+
+export function normalizeFirebasePrivateKeyPem(rawKey: string): string {
+  const trimmed = rawKey.trim().replace(/^["']|["']$/g, '').replace(/\\n/g, '\n');
+  if (trimmed.includes('BEGIN PRIVATE KEY') || trimmed.includes('BEGIN RSA PRIVATE KEY')) {
+    return trimmed;
+  }
+  try {
+    const decoded = Buffer.from(trimmed, 'base64').toString('utf8').replace(/\\n/g, '\n').trim();
+    if (decoded.includes('BEGIN PRIVATE KEY') || decoded.includes('BEGIN RSA PRIVATE KEY')) {
+      return decoded;
+    }
+  } catch {
+    // Validated below
+  }
+  return trimmed;
+}
+
+/**
+ * Validates Firebase Admin credentials (`FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`,
+ * `FIREBASE_PRIVATE_KEY`) and rejects missing, placeholder, or cryptographically invalid keys.
+ */
+export function validateFirebaseCredentials(input: {
+  readonly projectId?: string | undefined;
+  readonly clientEmail?: string | undefined;
+  readonly privateKey?: string | undefined;
+}): FirebaseCredentialsValidationResult {
+  const reasons: Record<string, string> = {};
+
+  const projectId = input.projectId?.trim() ?? '';
+  if (
+    !projectId ||
+    PLACEHOLDER_FIREBASE_PROJECT_IDS.includes(projectId.toLowerCase()) ||
+    !/^[a-z][a-z0-9-]{3,61}$/i.test(projectId)
+  ) {
+    reasons.FIREBASE_PROJECT_ID =
+      'required non-placeholder Firebase project ID when AUTH_PROVIDER_MODE=firebase';
+  }
+
+  const clientEmail = input.clientEmail?.trim() ?? '';
+  if (
+    !clientEmail ||
+    !clientEmail.includes('@') ||
+    PLACEHOLDER_FIREBASE_CLIENT_EMAILS.includes(clientEmail.toLowerCase())
+  ) {
+    reasons.FIREBASE_CLIENT_EMAIL =
+      'valid non-placeholder Firebase service account email required when AUTH_PROVIDER_MODE=firebase';
+  }
+
+  const rawPrivateKey = input.privateKey?.trim() ?? '';
+  const hasPlaceholderMarker = PLACEHOLDER_FIREBASE_PRIVATE_KEY_MARKERS.some((marker) =>
+    rawPrivateKey.includes(marker),
+  );
+  if (!rawPrivateKey || hasPlaceholderMarker) {
+    reasons.FIREBASE_PRIVATE_KEY =
+      'valid PEM private key required when AUTH_PROVIDER_MODE=firebase (placeholder keys are forbidden)';
+  } else {
+    const normalizedPem = normalizeFirebasePrivateKeyPem(rawPrivateKey);
+    if (
+      !normalizedPem.includes('BEGIN PRIVATE KEY') &&
+      !normalizedPem.includes('BEGIN RSA PRIVATE KEY')
+    ) {
+      reasons.FIREBASE_PRIVATE_KEY =
+        'PEM private key required when AUTH_PROVIDER_MODE=firebase';
+    } else {
+      try {
+        const keyObj = createPrivateKey(normalizedPem);
+        if (keyObj.type !== 'private') {
+          reasons.FIREBASE_PRIVATE_KEY =
+            'must be a valid asymmetric private key in PEM format';
+        }
+      } catch {
+        reasons.FIREBASE_PRIVATE_KEY =
+          'invalid or corrupted PEM private key material for FIREBASE_PRIVATE_KEY';
+      }
+    }
+  }
+
+  return Object.freeze({
+    valid: Object.keys(reasons).length === 0,
+    ...(rawPrivateKey && !reasons.FIREBASE_PRIVATE_KEY
+      ? { normalizedPrivateKey: normalizeFirebasePrivateKeyPem(rawPrivateKey) }
+      : {}),
+    reasons: Object.freeze(reasons),
+  });
+}
+
 function isValidEd25519PublicKey(rawPemOrBase64: string): boolean {
   if (isPlaceholderEd25519KeyMaterial(rawPemOrBase64)) {
     return false;
@@ -133,10 +243,12 @@ function isValidEd25519PublicKey(rawPemOrBase64: string): boolean {
 /**
  * Parses and validates the Auth service environment configuration at startup.
  * Enforces cross-field rules for live Firebase mode, production database URL, and production cookie security.
+ * In production (`NODE_ENV === 'production'`), `AUTH_PROVIDER_MODE` defaults to `'firebase'` and forbids `'mock'`.
  */
 export function loadAuthConfig(
   env: Record<string, string | undefined> = process.env,
 ): AuthServiceConfig {
+  const isProd = env.NODE_ENV === 'production';
   const resolvedPublicKey =
     resolveSecretOrFileEnv(
       env,
@@ -148,8 +260,20 @@ export function loadAuthConfig(
       'USER_CONTEXT_VERIFY_KEY',
       'USER_CONTEXT_VERIFY_KEY_FILE',
     );
+  const resolvedFirebasePrivateKey = resolveSecretOrFileEnv(
+    env,
+    'FIREBASE_PRIVATE_KEY',
+    'FIREBASE_PRIVATE_KEY_FILE',
+  );
+  const effectiveProviderMode =
+    env.AUTH_PROVIDER_MODE ?? (isProd ? 'firebase' : 'mock');
+
   const normalizedEnv: Record<string, string | undefined> = {
     ...env,
+    AUTH_PROVIDER_MODE: effectiveProviderMode,
+    ...(resolvedFirebasePrivateKey !== undefined
+      ? { FIREBASE_PRIVATE_KEY: resolvedFirebasePrivateKey }
+      : {}),
     ...(env.DATABASE_URL === undefined && env.AUTH_DATABASE_URL !== undefined
       ? { DATABASE_URL: env.AUTH_DATABASE_URL }
       : {}),
@@ -174,20 +298,22 @@ export function loadAuthConfig(
       'must be a valid Ed25519 SPKI public key in PEM or base64 format (§6.4)';
   }
 
+  if (isProd && parsed.AUTH_PROVIDER_MODE === 'mock') {
+    crossFieldReasons.AUTH_PROVIDER_MODE =
+      'AUTH_PROVIDER_MODE=mock is forbidden when NODE_ENV=production; configure AUTH_PROVIDER_MODE=firebase';
+  }
+
+  let validatedFirebasePrivateKey = parsed.FIREBASE_PRIVATE_KEY;
   if (parsed.AUTH_PROVIDER_MODE === 'firebase') {
-    if (!env.FIREBASE_PROJECT_ID || env.FIREBASE_PROJECT_ID.trim() === '') {
-      crossFieldReasons.FIREBASE_PROJECT_ID = 'required when AUTH_PROVIDER_MODE=firebase';
-    }
-    if (!env.FIREBASE_CLIENT_EMAIL || !env.FIREBASE_CLIENT_EMAIL.includes('@')) {
-      crossFieldReasons.FIREBASE_CLIENT_EMAIL =
-        'valid service account email required when AUTH_PROVIDER_MODE=firebase';
-    }
-    if (
-      !env.FIREBASE_PRIVATE_KEY ||
-      !env.FIREBASE_PRIVATE_KEY.includes('BEGIN PRIVATE KEY')
-    ) {
-      crossFieldReasons.FIREBASE_PRIVATE_KEY =
-        'PEM private key required when AUTH_PROVIDER_MODE=firebase';
+    const fbValidation = validateFirebaseCredentials({
+      projectId: env.FIREBASE_PROJECT_ID,
+      clientEmail: env.FIREBASE_CLIENT_EMAIL,
+      privateKey: resolvedFirebasePrivateKey,
+    });
+    if (!fbValidation.valid) {
+      Object.assign(crossFieldReasons, fbValidation.reasons);
+    } else if (fbValidation.normalizedPrivateKey) {
+      validatedFirebasePrivateKey = fbValidation.normalizedPrivateKey;
     }
   }
 
@@ -197,6 +323,7 @@ export function loadAuthConfig(
 
   return Object.freeze({
     ...parsed,
+    FIREBASE_PRIVATE_KEY: validatedFirebasePrivateKey,
     ...(resolvedPublicKey !== undefined
       ? { USER_CONTEXT_PUBLIC_KEY: resolvedPublicKey }
       : {}),
