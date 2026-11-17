@@ -165,7 +165,10 @@ export function createBillingRouter(deps: BillingRouterDependencies): BillingRou
         return;
       }
 
-      if (method === 'POST' && routePath === '/billing/verify') {
+      if (
+        method === 'POST' &&
+        (routePath === '/billing/verify' || routePath === '/billing/verify-checkout')
+      ) {
         await runMiddlewareChain(
           [demoReadOnlyMw, gatewayUserMw, userRateLimitMw],
           req,

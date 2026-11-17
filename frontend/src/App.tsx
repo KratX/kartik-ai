@@ -484,7 +484,7 @@ export function App() {
       readonly signature?: string;
     },
   ) => {
-    const res = await fetch('/api/v1/billing/verify-checkout', {
+    const res = await fetch('/api/v1/billing/verify', {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -495,23 +495,58 @@ export function App() {
         orderId,
         paymentId: paymentDetails?.paymentId,
         signature: paymentDetails?.signature,
+        razorpayOrderId: orderId,
+        razorpayPaymentId: paymentDetails?.paymentId,
+        razorpaySignature: paymentDetails?.signature,
       }),
     });
-    const json = (await res.json()) as ApiEnvelope<{
-      verified: boolean;
-      orderId: string;
-      paymentId: string;
-      signature: string;
-      availableCredits: number;
-      creditsAdded: number;
-      planId: string;
-    }>;
-    if (!json.ok) {
-      throw new Error(`${json.error.code}: ${json.error.message}`);
+    const json = (await res.json()) as {
+      readonly ok?: boolean;
+      readonly data?: {
+        readonly verified?: boolean;
+        readonly orderId?: string;
+        readonly paymentId?: string;
+        readonly signature?: string;
+        readonly availableCredits?: number;
+        readonly balanceAfter?: number;
+        readonly creditsAdded?: number;
+        readonly planId?: string;
+        readonly order?: {
+          readonly id?: string;
+          readonly razorpayPaymentId?: string | null;
+          readonly creditsGranted?: number;
+          readonly planId?: string;
+        };
+      } | null;
+      readonly error?: {
+        readonly code?: string;
+        readonly message?: string;
+      } | null;
+    };
+
+    const isSuccess =
+      (json.ok === true || (res.ok && !json.error)) && Boolean(json.data);
+    if (!isSuccess || !json.data) {
+      throw new Error(
+        `${json.error?.code ?? 'PAYMENT_VERIFICATION_FAILED'}: ${
+          json.error?.message ?? 'Payment verification failed'
+        }`,
+      );
     }
-    setAvailableCredits(json.data.availableCredits);
+
+    const updatedBalance =
+      json.data.availableCredits ?? json.data.balanceAfter ?? availableCredits;
+    const creditsAdded =
+      json.data.creditsAdded ?? json.data.order?.creditsGranted ?? 0;
+    const verifiedPaymentId =
+      json.data.paymentId ??
+      json.data.order?.razorpayPaymentId ??
+      paymentDetails?.paymentId ??
+      orderId;
+
+    setAvailableCredits(updatedBalance);
     setStatusBanner(
-      `Razorpay HMAC-SHA256 verified (${json.data.paymentId}) — +${json.data.creditsAdded} credits added to ledger.`,
+      `Razorpay HMAC-SHA256 verified (${verifiedPaymentId}) — +${creditsAdded} credits added to ledger.`,
     );
     await refreshBillingAndAuth();
   };

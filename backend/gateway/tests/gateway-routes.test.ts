@@ -243,6 +243,23 @@ describe('@kartik/gateway public route table & Phase 3 Exit Gate closure (3.3.a)
       };
     });
 
+    upstream.registerHandler('billing', 'POST', '/billing/verify', (req) => {
+      const claims = verifyUserContextAssertion(
+        req.headers[INTERNAL_AUTH_HEADERS.USER_CONTEXT]!,
+        publicKeyPem,
+        { expectedAudience: 'billing', nowSeconds: nowSec },
+      );
+      assert.equal(claims.aud, 'billing');
+      return {
+        statusCode: 200,
+        headers: {},
+        body: createSuccessEnvelope(
+          req.headers[INTERNAL_AUTH_HEADERS.TRACE_ID] ?? 'trc_4',
+          { verified: true, balanceAfter: 1000 },
+        ),
+      };
+    });
+
     const loginRes = await router.execute({
       method: 'POST',
       path: '/api/v1/auth/google',
@@ -264,6 +281,38 @@ describe('@kartik/gateway public route table & Phase 3 Exit Gate closure (3.3.a)
       headers: { cookie: `kartik_session=${sampleSession.sessionId}` },
     });
     assert.equal(billingRes.statusCode, 200);
+
+    const verifyCanonicalRes = await router.execute({
+      method: 'POST',
+      path: '/api/v1/billing/verify',
+      headers: {
+        origin: 'https://app.kartik.ai',
+        cookie: `kartik_session=${sampleSession.sessionId}`,
+        [IDEMPOTENCY_KEY_HEADER]: 'idem_billing_verify_01',
+      },
+      body: {
+        razorpayOrderId: 'order_rzp_01',
+        razorpayPaymentId: 'pay_rzp_01',
+        razorpaySignature: 'sig_01',
+      },
+    });
+    assert.equal(verifyCanonicalRes.statusCode, 200);
+
+    const verifyAliasRes = await router.execute({
+      method: 'POST',
+      path: '/api/v1/billing/verify-checkout',
+      headers: {
+        origin: 'https://app.kartik.ai',
+        cookie: `kartik_session=${sampleSession.sessionId}`,
+        [IDEMPOTENCY_KEY_HEADER]: 'idem_billing_verify_02',
+      },
+      body: {
+        razorpayOrderId: 'order_rzp_01',
+        razorpayPaymentId: 'pay_rzp_01',
+        razorpaySignature: 'sig_01',
+      },
+    });
+    assert.equal(verifyAliasRes.statusCode, 200);
   });
 
   it('preserves exact rawBody on POST /api/v1/webhooks/razorpay (§11) and enforces DEMO_READ_ONLY kill switch (§12)', async () => {

@@ -145,11 +145,23 @@ export class BillingController {
     const body = asObjectBody(req.body);
 
     const razorpayOrderId =
-      typeof body.razorpayOrderId === 'string' ? body.razorpayOrderId.trim() : '';
+      typeof body.razorpayOrderId === 'string' && body.razorpayOrderId.trim().length > 0
+        ? body.razorpayOrderId.trim()
+        : typeof body.orderId === 'string'
+          ? body.orderId.trim()
+          : '';
     const razorpayPaymentId =
-      typeof body.razorpayPaymentId === 'string' ? body.razorpayPaymentId.trim() : '';
+      typeof body.razorpayPaymentId === 'string' && body.razorpayPaymentId.trim().length > 0
+        ? body.razorpayPaymentId.trim()
+        : typeof body.paymentId === 'string'
+          ? body.paymentId.trim()
+          : '';
     const razorpaySignature =
-      typeof body.razorpaySignature === 'string' ? body.razorpaySignature.trim() : '';
+      typeof body.razorpaySignature === 'string' && body.razorpaySignature.trim().length > 0
+        ? body.razorpaySignature.trim()
+        : typeof body.signature === 'string'
+          ? body.signature.trim()
+          : '';
     const amountPaise =
       typeof body.amountPaise === 'number' ? body.amountPaise : undefined;
 

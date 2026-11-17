@@ -144,9 +144,11 @@ export function resolvePublicGatewayRoute(
 
   // 5. Billing service routes (/billing and /billing/*)
   if (strippedPath === '/billing' || strippedPath.startsWith('/billing/')) {
+    const canonicalBillingPath =
+      strippedPath === '/billing/verify-checkout' ? '/billing/verify' : strippedPath;
     return {
       target: 'billing',
-      upstreamPath: `${strippedPath}${querySuffix}`,
+      upstreamPath: `${canonicalBillingPath}${querySuffix}`,
       requiresSession: true,
       preserveCookieForAuth: false,
       preserveRawBody: false,

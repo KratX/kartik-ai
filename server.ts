@@ -416,27 +416,33 @@ export function createKartikExpressApp() {
     }
   });
 
-  app.post('/api/v1/billing/verify-checkout', (req, res) => {
-    try {
-      const requestId =
-        readHeaderString(req, 'idempotency-key') ??
-        `req_chk_${crypto.randomBytes(8).toString('hex')}`;
-      const body = (req.body ?? {}) as {
-        orderId?: string;
-        paymentId?: string;
-        signature?: string;
-      };
-      const verified = sharedPlatformRuntime.verifyCheckoutAndCredit({
-        orderId: String(body.orderId ?? ''),
-        paymentId: body.paymentId,
-        signature: body.signature,
-        requestId,
-      });
-      sendEnvelope(req, res, 200, verified, requestId);
-    } catch (err) {
-      sendError(req, res, err);
-    }
-  });
+  app.post(
+    ['/api/v1/billing/verify', '/api/v1/billing/verify-checkout', '/billing/verify'],
+    (req, res) => {
+      try {
+        const requestId =
+          readHeaderString(req, 'idempotency-key') ??
+          `req_chk_${crypto.randomBytes(8).toString('hex')}`;
+        const body = (req.body ?? {}) as {
+          orderId?: string;
+          paymentId?: string;
+          signature?: string;
+          razorpayOrderId?: string;
+          razorpayPaymentId?: string;
+          razorpaySignature?: string;
+        };
+        const verified = sharedPlatformRuntime.verifyCheckoutAndCredit({
+          orderId: String(body.orderId ?? body.razorpayOrderId ?? ''),
+          paymentId: body.paymentId ?? body.razorpayPaymentId,
+          signature: body.signature ?? body.razorpaySignature,
+          requestId,
+        });
+        sendEnvelope(req, res, 200, verified, requestId);
+      } catch (err) {
+        sendError(req, res, err);
+      }
+    },
+  );
 
   return app;
 }
