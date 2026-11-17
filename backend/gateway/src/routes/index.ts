@@ -86,8 +86,9 @@ export function resolvePublicGatewayRoute(
       ? '/'
       : normalizedPath;
 
-  // 1. Public Auth routes (/auth/google, /auth/me, /auth/logout)
+  // 1. Public Auth routes (/auth/firebase-config, /auth/google, /auth/me, /auth/logout)
   if (
+    (method.toUpperCase() === 'GET' && strippedPath === '/auth/firebase-config') ||
     (method.toUpperCase() === 'POST' && strippedPath === '/auth/google') ||
     (method.toUpperCase() === 'GET' && strippedPath === '/auth/me') ||
     (method.toUpperCase() === 'POST' && strippedPath === '/auth/logout')

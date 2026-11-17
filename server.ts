@@ -97,10 +97,18 @@ export function createKartikExpressApp() {
   app.get('/api/v1/auth/firebase-config', (req, res) => {
     try {
       const stripQuotes = (v?: string) => (v ?? '').trim().replace(/^["']|["']$/g, '');
+      const isPlaceholderProject = (v: string) =>
+        !v ||
+        v === 'your-firebase-project' ||
+        v === 'kartik-mock-project' ||
+        v === 'demo-project';
+      const isPlaceholderApiKey = (v: string) =>
+        !v || v === 'your_firebase_web_api_key' || v === 'demo-firebase-api-key';
+
       let apiKey = stripQuotes(process.env.VITE_FIREBASE_API_KEY);
       let authDomain = stripQuotes(process.env.VITE_FIREBASE_AUTH_DOMAIN);
       let projectId = stripQuotes(
-        process.env.VITE_FIREBASE_PROJECT_ID ?? process.env.FIREBASE_PROJECT_ID,
+        process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID,
       );
       let appId = stripQuotes(process.env.VITE_FIREBASE_APP_ID);
       let oAuthClientId = stripQuotes(process.env.VITE_GOOGLE_OAUTH_CLIENT_ID);
@@ -112,14 +120,14 @@ export function createKartikExpressApp() {
             string,
             string | undefined
           >;
-          apiKey =
-            apiKey &&
-            apiKey !== 'your_firebase_web_api_key' &&
-            apiKey !== 'demo-firebase-api-key'
-              ? apiKey
-              : stripQuotes(raw.apiKey);
-          authDomain = authDomain || stripQuotes(raw.authDomain);
-          projectId = projectId || stripQuotes(raw.projectId);
+          apiKey = !isPlaceholderApiKey(apiKey) ? apiKey : stripQuotes(raw.apiKey);
+          projectId = !isPlaceholderProject(projectId)
+            ? projectId
+            : stripQuotes(raw.projectId);
+          authDomain =
+            authDomain && !authDomain.includes('your-firebase-project')
+              ? authDomain
+              : stripQuotes(raw.authDomain);
           appId = appId || stripQuotes(raw.appId);
           oAuthClientId = oAuthClientId || stripQuotes(raw.oAuthClientId);
         }
@@ -134,12 +142,7 @@ export function createKartikExpressApp() {
         projectId,
         appId,
         oAuthClientId,
-        enabled: Boolean(
-          apiKey &&
-            apiKey !== 'your_firebase_web_api_key' &&
-            apiKey !== 'demo-firebase-api-key' &&
-            projectId,
-        ),
+        enabled: Boolean(!isPlaceholderApiKey(apiKey) && !isPlaceholderProject(projectId)),
       });
     } catch (err) {
       sendError(req, res, err);
@@ -150,16 +153,39 @@ export function createKartikExpressApp() {
     try {
       const authReq = req as AuthRequest;
       const body = (req.body ?? {}) as {
+        idToken?: string;
         uid?: string;
         email?: string;
         displayName?: string;
         avatarUrl?: string | null;
       };
+      let jwtClaims: {
+        sub?: string;
+        email?: string;
+        name?: string;
+        picture?: string;
+      } = {};
+      const bearerHeader = readHeaderString(req, 'authorization');
+      const rawToken =
+        body.idToken?.trim() ||
+        (bearerHeader?.startsWith('Bearer ') ? bearerHeader.slice(7).trim() : '');
+      if (rawToken && rawToken.split('.').length === 3) {
+        try {
+          const payloadB64 = rawToken.split('.')[1] ?? '';
+          jwtClaims = JSON.parse(
+            Buffer.from(payloadB64, 'base64url').toString('utf8'),
+          ) as typeof jwtClaims;
+        } catch {
+          // Ignore non-JSON token payload
+        }
+      }
+
       const session = sharedPlatformRuntime.loginWithGoogle({
-        uid: authReq.user?.uid ?? body.uid,
-        email: authReq.user?.email ?? body.email,
-        displayName: authReq.user?.name ?? body.displayName,
-        avatarUrl: authReq.user?.picture ?? body.avatarUrl ?? null,
+        uid: authReq.user?.uid ?? body.uid ?? jwtClaims.sub,
+        email: authReq.user?.email ?? body.email ?? jwtClaims.email,
+        displayName: authReq.user?.name ?? body.displayName ?? jwtClaims.name,
+        avatarUrl:
+          authReq.user?.picture ?? body.avatarUrl ?? jwtClaims.picture ?? null,
       });
       res.setHeader(
         'Set-Cookie',

@@ -3,15 +3,24 @@ import path from 'node:path';
 import { initializeApp, getApps } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 
+const PLACEHOLDER_PROJECT_IDS = new Set([
+  '',
+  'your-firebase-project',
+  'kartik-mock-project',
+  'demo-project',
+  'replace_me',
+  'changeme',
+]);
+
 function stripQuotes(value?: string): string {
   return (value ?? '').trim().replace(/^["']|["']$/g, '');
 }
 
-function resolveFirebaseProjectId(): string {
+export function resolveFirebaseProjectId(): string {
   const envProjectId = stripQuotes(
     process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID,
   );
-  if (envProjectId) {
+  if (envProjectId && !PLACEHOLDER_PROJECT_IDS.has(envProjectId.toLowerCase())) {
     return envProjectId;
   }
   const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
@@ -20,14 +29,15 @@ function resolveFirebaseProjectId(): string {
       const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
         projectId?: string;
       };
-      if (parsed.projectId) {
-        return stripQuotes(parsed.projectId);
+      const fileProjectId = stripQuotes(parsed.projectId);
+      if (fileProjectId && !PLACEHOLDER_PROJECT_IDS.has(fileProjectId.toLowerCase())) {
+        return fileProjectId;
       }
     } catch {
       // Ignore malformed optional local config
     }
   }
-  return 'kartik-ai';
+  return 'gen-lang-client-0503610321';
 }
 
 if (!getApps().length) {

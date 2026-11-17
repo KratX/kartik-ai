@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ShieldCheck, UserCheck, X } from 'lucide-react';
 
 export interface GoogleSignInPayload {
@@ -29,6 +29,155 @@ interface WindowWithFirebasePopup {
   readonly __kartikFirebaseGooglePopup?: () => Promise<GoogleSignInPayload>;
 }
 
+interface CdnFirebaseAppModule {
+  getApps: () => unknown[];
+  getApp: () => unknown;
+  initializeApp: (cfg: Record<string, string>) => unknown;
+}
+
+interface CdnFirebaseAuthModule {
+  getAuth: (app: unknown) => unknown;
+  GoogleAuthProvider: new () => {
+    addScope?: (scope: string) => void;
+    setCustomParameters: (p: Record<string, string>) => void;
+  };
+  signInWithPopup: (
+    auth: unknown,
+    provider: unknown,
+  ) => Promise<{
+    user: {
+      uid: string;
+      email: string | null;
+      displayName: string | null;
+      photoURL: string | null;
+      getIdToken: () => Promise<string>;
+    };
+  }>;
+}
+
+const PLACEHOLDER_API_KEYS = new Set([
+  '',
+  'your_firebase_web_api_key',
+  'demo-firebase-api-key',
+  'replace_me',
+  'changeme',
+]);
+
+const PLACEHOLDER_PROJECT_IDS = new Set([
+  '',
+  'your-firebase-project',
+  'kartik-mock-project',
+  'demo-project',
+  'replace_me',
+  'changeme',
+]);
+
+function stripQuotes(value?: string): string {
+  return (value ?? '').trim().replace(/^["']|["']$/g, '');
+}
+
+let cachedWebConfig: {
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  appId: string;
+} = (() => {
+  const metaEnv =
+    (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+  const apiKey = stripQuotes(metaEnv.VITE_FIREBASE_API_KEY);
+  const projectId = stripQuotes(metaEnv.VITE_FIREBASE_PROJECT_ID);
+  const authDomain = stripQuotes(metaEnv.VITE_FIREBASE_AUTH_DOMAIN);
+  const appId = stripQuotes(metaEnv.VITE_FIREBASE_APP_ID);
+  return {
+    apiKey: PLACEHOLDER_API_KEYS.has(apiKey.toLowerCase()) ? '' : apiKey,
+    projectId: PLACEHOLDER_PROJECT_IDS.has(projectId.toLowerCase()) ? '' : projectId,
+    authDomain:
+      authDomain && !authDomain.includes('your-firebase-project') ? authDomain : '',
+    appId,
+  };
+})();
+
+let preloadedFbApp: CdnFirebaseAppModule | null = null;
+let preloadedFbAuth: CdnFirebaseAuthModule | null = null;
+let preloadedAuthInstance: unknown = null;
+
+async function preloadFirebaseSdkAndConfig(): Promise<void> {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const win = window as unknown as WindowWithFirebasePopup;
+  if (typeof win.__kartikFirebaseGooglePopup === 'function') {
+    return;
+  }
+
+  try {
+    if (!cachedWebConfig.apiKey || !cachedWebConfig.projectId) {
+      const res = await fetch('/api/v1/auth/firebase-config', {
+        credentials: 'include',
+      });
+      if (res.ok) {
+        const json = (await res.json()) as {
+          readonly ok?: boolean;
+          readonly data?: RuntimeFirebaseWebConfig;
+        };
+        if (json.data) {
+          const apiKey = stripQuotes(json.data.apiKey);
+          const projectId = stripQuotes(json.data.projectId);
+          const authDomain = stripQuotes(json.data.authDomain);
+          const appId = stripQuotes(json.data.appId);
+          if (
+            apiKey &&
+            !PLACEHOLDER_API_KEYS.has(apiKey.toLowerCase()) &&
+            projectId &&
+            !PLACEHOLDER_PROJECT_IDS.has(projectId.toLowerCase())
+          ) {
+            cachedWebConfig = {
+              apiKey,
+              projectId,
+              authDomain: authDomain || `${projectId}.firebaseapp.com`,
+              appId,
+            };
+          }
+        }
+      }
+    }
+
+    if (!preloadedFbApp || !preloadedFbAuth) {
+      const fbAppUrl = 'https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js';
+      const fbAuthUrl = 'https://www.gstatic.com/firebasejs/11.4.0/firebase-auth.js';
+      const [appMod, authMod] = await Promise.all([
+        import(/* @vite-ignore */ fbAppUrl) as Promise<CdnFirebaseAppModule>,
+        import(/* @vite-ignore */ fbAuthUrl) as Promise<CdnFirebaseAuthModule>,
+      ]);
+      preloadedFbApp = appMod;
+      preloadedFbAuth = authMod;
+    }
+
+    if (
+      preloadedFbApp &&
+      preloadedFbAuth &&
+      cachedWebConfig.apiKey &&
+      cachedWebConfig.projectId &&
+      !preloadedAuthInstance
+    ) {
+      const appInstance =
+        preloadedFbApp.getApps().length > 0
+          ? preloadedFbApp.getApp()
+          : preloadedFbApp.initializeApp({
+              apiKey: cachedWebConfig.apiKey,
+              authDomain:
+                cachedWebConfig.authDomain ||
+                `${cachedWebConfig.projectId}.firebaseapp.com`,
+              projectId: cachedWebConfig.projectId,
+              appId: cachedWebConfig.appId,
+            });
+      preloadedAuthInstance = preloadedFbAuth.getAuth(appInstance);
+    }
+  } catch {
+    // Non-fatal preload warning; will retry on click
+  }
+}
+
 async function triggerFirebaseGooglePopup(): Promise<GoogleSignInPayload> {
   if (typeof window !== 'undefined') {
     const win = window as unknown as WindowWithFirebasePopup;
@@ -37,74 +186,29 @@ async function triggerFirebaseGooglePopup(): Promise<GoogleSignInPayload> {
     }
   }
 
-  const metaEnv =
-    (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
-  let apiKey = (metaEnv.VITE_FIREBASE_API_KEY ?? '').trim();
-  let authDomain = (metaEnv.VITE_FIREBASE_AUTH_DOMAIN ?? '').trim();
-  let projectId = (metaEnv.VITE_FIREBASE_PROJECT_ID ?? '').trim();
-  let appId = (metaEnv.VITE_FIREBASE_APP_ID ?? '').trim();
-
-  if (
-    !apiKey ||
-    apiKey === 'your_firebase_web_api_key' ||
-    apiKey === 'demo-firebase-api-key' ||
-    !projectId
-  ) {
-    const res = await fetch('/api/v1/auth/firebase-config', { credentials: 'include' });
-    const json = (await res.json()) as {
-      readonly ok?: boolean;
-      readonly data?: RuntimeFirebaseWebConfig;
-    };
-    if (json.ok && json.data) {
-      apiKey = json.data.apiKey ?? apiKey;
-      authDomain = json.data.authDomain ?? authDomain;
-      projectId = json.data.projectId ?? projectId;
-      appId = json.data.appId ?? appId;
-    }
+  if (!preloadedAuthInstance || !preloadedFbAuth) {
+    await preloadFirebaseSdkAndConfig();
   }
 
-  if (!apiKey || apiKey === 'your_firebase_web_api_key' || !projectId) {
+  if (
+    !cachedWebConfig.apiKey ||
+    !cachedWebConfig.projectId ||
+    !preloadedFbAuth ||
+    !preloadedAuthInstance
+  ) {
     throw new Error('Firebase Web API Key is not configured yet in .env.');
   }
 
-  const fbAppUrl = 'https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js';
-  const fbAuthUrl = 'https://www.gstatic.com/firebasejs/11.4.0/firebase-auth.js';
-  const fbApp = (await import(/* @vite-ignore */ fbAppUrl)) as {
-    getApps: () => unknown[];
-    getApp: () => unknown;
-    initializeApp: (cfg: Record<string, string>) => unknown;
-  };
-  const fbAuth = (await import(/* @vite-ignore */ fbAuthUrl)) as {
-    getAuth: (app: unknown) => unknown;
-    GoogleAuthProvider: new () => { setCustomParameters: (p: Record<string, string>) => void };
-    signInWithPopup: (
-      auth: unknown,
-      provider: unknown,
-    ) => Promise<{
-      user: {
-        uid: string;
-        email: string | null;
-        displayName: string | null;
-        photoURL: string | null;
-        getIdToken: () => Promise<string>;
-      };
-    }>;
-  };
-
-  const appInstance =
-    fbApp.getApps().length > 0
-      ? fbApp.getApp()
-      : fbApp.initializeApp({
-          apiKey,
-          authDomain: authDomain || `${projectId}.firebaseapp.com`,
-          projectId,
-          appId,
-        });
-
-  const authInstance = fbAuth.getAuth(appInstance);
-  const provider = new fbAuth.GoogleAuthProvider();
+  const provider = new preloadedFbAuth.GoogleAuthProvider();
+  if (typeof provider.addScope === 'function') {
+    provider.addScope('https://www.googleapis.com/auth/userinfo.email');
+    provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
+  }
   provider.setCustomParameters({ prompt: 'select_account' });
-  const credential = await fbAuth.signInWithPopup(authInstance, provider);
+  const credential = await preloadedFbAuth.signInWithPopup(
+    preloadedAuthInstance,
+    provider,
+  );
   const idToken = await credential.user.getIdToken();
 
   return {
@@ -116,12 +220,66 @@ async function triggerFirebaseGooglePopup(): Promise<GoogleSignInPayload> {
   };
 }
 
+function describeFirebasePopupError(err: unknown): {
+  readonly code: string;
+  readonly userClosed: boolean;
+  readonly message: string;
+} {
+  const errObj = err as { code?: string; message?: string } | undefined;
+  const code = typeof errObj?.code === 'string' ? errObj.code : '';
+  const rawMessage =
+    err instanceof Error ? err.message : String(errObj?.message ?? 'Google sign-in failed');
+
+  if (
+    code === 'auth/popup-closed-by-user' ||
+    code === 'auth/cancelled-popup-request' ||
+    rawMessage.includes('popup-closed-by-user')
+  ) {
+    return {
+      code,
+      userClosed: true,
+      message:
+        'Google sign-in popup was closed before completing. Click "Sign in with Google" again or use Instant Session below.',
+    };
+  }
+
+  if (code === 'auth/unauthorized-domain' || rawMessage.includes('unauthorized-domain')) {
+    const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+    return {
+      code,
+      userClosed: false,
+      message: `Domain "${host}" is not yet in Firebase Console → Authentication → Settings → Authorized domains. Signed in via fallback session.`,
+    };
+  }
+
+  if (code === 'auth/popup-blocked' || rawMessage.includes('popup-blocked')) {
+    return {
+      code,
+      userClosed: false,
+      message:
+        'Browser blocked the Google sign-in popup. Please allow popups for this site or use the session sign-in below.',
+    };
+  }
+
+  return {
+    code,
+    userClosed: false,
+    message: rawMessage,
+  };
+}
+
 export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
   const [displayName, setDisplayName] = useState('Kartik Rawat');
   const [email, setEmail] = useState('kartikrawat9@gmail.com');
   const [isPopupPending, setIsPopupPending] = useState(false);
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
   const [popupNotice, setPopupNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      void preloadFirebaseSdkAndConfig();
+    }
+  }, [isOpen]);
 
   if (!isOpen) {
     return null;
@@ -134,18 +292,24 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
       const payload = await triggerFirebaseGooglePopup();
       await onGoogleSignIn(payload);
       onClose();
-    } catch {
+    } catch (popupErr) {
+      const diagnosed = describeFirebasePopupError(popupErr);
+      if (diagnosed.userClosed) {
+        setPopupNotice(diagnosed.message);
+        return;
+      }
       try {
         await onGoogleSignIn({
           email: email.trim() || 'kartikrawat9@gmail.com',
           displayName: displayName.trim() || 'Kartik Rawat',
+          idToken: 'mock-google-token:kartik',
         });
         onClose();
       } catch (fallbackErr) {
         setPopupNotice(
           fallbackErr instanceof Error
-            ? fallbackErr.message
-            : 'Unable to complete sign-in. Please try again.',
+            ? `${diagnosed.message} (${fallbackErr.message})`
+            : diagnosed.message,
         );
       }
     } finally {
@@ -161,6 +325,7 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
       await onGoogleSignIn({
         email: email.trim() || 'kartikrawat9@gmail.com',
         displayName: displayName.trim() || 'Kartik Rawat',
+        idToken: 'mock-google-token:kartik',
       });
       onClose();
     } catch (err) {

@@ -84,6 +84,41 @@ export class AuthController {
   }
 
   /**
+   * `GET /auth/firebase-config`
+   * Returns public Firebase Web SDK configuration for browser popup initialization.
+   */
+  handleFirebaseConfig(req: AuthHttpRequest, res: MiddlewareResponse): void {
+    const traceId = req.requestContext?.traceId ?? 'trc_unknown';
+    const projectId =
+      this.config.FIREBASE_PROJECT_ID &&
+      this.config.FIREBASE_PROJECT_ID !== 'kartik-mock-project' &&
+      this.config.FIREBASE_PROJECT_ID !== 'your-firebase-project'
+        ? this.config.FIREBASE_PROJECT_ID
+        : (process.env.VITE_FIREBASE_PROJECT_ID ?? 'gen-lang-client-0503610321');
+    const apiKey = process.env.VITE_FIREBASE_API_KEY ?? '';
+    const authDomain =
+      process.env.VITE_FIREBASE_AUTH_DOMAIN ?? `${projectId}.firebaseapp.com`;
+    const appId =
+      process.env.VITE_FIREBASE_APP_ID ??
+      '1:1060248531936:web:d24b2cf4edc6e2e0e17185';
+    const oAuthClientId =
+      process.env.VITE_GOOGLE_OAUTH_CLIENT_ID ??
+      '1060248531936-vjt6g932mdfmsqrg5q9eos68iqpgep2p.apps.googleusercontent.com';
+
+    res.status(200).json(
+      createSuccessEnvelope(traceId, {
+        brandName: 'kartik-ai',
+        apiKey,
+        authDomain,
+        projectId,
+        appId,
+        oAuthClientId,
+        enabled: Boolean(apiKey && projectId),
+      }),
+    );
+  }
+
+  /**
    * `POST /auth/google`
    * Exchanges a Google/Firebase ID token for an opaque Redis-backed `HttpOnly` session cookie.
    */
@@ -93,19 +128,42 @@ export class AuthController {
         ? (req.body as Record<string, unknown>)
         : {};
 
-    const rawIdToken = body.idToken;
+    const authHeader = getSingleHeader(req.headers, 'authorization');
+    const bearerToken =
+      authHeader && authHeader.startsWith('Bearer ')
+        ? authHeader.slice('Bearer '.length).trim()
+        : undefined;
+
+    const rawIdToken =
+      typeof body.idToken === 'string' && body.idToken.trim().length > 0
+        ? body.idToken.trim()
+        : bearerToken;
+
     if (typeof rawIdToken !== 'string' || rawIdToken.trim().length === 0) {
       throw new AppError('VALIDATION_FAILED', 'Request body must include a non-empty idToken.', {
         details: { idToken: ['Must be a non-empty string'] },
       });
     }
 
-    const verifiedIdentity = await this.firebaseVerifier.verifyIdToken(rawIdToken.trim());
+    const verifiedIdentity = await this.firebaseVerifier.verifyIdToken(rawIdToken);
+
+    const overrideEmail =
+      this.config.AUTH_PROVIDER_MODE === 'mock' &&
+      typeof body.email === 'string' &&
+      body.email.includes('@')
+        ? body.email.trim().toLowerCase()
+        : verifiedIdentity.email;
+    const overrideDisplayName =
+      this.config.AUTH_PROVIDER_MODE === 'mock' &&
+      typeof body.displayName === 'string' &&
+      body.displayName.trim().length > 0
+        ? body.displayName.trim()
+        : verifiedIdentity.displayName;
 
     const user = await this.userRepository.upsertUserFromGoogleIdentity({
       firebaseUid: verifiedIdentity.firebaseUid,
-      email: verifiedIdentity.email,
-      displayName: verifiedIdentity.displayName,
+      email: overrideEmail,
+      displayName: overrideDisplayName,
       avatarUrl: verifiedIdentity.avatarUrl,
     });
 
@@ -120,6 +178,7 @@ export class AuthController {
       createSuccessEnvelope(
         traceId,
         {
+          sessionId: session.sessionId,
           user: toPublicAuthUser(user),
           sessionExpiresAt: session.expiresAt,
         },

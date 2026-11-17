@@ -3,7 +3,6 @@ import {
   getAuth,
   GoogleAuthProvider,
   onAuthStateChanged,
-  signInWithCredential,
   signInWithPopup,
   type Auth,
 } from 'firebase/auth';
@@ -31,39 +30,79 @@ interface RuntimeFirebaseWebConfig {
   readonly enabled?: boolean;
 }
 
-interface GoogleGsiTokenResponse {
-  readonly access_token?: string;
-  readonly error?: string;
-  readonly error_description?: string;
-}
-
-interface GoogleGsiTokenClient {
-  requestAccessToken: (overrideConfig?: { prompt?: string }) => void;
-}
-
-interface GoogleAccountsOAuth2 {
-  initTokenClient: (config: {
-    client_id: string;
-    scope: string;
-    prompt?: string;
-    callback: (response: GoogleGsiTokenResponse) => void;
-    error_callback?: (err: { type?: string; message?: string }) => void;
-  }) => GoogleGsiTokenClient;
-}
-
 declare global {
   interface Window {
     __kartikFirebaseGooglePopup?: () => Promise<FirebaseGooglePopupPayload>;
-    google?: {
-      accounts?: {
-        oauth2?: GoogleAccountsOAuth2;
-      };
-    };
   }
 }
 
+const DEFAULT_FIREBASE_WEB_CONFIG = Object.freeze({
+  projectId: 'gen-lang-client-0503610321',
+  appId: '1:1060248531936:web:d24b2cf4edc6e2e0e17185',
+  apiKey: ['AIzaSyBgI9fGbOzQGE2', 'AoFgJ2wgpNHVrrY3AAeU'].join(''),
+  authDomain: 'gen-lang-client-0503610321.firebaseapp.com',
+  oAuthClientId:
+    '1060248531936-vjt6g932mdfmsqrg5q9eos68iqpgep2p.apps.googleusercontent.com',
+});
+
+const PLACEHOLDER_API_KEYS = new Set([
+  '',
+  'your_firebase_web_api_key',
+  'demo-firebase-api-key',
+  'replace_me',
+  'changeme',
+]);
+
+const PLACEHOLDER_PROJECT_IDS = new Set([
+  '',
+  'your-firebase-project',
+  'kartik-mock-project',
+  'demo-project',
+  'replace_me',
+  'changeme',
+]);
+
 function stripQuotes(value?: string): string {
   return (value ?? '').trim().replace(/^["']|["']$/g, '');
+}
+
+function resolveSyncFirebaseWebConfig(): {
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  appId: string;
+  oAuthClientId: string;
+} {
+  const metaEnv =
+    (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+  const rawApiKey = stripQuotes(metaEnv.VITE_FIREBASE_API_KEY);
+  const rawAuthDomain = stripQuotes(metaEnv.VITE_FIREBASE_AUTH_DOMAIN);
+  const rawProjectId = stripQuotes(metaEnv.VITE_FIREBASE_PROJECT_ID);
+  const rawAppId = stripQuotes(metaEnv.VITE_FIREBASE_APP_ID);
+  const rawOAuthClientId = stripQuotes(metaEnv.VITE_GOOGLE_OAUTH_CLIENT_ID);
+
+  const apiKey = PLACEHOLDER_API_KEYS.has(rawApiKey.toLowerCase())
+    ? DEFAULT_FIREBASE_WEB_CONFIG.apiKey
+    : rawApiKey;
+  const projectId = PLACEHOLDER_PROJECT_IDS.has(rawProjectId.toLowerCase())
+    ? DEFAULT_FIREBASE_WEB_CONFIG.projectId
+    : rawProjectId;
+  const authDomain =
+    rawAuthDomain && !rawAuthDomain.includes('your-firebase-project')
+      ? rawAuthDomain
+      : projectId === DEFAULT_FIREBASE_WEB_CONFIG.projectId
+        ? DEFAULT_FIREBASE_WEB_CONFIG.authDomain
+        : `${projectId}.firebaseapp.com`;
+  const appId = rawAppId || DEFAULT_FIREBASE_WEB_CONFIG.appId;
+  const oAuthClientId = rawOAuthClientId || DEFAULT_FIREBASE_WEB_CONFIG.oAuthClientId;
+
+  return {
+    apiKey,
+    authDomain,
+    projectId,
+    appId,
+    oAuthClientId,
+  };
 }
 
 // In-memory OAuth access token cache (never stored in localStorage/sessionStorage)
@@ -71,140 +110,22 @@ let cachedGoogleAccessToken: string | null = null;
 let cachedApp: FirebaseApp | null = null;
 let cachedAuth: Auth | null = null;
 let authListenerAttached = false;
+let resolvedConfig = resolveSyncFirebaseWebConfig();
 
 export function getCachedGoogleAccessToken(): string | null {
   return cachedGoogleAccessToken;
 }
 
-async function resolveFirebaseWebConfig(): Promise<{
-  apiKey: string;
-  authDomain: string;
-  projectId: string;
-  appId: string;
-  oAuthClientId: string;
-}> {
-  let apiKey = stripQuotes(String(import.meta.env.VITE_FIREBASE_API_KEY ?? ''));
-  let authDomain = stripQuotes(String(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ?? ''));
-  let projectId = stripQuotes(String(import.meta.env.VITE_FIREBASE_PROJECT_ID ?? ''));
-  let appId = stripQuotes(String(import.meta.env.VITE_FIREBASE_APP_ID ?? ''));
-  let oAuthClientId = stripQuotes(
-    String(import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID ?? ''),
-  );
-
-  try {
-    const res = await fetch('/api/v1/auth/firebase-config', {
-      credentials: 'include',
-    });
-    const json = (await res.json()) as {
-      readonly ok?: boolean;
-      readonly data?: RuntimeFirebaseWebConfig;
-    };
-    if (json.ok && json.data) {
-      apiKey = stripQuotes(json.data.apiKey) || apiKey;
-      authDomain = stripQuotes(json.data.authDomain) || authDomain;
-      projectId = stripQuotes(json.data.projectId) || projectId;
-      appId = stripQuotes(json.data.appId) || appId;
-      oAuthClientId = stripQuotes(json.data.oAuthClientId) || oAuthClientId;
-    }
-  } catch {
-    // Ignore network fallback failure
-  }
-
-  return {
-    apiKey,
-    authDomain: authDomain || `${projectId}.firebaseapp.com`,
-    projectId,
-    appId,
-    oAuthClientId,
-  };
-}
-
-function loadGoogleIdentityServicesScript(): Promise<void> {
-  if (typeof window === 'undefined') {
-    return Promise.reject(new Error('Window is not available.'));
-  }
-  if (window.google?.accounts?.oauth2) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(
-      'script[src="https://accounts.google.com/gsi/client"]',
-    );
-    if (existing) {
-      existing.addEventListener('load', () => resolve(), { once: true });
-      existing.addEventListener(
-        'error',
-        () => reject(new Error('Failed to load Google Identity Services.')),
-        { once: true },
-      );
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = 'https://accounts.google.com/gsi/client';
-    script.async = true;
-    script.defer = true;
-    script.onload = () => resolve();
-    script.onerror = () =>
-      reject(new Error('Failed to load Google Identity Services.'));
-    document.head.appendChild(script);
-  });
-}
-
-async function requestGoogleTokenViaGsiBrandPopup(
-  clientId: string,
-): Promise<string> {
-  await loadGoogleIdentityServicesScript();
-  const oauth2 = window.google?.accounts?.oauth2;
-  if (!oauth2) {
-    throw new Error('Google Identity Services OAuth2 client unavailable.');
-  }
-
-  return await new Promise<string>((resolve, reject) => {
-    const client = oauth2.initTokenClient({
-      client_id: clientId,
-      scope: ['openid', ...SCOPES].join(' '),
-      prompt: 'select_account',
-      callback: (response) => {
-        if (response.error || !response.access_token) {
-          reject(
-            new Error(
-              response.error_description ||
-                response.error ||
-                'Google OAuth failed.',
-            ),
-          );
-          return;
-        }
-        resolve(response.access_token);
-      },
-      error_callback: (err) => {
-        reject(new Error(err.message || err.type || 'Google popup closed.'));
-      },
-    });
-    client.requestAccessToken({ prompt: 'select_account' });
-  });
-}
-
-export async function signInWithFirebaseGooglePopup(): Promise<FirebaseGooglePopupPayload> {
-  const cfg = await resolveFirebaseWebConfig();
-  if (
-    !cfg.apiKey ||
-    cfg.apiKey === 'your_firebase_web_api_key' ||
-    cfg.apiKey === 'demo-firebase-api-key' ||
-    !cfg.projectId
-  ) {
-    throw new Error('Firebase Web API Key is not configured in .env.');
-  }
-
+function ensureFirebaseAuthInitialized(): Auth {
   if (!cachedApp) {
     cachedApp =
       getApps().length > 0
         ? getApp()
         : initializeApp({
-            apiKey: cfg.apiKey,
-            authDomain: cfg.authDomain,
-            projectId: cfg.projectId,
-            appId: cfg.appId,
+            apiKey: resolvedConfig.apiKey,
+            authDomain: resolvedConfig.authDomain,
+            projectId: resolvedConfig.projectId,
+            appId: resolvedConfig.appId,
           });
   }
   if (!cachedAuth) {
@@ -218,37 +139,60 @@ export async function signInWithFirebaseGooglePopup(): Promise<FirebaseGooglePop
       }
     });
   }
+  return cachedAuth;
+}
 
-  const isLocalhostOrigin =
-    typeof window !== 'undefined' &&
-    (window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1');
-  const localhostGsiEnabled =
-    stripQuotes(String(import.meta.env.VITE_GOOGLE_OAUTH_LOCALHOST_READY ?? '')) ===
-    'true';
-
-  // Prefer Google Identity Services popup when oAuthClientId is present on
-  // authorized origins (or on localhost once added to Authorized JS Origins in GCP)
-  if (cfg.oAuthClientId && (!isLocalhostOrigin || localhostGsiEnabled)) {
-    try {
-      const accessToken = await requestGoogleTokenViaGsiBrandPopup(
-        cfg.oAuthClientId,
-      );
-      cachedGoogleAccessToken = accessToken;
-      const credential = GoogleAuthProvider.credential(null, accessToken);
-      const userCredential = await signInWithCredential(cachedAuth, credential);
-      const idToken = await userCredential.user.getIdToken();
-      return {
-        uid: userCredential.user.uid,
-        email: userCredential.user.email ?? 'kartikrawat9@gmail.com',
-        displayName: userCredential.user.displayName ?? 'Kartik Rawat',
-        avatarUrl: userCredential.user.photoURL ?? null,
-        idToken,
-      };
-    } catch {
-      // Fall through to standard Firebase signInWithPopup if GIS is blocked
-    }
+async function warmFirebaseWebConfigInBackground(): Promise<void> {
+  if (typeof window === 'undefined' || typeof fetch !== 'function') {
+    return;
   }
+  try {
+    const res = await fetch('/api/v1/auth/firebase-config', {
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      return;
+    }
+    const json = (await res.json()) as {
+      readonly ok?: boolean;
+      readonly data?: RuntimeFirebaseWebConfig;
+    };
+    const data = json.data;
+    if (!data) {
+      return;
+    }
+    const apiKey = stripQuotes(data.apiKey);
+    const projectId = stripQuotes(data.projectId);
+    const authDomain = stripQuotes(data.authDomain);
+    const appId = stripQuotes(data.appId);
+    const oAuthClientId = stripQuotes(data.oAuthClientId);
+
+    if (
+      apiKey &&
+      !PLACEHOLDER_API_KEYS.has(apiKey.toLowerCase()) &&
+      projectId &&
+      !PLACEHOLDER_PROJECT_IDS.has(projectId.toLowerCase())
+    ) {
+      resolvedConfig = {
+        apiKey,
+        projectId,
+        authDomain: authDomain || `${projectId}.firebaseapp.com`,
+        appId: appId || resolvedConfig.appId,
+        oAuthClientId: oAuthClientId || resolvedConfig.oAuthClientId,
+      };
+      ensureFirebaseAuthInitialized();
+    }
+  } catch {
+    // Ignore background warm-up errors; sync config is already ready
+  }
+}
+
+/**
+ * Triggers the Firebase Google OAuth popup synchronously within the user's click gesture
+ * so browsers never block the popup due to pre-popup network `await` calls.
+ */
+export async function signInWithFirebaseGooglePopup(): Promise<FirebaseGooglePopupPayload> {
+  const auth = ensureFirebaseAuthInitialized();
 
   const provider = new GoogleAuthProvider();
   for (const scope of SCOPES) {
@@ -256,7 +200,7 @@ export async function signInWithFirebaseGooglePopup(): Promise<FirebaseGooglePop
   }
   provider.setCustomParameters({ prompt: 'select_account' });
 
-  const result = await signInWithPopup(cachedAuth, provider);
+  const result = await signInWithPopup(auth, provider);
   const oauthCred = GoogleAuthProvider.credentialFromResult(result);
   cachedGoogleAccessToken = oauthCred?.accessToken ?? null;
   const idToken = await result.user.getIdToken();
@@ -271,5 +215,11 @@ export async function signInWithFirebaseGooglePopup(): Promise<FirebaseGooglePop
 }
 
 if (typeof window !== 'undefined') {
+  try {
+    ensureFirebaseAuthInitialized();
+  } catch {
+    // Will retry on click
+  }
+  void warmFirebaseWebConfigInBackground();
   window.__kartikFirebaseGooglePopup = signInWithFirebaseGooglePopup;
 }

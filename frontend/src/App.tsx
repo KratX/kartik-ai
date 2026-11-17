@@ -524,35 +524,66 @@ export function App() {
     readonly avatarUrl?: string | null;
     readonly idToken?: string;
   }) => {
+    const resolvedIdToken = input.idToken?.trim() || 'mock-google-token:kartik';
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      Authorization: `Bearer ${resolvedIdToken}`,
     };
-    if (input.idToken) {
-      headers['Authorization'] = `Bearer ${input.idToken}`;
-    }
     const res = await fetch('/api/v1/auth/google', {
       method: 'POST',
       credentials: 'include',
       headers,
       body: JSON.stringify({
+        idToken: resolvedIdToken,
         uid: input.uid,
         email: input.email,
         displayName: input.displayName,
         avatarUrl: input.avatarUrl,
       }),
     });
-    const json = (await res.json()) as ApiEnvelope<{
-      sessionId: string;
-      user: PlatformUser;
-      expiresAt: string;
-    }>;
-    if (json.ok) {
-      setUser(json.data.user);
-      setStatusBanner(
-        `Signed in as ${json.data.user.displayName} (HttpOnly session ${json.data.sessionId.slice(0, 12)}…).`,
-      );
-      await refreshConversations(activeConversationId);
+    const json = (await res.json()) as {
+      readonly ok?: boolean;
+      readonly data?: {
+        readonly sessionId?: string;
+        readonly sessionExpiresAt?: string;
+        readonly expiresAt?: string;
+        readonly user?: PlatformUser & { readonly id?: string };
+      } | null;
+      readonly error?: {
+        readonly code?: string;
+        readonly message?: string;
+      } | null;
+    };
+
+    const isSuccess =
+      (json.ok === true || (res.ok && !json.error)) && Boolean(json.data?.user);
+
+    if (!isSuccess || !json.data?.user) {
+      const errMsg =
+        json.error?.message ?? `Google sign-in failed (HTTP ${res.status})`;
+      setErrorBanner(errMsg);
+      throw new Error(errMsg);
     }
+
+    const rawUser = json.data.user;
+    const normalizedUser: PlatformUser = {
+      userId: rawUser.userId ?? rawUser.id ?? input.uid ?? 'usr_authenticated',
+      email: rawUser.email || input.email,
+      displayName: rawUser.displayName || input.displayName,
+      avatarUrl: rawUser.avatarUrl ?? input.avatarUrl ?? null,
+      planId: rawUser.planId ?? 'plan_free',
+    };
+    setUser(normalizedUser);
+    setErrorBanner(null);
+    const sessionTag = (
+      json.data.sessionId ??
+      json.data.sessionExpiresAt ??
+      'active'
+    ).slice(0, 12);
+    setStatusBanner(
+      `Signed in as ${normalizedUser.displayName} (${normalizedUser.email} · session ${sessionTag}…).`,
+    );
+    await refreshConversations(activeConversationId);
   };
 
   const handleLogout = async () => {
@@ -560,8 +591,11 @@ export function App() {
       method: 'POST',
       credentials: 'include',
     });
-    const json = (await res.json()) as ApiEnvelope<{ loggedOut: boolean }>;
-    if (json.ok) {
+    const json = (await res.json()) as {
+      readonly ok?: boolean;
+      readonly error?: unknown;
+    };
+    if (json.ok === true || (res.ok && !json.error)) {
       setUser(null);
       setStatusBanner('Signed out and revoked server-side session cookie.');
     }

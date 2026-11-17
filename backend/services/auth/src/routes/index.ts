@@ -122,6 +122,11 @@ export function createAuthRouter(deps: AuthRouterDependencies): AuthRouter {
       const method = req.method.toUpperCase();
       const routePath = ((req.path ?? req.url ?? '').split('?')[0] ?? '').replace(/\/+$/, '') || '/';
 
+      if (method === 'GET' && routePath === '/auth/firebase-config') {
+        controller.handleFirebaseConfig(req, res);
+        return;
+      }
+
       if (method === 'POST' && routePath === '/auth/google') {
         await runMiddlewareChain([ipRateLimitMw], req, res);
         await controller.handleGoogleSignIn(req, res);

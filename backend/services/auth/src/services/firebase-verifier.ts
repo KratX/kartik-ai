@@ -94,6 +94,41 @@ export class MockFirebaseTokenVerifier implements FirebaseTokenVerifier {
     const fixture = this.fixtures[token];
 
     if (!fixture) {
+      const parts = token.split('.');
+      if (parts.length === 3) {
+        try {
+          const claims = JSON.parse(
+            Buffer.from(parts[1]!, 'base64url').toString('utf8'),
+          ) as Record<string, unknown>;
+          const sub =
+            typeof claims.sub === 'string' && claims.sub.trim().length > 0
+              ? claims.sub.trim()
+              : typeof claims.user_id === 'string' && claims.user_id.trim().length > 0
+                ? claims.user_id.trim()
+                : '';
+          const email =
+            typeof claims.email === 'string' ? claims.email.trim().toLowerCase() : '';
+          if (sub && email.includes('@') && claims.email_verified !== false) {
+            const displayName =
+              typeof claims.name === 'string' && claims.name.trim().length > 0
+                ? claims.name.trim()
+                : email.split('@')[0]!;
+            const avatarUrl =
+              typeof claims.picture === 'string' && claims.picture.trim().length > 0
+                ? claims.picture.trim()
+                : null;
+            return Object.freeze({
+              firebaseUid: sub,
+              email,
+              emailVerified: true,
+              displayName,
+              avatarUrl,
+            });
+          }
+        } catch {
+          // Fall through to unrecognized mock token error
+        }
+      }
       throw new AppError('UNAUTHENTICATED', 'Invalid or unrecognized mock Firebase ID token');
     }
 
