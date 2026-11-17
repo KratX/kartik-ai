@@ -525,9 +525,10 @@ export function App() {
     readonly idToken?: string;
   }) => {
     const resolvedIdToken = input.idToken?.trim() || 'mock-google-token:kartik';
+    const isRealJwt = resolvedIdToken.split('.').length === 3;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${resolvedIdToken}`,
+      ...(isRealJwt ? { Authorization: `Bearer ${resolvedIdToken}` } : {}),
     };
     const res = await fetch('/api/v1/auth/google', {
       method: 'POST',

@@ -247,17 +247,17 @@ function describeFirebasePopupError(err: unknown): {
     const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
     return {
       code,
-      userClosed: false,
-      message: `Domain "${host}" is not yet in Firebase Console → Authentication → Settings → Authorized domains. Signed in via fallback session.`,
+      userClosed: true,
+      message: `Domain "${host}" is not yet authorized in Firebase Console (gen-lang-client-0503610321 → Authentication → Settings → Authorized domains). Add "${host}" there for live Google popup on localhost, or click "Continue with Session Cookie" below.`,
     };
   }
 
   if (code === 'auth/popup-blocked' || rawMessage.includes('popup-blocked')) {
     return {
       code,
-      userClosed: false,
+      userClosed: true,
       message:
-        'Browser blocked the Google sign-in popup. Please allow popups for this site or use the session sign-in below.',
+        'Browser blocked the Google sign-in popup. Please allow popups for this site or click "Continue with Session Cookie" below.',
     };
   }
 
@@ -294,24 +294,7 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
       onClose();
     } catch (popupErr) {
       const diagnosed = describeFirebasePopupError(popupErr);
-      if (diagnosed.userClosed) {
-        setPopupNotice(diagnosed.message);
-        return;
-      }
-      try {
-        await onGoogleSignIn({
-          email: email.trim() || 'kartikrawat9@gmail.com',
-          displayName: displayName.trim() || 'Kartik Rawat',
-          idToken: 'mock-google-token:kartik',
-        });
-        onClose();
-      } catch (fallbackErr) {
-        setPopupNotice(
-          fallbackErr instanceof Error
-            ? `${diagnosed.message} (${fallbackErr.message})`
-            : diagnosed.message,
-        );
-      }
+      setPopupNotice(diagnosed.message);
     } finally {
       setIsPopupPending(false);
     }
