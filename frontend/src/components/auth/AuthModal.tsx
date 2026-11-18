@@ -316,7 +316,7 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
 
         <div className="p-5 space-y-4">
           <p className="text-xs text-slate-400 leading-relaxed">
-            Authenticate with your Google account via Firebase OAuth to start an authenticated session.
+            Kartik.ai works out of the box without an account. Sign in with Google only if you want to link your profile to this session.
           </p>
 
           <button
@@ -354,6 +354,14 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
                 ? 'Google Popup Open — Complete in Window…'
                 : 'Sign in from Google'}
             </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full py-2 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer"
+          >
+            Continue Without Signing In
           </button>
 
           {popupNotice && (

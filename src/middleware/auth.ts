@@ -15,6 +15,8 @@ export interface VerifiedRequestIdentity {
 export interface AuthRequest extends Request {
   user?: DecodedIdToken;
   authIdentity?: VerifiedRequestIdentity;
+  guestIdentity?: VerifiedRequestIdentity;
+  invalidBearerTokenError?: unknown;
   sessionId?: string;
 }
 
@@ -156,21 +158,35 @@ export async function verifyRequestFirebaseToken(
   }
 }
 
-export function extractSessionCookieId(req: Request): string | undefined {
+export function extractCookieValue(req: Request, cookieName: string): string | undefined {
   const rawCookie = req.headers.cookie;
   if (!rawCookie || typeof rawCookie !== 'string') {
     return undefined;
   }
+  const prefix = `${cookieName}=`;
   for (const part of rawCookie.split(';')) {
     const trimmed = part.trim();
-    if (trimmed.startsWith('kartik_session=')) {
-      const value = decodeURIComponent(trimmed.slice('kartik_session='.length).trim());
+    if (trimmed.startsWith(prefix)) {
+      const value = decodeURIComponent(trimmed.slice(prefix.length).trim());
       if (value.length > 0) {
         return value;
       }
     }
   }
   return undefined;
+}
+
+export function extractSessionCookieId(req: Request): string | undefined {
+  return extractCookieValue(req, 'kartik_session');
+}
+
+export function extractGuestCookieId(req: Request): string | undefined {
+  const raw = extractCookieValue(req, 'kartik_guest');
+  if (!raw) {
+    return undefined;
+  }
+  const safe = raw.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 48);
+  return safe.startsWith('gst_') && safe.length >= 12 ? safe : undefined;
 }
 
 function sendUnauthenticatedResponse(req: Request, res: Response, err: unknown): void {
@@ -204,6 +220,15 @@ export const requireAuth = async (
   res: Response,
   next: NextFunction,
 ) => {
+  if (req.invalidBearerTokenError) {
+    sendUnauthenticatedResponse(req, res, req.invalidBearerTokenError);
+    return;
+  }
+  if (req.authIdentity) {
+    next();
+    return;
+  }
+
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.slice('Bearer '.length).trim();
@@ -240,24 +265,27 @@ export const requireAuth = async (
   );
 };
 
+/**
+ * Resolves either a verified Firebase Bearer token, a verified `kartik_session` cookie,
+ * or an isolated per-visitor `kartik_guest` workspace identity so the app works immediately
+ * without requiring sign-in while still isolating concurrent users.
+ */
 export const optionalAuth = async (
   req: AuthRequest,
-  _res: Response,
+  res: Response,
   next: NextFunction,
 ) => {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.slice('Bearer '.length).trim();
-    if (customTokenVerifier || isFirebaseJwtCandidate(token)) {
-      try {
-        const { decoded, identity } = await verifyRequestFirebaseToken(token);
-        req.user = decoded;
-        req.authIdentity = identity;
-        next();
-        return;
-      } catch {
-        // Invalid bearer token leaves req.authIdentity undefined; protected routes reject via requireAuth
-      }
+    try {
+      const { decoded, identity } = await verifyRequestFirebaseToken(token);
+      req.user = decoded;
+      req.authIdentity = identity;
+      next();
+      return;
+    } catch (err) {
+      req.invalidBearerTokenError = err;
     }
   }
 
@@ -268,9 +296,30 @@ export const optionalAuth = async (
       const resolved = sessionIdentityResolver(sessionId);
       if (resolved) {
         req.authIdentity = resolved;
+        next();
+        return;
       }
     }
   }
+
+  // Assign an isolated per-visitor guest identity via HttpOnly cookie so the app is usable without login
+  let guestId = extractGuestCookieId(req);
+  if (!guestId) {
+    guestId = `gst_${crypto.randomBytes(12).toString('hex')}`;
+    if (!res.headersSent) {
+      res.append(
+        'Set-Cookie',
+        `kartik_guest=${guestId}; Path=/; HttpOnly; SameSite=Lax`,
+      );
+    }
+  }
+  req.guestIdentity = Object.freeze({
+    uid: guestId,
+    email: `${guestId}@guest.kartik.ai`,
+    displayName: 'Guest Workspace',
+    avatarUrl: null,
+    emailVerified: false,
+  });
 
   next();
 };

@@ -636,11 +636,11 @@ export function App() {
     };
     if (json.ok === true || (res.ok && !json.error)) {
       setUser(null);
-      setConversations([]);
-      setMessages([]);
-      setUploadedFiles([]);
       setActiveCodeArtifact(null);
-      setStatusBanner('Signed out and revoked server-side session cookie.');
+      setStatusBanner(
+        'Signed out of Google session. Continuing in ready-to-use workspace.',
+      );
+      await Promise.all([refreshBillingAndAuth(), refreshConversations()]);
     }
   };
 

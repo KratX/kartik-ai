@@ -33,7 +33,6 @@ import {
   extractSessionCookieId,
   optionalAuth,
   registerSessionIdentityResolver,
-  requireAuth,
   verifyRequestFirebaseToken,
   type AuthRequest,
   type VerifiedRequestIdentity,
@@ -50,15 +49,27 @@ function readHeaderString(req: Request, headerName: string): string | undefined 
   return undefined;
 }
 
-function requireAuthenticatedIdentity(req: Request): VerifiedRequestIdentity {
+function resolveWorkspaceIdentity(req: Request): VerifiedRequestIdentity {
   const authReq = req as AuthRequest;
-  if (!authReq.authIdentity || !authReq.authIdentity.uid) {
+  if (authReq.invalidBearerTokenError) {
     throw new AppError(
       'UNAUTHENTICATED',
-      'Authentication required: provide a verified Firebase ID token',
+      'Invalid or unverified Firebase ID token in Authorization header',
     );
   }
-  return authReq.authIdentity;
+  if (authReq.authIdentity && authReq.authIdentity.uid) {
+    return authReq.authIdentity;
+  }
+  if (authReq.guestIdentity && authReq.guestIdentity.uid) {
+    return authReq.guestIdentity;
+  }
+  return {
+    uid: `gst_${crypto.randomBytes(12).toString('hex')}`,
+    email: 'guest@local.kartik.ai',
+    displayName: 'Guest Workspace',
+    avatarUrl: null,
+    emailVerified: false,
+  };
 }
 
 export function createKartikExpressApp(
@@ -234,10 +245,10 @@ export function createKartikExpressApp(
     }
   });
 
-  // 3. Demo Read-Only Toggle (/api/v1/demo/toggle-read-only) — Protected
-  app.post('/api/v1/demo/toggle-read-only', requireAuth, (req, res) => {
+  // 3. Demo Read-Only Toggle (/api/v1/demo/toggle-read-only) — Request-Scoped (Auth or Guest)
+  app.post('/api/v1/demo/toggle-read-only', (req, res) => {
     try {
-      const actor = requireAuthenticatedIdentity(req);
+      const actor = resolveWorkspaceIdentity(req);
       const body = (req.body ?? {}) as { enabled?: boolean };
       const result = runtime.toggleDemoReadOnly(actor, body.enabled);
       sendEnvelope(req, res, 200, result);
@@ -246,10 +257,10 @@ export function createKartikExpressApp(
     }
   });
 
-  // 4. Conversations & Multi-Agent Turns — Protected & Request-Scoped
-  app.get('/api/v1/conversations', requireAuth, (req, res) => {
+  // 4. Conversations & Multi-Agent Turns — Request-Scoped (Auth or Guest)
+  app.get('/api/v1/conversations', (req, res) => {
     try {
-      const actor = requireAuthenticatedIdentity(req);
+      const actor = resolveWorkspaceIdentity(req);
       const list = runtime.listConversations(actor);
       sendEnvelope(req, res, 200, list);
     } catch (err) {
@@ -257,9 +268,9 @@ export function createKartikExpressApp(
     }
   });
 
-  app.post('/api/v1/conversations', requireAuth, (req, res) => {
+  app.post('/api/v1/conversations', (req, res) => {
     try {
-      const actor = requireAuthenticatedIdentity(req);
+      const actor = resolveWorkspaceIdentity(req);
       const body = (req.body ?? {}) as { title?: string };
       const conv = runtime.createConversation(actor, body.title);
       sendEnvelope(req, res, 201, conv);
@@ -270,10 +281,9 @@ export function createKartikExpressApp(
 
   app.get(
     '/api/v1/conversations/:conversationId/messages',
-    requireAuth,
     (req, res) => {
       try {
-        const actor = requireAuthenticatedIdentity(req);
+        const actor = resolveWorkspaceIdentity(req);
         const data = runtime.getConversationMessages(
           actor,
           req.params.conversationId ?? '',
@@ -287,10 +297,9 @@ export function createKartikExpressApp(
 
   app.post(
     '/api/v1/conversations/:conversationId/messages',
-    requireAuth,
     async (req, res) => {
       try {
-        const actor = requireAuthenticatedIdentity(req);
+        const actor = resolveWorkspaceIdentity(req);
         const requestId =
           readHeaderString(req, 'idempotency-key') ??
           readHeaderString(req, 'x-request-id') ??
@@ -328,10 +337,9 @@ export function createKartikExpressApp(
 
   app.delete(
     '/api/v1/conversations/:conversationId',
-    requireAuth,
     async (req, res) => {
       try {
-        const actor = requireAuthenticatedIdentity(req);
+        const actor = resolveWorkspaceIdentity(req);
         const deleted = await runtime.deleteConversation(
           actor,
           req.params.conversationId ?? '',
@@ -343,13 +351,12 @@ export function createKartikExpressApp(
     },
   );
 
-  // 5. File Upload & Listing (/api/v1/files, /api/v1/files/upload) — Protected & Request-Scoped
+  // 5. File Upload & Listing (/api/v1/files, /api/v1/files/upload) — Request-Scoped (Auth or Guest)
   app.post(
     ['/api/v1/files', '/api/v1/files/upload'],
-    requireAuth,
     async (req, res) => {
       try {
-        const actor = requireAuthenticatedIdentity(req);
+        const actor = resolveWorkspaceIdentity(req);
         const body = (req.body ?? {}) as {
           conversationId?: string;
           originalFilename?: string;
@@ -369,9 +376,9 @@ export function createKartikExpressApp(
     },
   );
 
-  app.get('/api/v1/files', requireAuth, async (req, res) => {
+  app.get('/api/v1/files', async (req, res) => {
     try {
-      const actor = requireAuthenticatedIdentity(req);
+      const actor = resolveWorkspaceIdentity(req);
       const list = await runtime.listFiles(actor);
       sendEnvelope(req, res, 200, list);
     } catch (err) {
@@ -379,13 +386,12 @@ export function createKartikExpressApp(
     }
   });
 
-  // 6. Artifacts & Direct Binary Streaming (/api/v1/artifacts/:artifactId, /content, /raw) — Protected & Request-Scoped
+  // 6. Artifacts & Direct Binary Streaming (/api/v1/artifacts/:artifactId, /content, /raw) — Request-Scoped (Auth or Guest)
   app.get(
     '/api/v1/artifacts/:artifactId/content',
-    requireAuth,
     async (req, res) => {
       try {
-        const actor = requireAuthenticatedIdentity(req);
+        const actor = resolveWorkspaceIdentity(req);
         const data = await runtime.getArtifactContent(
           actor,
           req.params.artifactId ?? '',
@@ -399,10 +405,9 @@ export function createKartikExpressApp(
 
   app.get(
     '/api/v1/artifacts/:artifactId/raw',
-    requireAuth,
     async (req, res) => {
       try {
-        const actor = requireAuthenticatedIdentity(req);
+        const actor = resolveWorkspaceIdentity(req);
         const data = await runtime.getArtifactContent(
           actor,
           req.params.artifactId ?? '',
@@ -436,9 +441,9 @@ export function createKartikExpressApp(
     },
   );
 
-  app.get('/api/v1/artifacts/:artifactId', requireAuth, async (req, res) => {
+  app.get('/api/v1/artifacts/:artifactId', async (req, res) => {
     try {
-      const actor = requireAuthenticatedIdentity(req);
+      const actor = resolveWorkspaceIdentity(req);
       const data = await runtime.getArtifactContent(
         actor,
         req.params.artifactId ?? '',
@@ -449,13 +454,12 @@ export function createKartikExpressApp(
     }
   });
 
-  // 7. Billing Balance, Plans, Server-Priced Orders & Razorpay Checkout Verification — Protected & Request-Scoped
+  // 7. Billing Balance, Plans, Server-Priced Orders & Razorpay Checkout Verification — Request-Scoped (Auth or Guest)
   app.get(
     ['/api/v1/billing/balance', '/api/v1/billing/plans'],
-    requireAuth,
     (req, res) => {
       try {
-        const actor = requireAuthenticatedIdentity(req);
+        const actor = resolveWorkspaceIdentity(req);
         const summary = runtime.getBillingSummary(actor);
         sendEnvelope(req, res, 200, summary);
       } catch (err) {
@@ -464,9 +468,9 @@ export function createKartikExpressApp(
     },
   );
 
-  app.post('/api/v1/billing/orders', requireAuth, async (req, res) => {
+  app.post('/api/v1/billing/orders', async (req, res) => {
     try {
-      const actor = requireAuthenticatedIdentity(req);
+      const actor = resolveWorkspaceIdentity(req);
       const requestId =
         readHeaderString(req, 'idempotency-key') ??
         `req_ord_${crypto.randomBytes(8).toString('hex')}`;
@@ -483,10 +487,9 @@ export function createKartikExpressApp(
 
   app.post(
     ['/api/v1/billing/verify', '/api/v1/billing/verify-checkout', '/billing/verify'],
-    requireAuth,
     (req, res) => {
       try {
-        const actor = requireAuthenticatedIdentity(req);
+        const actor = resolveWorkspaceIdentity(req);
         const requestId =
           readHeaderString(req, 'idempotency-key') ??
           `req_chk_${crypto.randomBytes(8).toString('hex')}`;

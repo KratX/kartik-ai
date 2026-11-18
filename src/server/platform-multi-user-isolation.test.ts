@@ -80,19 +80,43 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
       assert.equal(unauthMeJson.data.isAuthenticated, false);
       assert.equal(unauthMeJson.data.user, null);
 
-      // 2. Unauthenticated protected endpoints return 401 UNAUTHENTICATED
-      const unauthConvRes = await fetch(`${baseUrl}/api/v1/conversations`);
-      assert.equal(unauthConvRes.status, 401);
+      // 2. App is usable out-of-the-box without logging in (issues isolated kartik_guest cookie)
+      const guest1ConvRes = await fetch(`${baseUrl}/api/v1/conversations`);
+      assert.equal(guest1ConvRes.status, 200);
+      const guest1SetCookie = guest1ConvRes.headers.get('set-cookie') ?? '';
+      assert.match(guest1SetCookie, /kartik_guest=gst_[a-f0-9]+/);
+      const guest1CookieHeader = guest1SetCookie.split(';')[0] ?? '';
 
-      const unauthCreateRes = await fetch(`${baseUrl}/api/v1/conversations`, {
+      const guest1CreateRes = await fetch(`${baseUrl}/api/v1/conversations`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: 'Should Fail' }),
+        headers: {
+          'content-type': 'application/json',
+          Cookie: guest1CookieHeader,
+        },
+        body: JSON.stringify({ title: 'Guest 1 Out-of-the-Box Thread' }),
       });
-      assert.equal(unauthCreateRes.status, 401);
+      assert.equal(guest1CreateRes.status, 201);
+      const guest1Created = (await guest1CreateRes.json()) as {
+        data: { conversationId: string; userId: string };
+      };
 
-      const unauthBillingRes = await fetch(`${baseUrl}/api/v1/billing/balance`);
-      assert.equal(unauthBillingRes.status, 401);
+      // A second unauthenticated visitor gets a different guest identity and cannot see Guest 1's conversation
+      const guest2ConvRes = await fetch(`${baseUrl}/api/v1/conversations`);
+      assert.equal(guest2ConvRes.status, 200);
+      const guest2List = (await guest2ConvRes.json()) as {
+        data: { items: Array<{ conversationId: string; userId: string }> };
+      };
+      assert.ok(
+        !guest2List.data.items.some(
+          (c) => c.conversationId === guest1Created.data.conversationId,
+        ),
+      );
+
+      // Passing an invalid/forged Authorization: Bearer token to workspace endpoints is rejected with 401
+      const invalidBearerRes = await fetch(`${baseUrl}/api/v1/conversations`, {
+        headers: { Authorization: 'Bearer invalid-forged-token' },
+      });
+      assert.equal(invalidBearerRes.status, 401);
 
       // 3. Caller-supplied UID/email on POST /api/v1/auth/google without a verified Firebase token is rejected (401)
       const spoofLoginRes = await fetch(`${baseUrl}/api/v1/auth/google`, {
