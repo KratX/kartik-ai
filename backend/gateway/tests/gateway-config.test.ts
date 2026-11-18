@@ -6,6 +6,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import {
   ConfigValidationError,
@@ -117,6 +118,19 @@ describe('@kartik/gateway config, Ed25519 key validation & service directory (3.
       'infra/aws/ec2-compose/secrets/user_context_public_key.pem',
     );
 
+    if (!fs.existsSync(privPath) || !fs.existsSync(pubPath)) {
+      fs.mkdirSync(path.dirname(privPath), { recursive: true });
+      const generated = generateEd25519KeyPair();
+      fs.writeFileSync(privPath, `${generated.privateKeyPem.trim()}\n`, {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+      fs.writeFileSync(pubPath, `${generated.publicKeyPem.trim()}\n`, {
+        encoding: 'utf8',
+        mode: 0o644,
+      });
+    }
+
     const config = loadGatewayConfig({
       NODE_ENV: 'production',
       REDIS_URL: 'redis://127.0.0.1:6379',
@@ -126,9 +140,10 @@ describe('@kartik/gateway config, Ed25519 key validation & service directory (3.
       CORS_ALLOWED_ORIGINS: 'https://app.kartik.ai',
     });
 
+    const publicKeyFromFile = fs.readFileSync(pubPath, 'utf8').trim();
     const pairResult = validateEd25519KeyPairMatch(
       config.USER_CONTEXT_SIGNING_KEY,
-      '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----',
+      publicKeyFromFile,
     );
     assert.equal(pairResult.valid, true);
 
