@@ -205,10 +205,14 @@ export async function signInWithFirebaseGooglePopup(): Promise<FirebaseGooglePop
   cachedGoogleAccessToken = oauthCred?.accessToken ?? null;
   const idToken = await result.user.getIdToken();
 
+  const email = result.user.email ?? '';
+  const displayName =
+    result.user.displayName ?? (email.split('@')[0] || 'Google User');
+
   return {
     uid: result.user.uid,
-    email: result.user.email ?? 'kartikrawat9@gmail.com',
-    displayName: result.user.displayName ?? 'Kartik Rawat',
+    email,
+    displayName,
     avatarUrl: result.user.photoURL ?? null,
     idToken,
   };

@@ -222,7 +222,7 @@ export function Sidebar({
             className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer"
           >
             <UserCheck className="w-3.5 h-3.5 text-sky-400" />
-            Sign In with Google
+            Sign in from Google
           </button>
         )}
       </div>

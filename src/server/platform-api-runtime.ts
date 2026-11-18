@@ -167,13 +167,13 @@ export class KartikPlatformRuntime {
   public readonly graphExecutor: AgentGraphExecutor;
 
   private currentUser: PlatformUser = {
-    userId: 'usr_kartik_owner_01',
-    email: 'kartikrawat9@gmail.com',
-    displayName: 'Kartik Rawat',
+    userId: 'usr_session_01',
+    email: '',
+    displayName: '',
     avatarUrl: null,
     planId: 'plan_free',
   };
-  private isAuthenticated = true;
+  private isAuthenticated = false;
   private demoReadOnly = false;
   private availableCredits = 250;
   private readonly ledger: PlatformLedgerEntry[] = [];

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ShieldCheck, UserCheck, X } from 'lucide-react';
+import { ShieldCheck, X } from 'lucide-react';
 
 export interface GoogleSignInPayload {
   readonly uid?: string;
@@ -210,11 +210,14 @@ async function triggerFirebaseGooglePopup(): Promise<GoogleSignInPayload> {
     provider,
   );
   const idToken = await credential.user.getIdToken();
+  const email = credential.user.email ?? '';
+  const displayName =
+    credential.user.displayName ?? (email.split('@')[0] || 'Google User');
 
   return {
     uid: credential.user.uid,
-    email: credential.user.email ?? 'kartikrawat9@gmail.com',
-    displayName: credential.user.displayName ?? 'Kartik Rawat',
+    email,
+    displayName,
     avatarUrl: credential.user.photoURL,
     idToken,
   };
@@ -222,7 +225,6 @@ async function triggerFirebaseGooglePopup(): Promise<GoogleSignInPayload> {
 
 function describeFirebasePopupError(err: unknown): {
   readonly code: string;
-  readonly userClosed: boolean;
   readonly message: string;
 } {
   const errObj = err as { code?: string; message?: string } | undefined;
@@ -237,9 +239,8 @@ function describeFirebasePopupError(err: unknown): {
   ) {
     return {
       code,
-      userClosed: true,
       message:
-        'Google sign-in popup was closed before completing. Click "Sign in with Google" again or use Instant Session below.',
+        'Google sign-in popup was closed before completing. Click "Sign in from Google" to try again.',
     };
   }
 
@@ -247,32 +248,26 @@ function describeFirebasePopupError(err: unknown): {
     const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
     return {
       code,
-      userClosed: true,
-      message: `Domain "${host}" is not yet authorized in Firebase Console (gen-lang-client-0503610321 → Authentication → Settings → Authorized domains). Add "${host}" there for live Google popup on localhost, or click "Continue with Session Cookie" below.`,
+      message: `Domain "${host}" is not yet authorized in Firebase Console (gen-lang-client-0503610321 → Authentication → Settings → Authorized domains). Add "${host}" there to enable Google popup sign-in.`,
     };
   }
 
   if (code === 'auth/popup-blocked' || rawMessage.includes('popup-blocked')) {
     return {
       code,
-      userClosed: true,
       message:
-        'Browser blocked the Google sign-in popup. Please allow popups for this site or click "Continue with Session Cookie" below.',
+        'Browser blocked the Google sign-in popup. Please allow popups for this site and try again.',
     };
   }
 
   return {
     code,
-    userClosed: false,
     message: rawMessage,
   };
 }
 
 export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
-  const [displayName, setDisplayName] = useState('Kartik Rawat');
-  const [email, setEmail] = useState('kartikrawat9@gmail.com');
   const [isPopupPending, setIsPopupPending] = useState(false);
-  const [isFormSubmitting, setIsFormSubmitting] = useState(false);
   const [popupNotice, setPopupNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -300,24 +295,6 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsFormSubmitting(true);
-    setPopupNotice(null);
-    try {
-      await onGoogleSignIn({
-        email: email.trim() || 'kartikrawat9@gmail.com',
-        displayName: displayName.trim() || 'Kartik Rawat',
-        idToken: 'mock-google-token:kartik',
-      });
-      onClose();
-    } catch (err) {
-      setPopupNotice(err instanceof Error ? err.message : 'Sign-in failed.');
-    } finally {
-      setIsFormSubmitting(false);
-    }
-  };
-
   return (
     <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-[#090d18] border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
@@ -325,7 +302,7 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-sky-400" />
             <h3 className="text-sm font-bold text-white">
-              Sign In to kartik-ai (Google OAuth)
+              Sign in from Google
             </h3>
           </div>
           <button
@@ -338,10 +315,15 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
         </div>
 
         <div className="p-5 space-y-4">
+          <p className="text-xs text-slate-400 leading-relaxed">
+            Authenticate with your Google account via Firebase OAuth to start an authenticated session.
+          </p>
+
           <button
             type="button"
+            disabled={isPopupPending}
             onClick={() => void handleFirebasePopup()}
-            className="gsi-material-button w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-950 font-bold text-xs flex items-center justify-center gap-2.5 transition-colors cursor-pointer"
+            className="gsi-material-button w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-950 font-bold text-xs flex items-center justify-center gap-2.5 transition-colors cursor-pointer"
           >
             <svg
               version="1.1"
@@ -369,8 +351,8 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
             </svg>
             <span className="gsi-material-button-contents">
               {isPopupPending
-                ? 'Google Popup Open — Complete in Window or Use Instant Sign-In Below'
-                : 'Sign in with Google (kartik-ai)'}
+                ? 'Google Popup Open — Complete in Window…'
+                : 'Sign in from Google'}
             </span>
           </button>
 
@@ -379,49 +361,6 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
               {popupNotice}
             </div>
           )}
-
-          <div className="relative flex py-1 items-center">
-            <div className="flex-grow border-t border-slate-800" />
-            <span className="flex-shrink mx-3 text-[10px] font-mono uppercase text-slate-500">
-              or instant google session
-            </span>
-            <div className="flex-grow border-t border-slate-800" />
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
-                Display Name
-              </label>
-              <input
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                className="w-full px-3 py-2 text-xs bg-slate-900 border border-slate-800 rounded-lg text-slate-100 focus:outline-none focus:border-sky-500/60"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
-                Google Account Email
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-3 py-2 text-xs bg-slate-900 border border-slate-800 rounded-lg text-slate-100 focus:outline-none focus:border-sky-500/60"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={isFormSubmitting}
-              className="w-full py-2.5 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
-            >
-              <UserCheck className="w-4 h-4" />
-              Continue with Session Cookie
-            </button>
-          </form>
         </div>
       </div>
     </div>
