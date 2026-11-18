@@ -18,6 +18,7 @@ import {
   isPlaceholderKeyMaterial,
   resolveKeyFromEnvOrFile,
   validateProductionEd25519KeyPair,
+  verifyComposeEd25519Preflight,
 } from './manage-ed25519-keys.mjs';
 
 export const CORE_REQUIRED_ENV_KEYS = Object.freeze([
@@ -258,6 +259,17 @@ const isMain =
 
 if (isMain) {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const composePreflight = verifyComposeEd25519Preflight({
+    repoRoot,
+    autoProvisionIfMissing: true,
+  });
+  if (!composePreflight.valid) {
+    for (const err of composePreflight.errors) {
+      console.error(`[check-env] COMPOSE PREFLIGHT ERROR: ${err}`);
+    }
+    process.exit(1);
+  }
+
   const defaultPrivPath = path.join(
     repoRoot,
     'infra',
@@ -283,10 +295,10 @@ if (isMain) {
       'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
     DATABASE_SCHEMA: process.env.DATABASE_SCHEMA || 'auth',
     REDIS_URL: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
-    ...(fs.existsSync(defaultPrivPath)
+    ...(!process.env.USER_CONTEXT_SIGNING_KEY && fs.existsSync(defaultPrivPath)
       ? { USER_CONTEXT_SIGNING_KEY_FILE: defaultPrivPath }
       : {}),
-    ...(fs.existsSync(defaultPubPath)
+    ...(!process.env.USER_CONTEXT_PUBLIC_KEY && fs.existsSync(defaultPubPath)
       ? { USER_CONTEXT_PUBLIC_KEY_FILE: defaultPubPath }
       : {}),
     ...process.env,

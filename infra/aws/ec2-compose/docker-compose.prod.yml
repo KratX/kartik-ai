@@ -42,7 +42,6 @@ services:
       SERVICE_TO_SERVICE_TOKEN: ${SERVICE_TO_SERVICE_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
       USER_CONTEXT_SIGNING_KEY_FILE: /run/secrets/user_context_signing_key
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
-      USER_CONTEXT_SIGNING_KEY: ${USER_CONTEXT_SIGNING_KEY:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
       DEMO_READ_ONLY: ${DEMO_READ_ONLY:-false}
     depends_on:
@@ -76,7 +75,6 @@ services:
       FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL:?FIREBASE_CLIENT_EMAIL must be set for production Firebase authentication}
       FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY:?FIREBASE_PRIVATE_KEY must be set for production Firebase authentication}
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
-      USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"}
     depends_on:
       - redis
     networks:
@@ -104,7 +102,6 @@ services:
       CHAT_TO_AGENT_TOKEN: ${CHAT_TO_AGENT_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
       CHAT_TO_BILLING_TOKEN: ${CHAT_TO_BILLING_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
-      USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"}
     depends_on:
       - agent
       - billing
@@ -133,7 +130,6 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       INTERNAL_CALLER_TOKEN_CHAT: ${INTERNAL_CALLER_TOKEN_CHAT:-s2s-prod-compose-token-kartik-ai-v43}
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
-      USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"}
     depends_on:
       - qdrant
       - redis
@@ -162,7 +158,6 @@ services:
       CHAT_TO_BILLING_TOKEN: ${CHAT_TO_BILLING_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
       GATEWAY_TO_BILLING_TOKEN: ${GATEWAY_TO_BILLING_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
-      USER_CONTEXT_PUBLIC_KEY: ${USER_CONTEXT_PUBLIC_KEY:-"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmU3OQTqETlr3gLBJryyHYjjSKSgGDuMbcP/RRXsg6H4=\n-----END PUBLIC KEY-----"}
     depends_on:
       - redis
     networks:

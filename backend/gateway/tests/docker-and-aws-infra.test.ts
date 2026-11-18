@@ -153,6 +153,14 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
       composeContent.includes('USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key'),
       'downstream services must receive USER_CONTEXT_PUBLIC_KEY_FILE secret',
     );
+    assert.ok(
+      !/^\s*USER_CONTEXT_PUBLIC_KEY\s*:/m.test(composeContent),
+      'docker-compose.prod.yml must not set hardcoded USER_CONTEXT_PUBLIC_KEY fallback that overrides /run/secrets/user_context_public_key',
+    );
+    assert.ok(
+      !/^\s*USER_CONTEXT_SIGNING_KEY\s*:/m.test(composeContent),
+      'docker-compose.prod.yml must not set USER_CONTEXT_SIGNING_KEY directly alongside /run/secrets/user_context_signing_key',
+    );
 
     // Ensure nonexistent `postgres` host defaults are completely removed from production Compose
     assert.ok(
@@ -194,17 +202,30 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
       repoRoot,
       'infra/aws/ec2-compose/secrets/user_context_public_key.pem',
     );
-    if (!fs.existsSync(privSecretPath) || !fs.existsSync(pubSecretPath)) {
-      const { pathToFileURL: toFileUrl } = await import('node:url');
-      const keyScriptPath = path.join(repoRoot, 'scripts/manage-ed25519-keys.mjs');
-      const keyMod = (await import(toFileUrl(keyScriptPath).href)) as {
-        provisionComposeEd25519Secrets: () => {
-          privateKeyPath: string;
-          publicKeyPath: string;
-        };
+    const { pathToFileURL: toFileUrl } = await import('node:url');
+    const keyScriptPath = path.join(repoRoot, 'scripts/manage-ed25519-keys.mjs');
+    const keyMod = (await import(toFileUrl(keyScriptPath).href)) as {
+      provisionComposeEd25519Secrets: () => {
+        privateKeyPath: string;
+        publicKeyPath: string;
       };
-      keyMod.provisionComposeEd25519Secrets();
-    }
+      verifyComposeEd25519Preflight: (opts?: {
+        repoRoot?: string;
+        autoProvisionIfMissing?: boolean;
+      }) => {
+        valid: boolean;
+        errors: readonly string[];
+      };
+    };
+    const preflight = keyMod.verifyComposeEd25519Preflight({
+      repoRoot,
+      autoProvisionIfMissing: true,
+    });
+    assert.equal(
+      preflight.valid,
+      true,
+      `Compose Ed25519 preflight failed: ${preflight.errors.join('; ')}`,
+    );
     assert.ok(fs.existsSync(privSecretPath), 'Missing production private key secret file');
     assert.ok(fs.existsSync(pubSecretPath), 'Missing production public key secret file');
 

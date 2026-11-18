@@ -281,6 +281,103 @@ export function provisionComposeEd25519Secrets(options = {}) {
   });
 }
 
+/**
+ * Deployment preflight validator for production Docker Compose (`infra/aws/ec2-compose/docker-compose.prod.yml`).
+ * Ensures:
+ * 1. `docker-compose.prod.yml` does not set hardcoded `USER_CONTEXT_PUBLIC_KEY` or `USER_CONTEXT_SIGNING_KEY`
+ *    environment variables that could override `/run/secrets/user_context_public_key` or `/run/secrets/user_context_signing_key`.
+ * 2. `gateway` and all downstream services (`auth`, `chat`, `agent`, `billing`) reference the shared secret files.
+ * 3. The generated Ed25519 private/public secret files exist (or are provisioned) and pass a cryptographic
+ *    sign/verify round-trip across `chat`, `agent`, and `billing`.
+ *
+ * @param {{ repoRoot?: string; autoProvisionIfMissing?: boolean }} [options]
+ * @returns {{ valid: boolean; errors: readonly string[]; derivedPublicKeyPem?: string }}
+ */
+export function verifyComposeEd25519Preflight(options = {}) {
+  const repoRoot =
+    options.repoRoot ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  /** @type {string[]} */
+  const errors = [];
+
+  const composePath = path.join(
+    repoRoot,
+    'infra',
+    'aws',
+    'ec2-compose',
+    'docker-compose.prod.yml',
+  );
+  if (!fs.existsSync(composePath)) {
+    errors.push(`Missing production Compose file at ${composePath}`);
+    return Object.freeze({ valid: false, errors: Object.freeze(errors) });
+  }
+
+  const composeContent = fs.readFileSync(composePath, 'utf8');
+  if (/^\s*USER_CONTEXT_PUBLIC_KEY\s*:/m.test(composeContent)) {
+    errors.push(
+      'docker-compose.prod.yml must not set USER_CONTEXT_PUBLIC_KEY directly; downstream services must read USER_CONTEXT_PUBLIC_KEY_FILE (/run/secrets/user_context_public_key)',
+    );
+  }
+  if (/^\s*USER_CONTEXT_SIGNING_KEY\s*:/m.test(composeContent)) {
+    errors.push(
+      'docker-compose.prod.yml must not set USER_CONTEXT_SIGNING_KEY directly; gateway must read USER_CONTEXT_SIGNING_KEY_FILE (/run/secrets/user_context_signing_key)',
+    );
+  }
+  if (
+    !composeContent.includes(
+      'USER_CONTEXT_SIGNING_KEY_FILE: /run/secrets/user_context_signing_key',
+    )
+  ) {
+    errors.push(
+      'docker-compose.prod.yml gateway service must configure USER_CONTEXT_SIGNING_KEY_FILE: /run/secrets/user_context_signing_key',
+    );
+  }
+
+  const publicKeyFileMatches =
+    composeContent.match(
+      /USER_CONTEXT_PUBLIC_KEY_FILE:\s*\/run\/secrets\/user_context_public_key/g,
+    ) ?? [];
+  if (publicKeyFileMatches.length < 5) {
+    errors.push(
+      `docker-compose.prod.yml must configure USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key across gateway, auth, chat, agent, and billing (found ${publicKeyFileMatches.length})`,
+    );
+  }
+
+  const secretsDir = path.join(repoRoot, 'infra', 'aws', 'ec2-compose', 'secrets');
+  const privateKeyPath = path.join(secretsDir, 'user_context_signing_key.pem');
+  const publicKeyPath = path.join(secretsDir, 'user_context_public_key.pem');
+
+  if (
+    options.autoProvisionIfMissing &&
+    (!fs.existsSync(privateKeyPath) || !fs.existsSync(publicKeyPath))
+  ) {
+    provisionComposeEd25519Secrets({ secretsDir });
+  }
+
+  if (!fs.existsSync(privateKeyPath)) {
+    errors.push(`Missing Compose private key secret file: ${privateKeyPath}`);
+  }
+  if (!fs.existsSync(publicKeyPath)) {
+    errors.push(`Missing Compose public key secret file: ${publicKeyPath}`);
+  }
+
+  if (errors.length > 0) {
+    return Object.freeze({ valid: false, errors: Object.freeze(errors) });
+  }
+
+  const privateKey = fs.readFileSync(privateKeyPath, 'utf8');
+  const publicKey = fs.readFileSync(publicKeyPath, 'utf8');
+  const pairCheck = validateProductionEd25519KeyPair({ privateKey, publicKey });
+  if (!pairCheck.valid) {
+    errors.push(...pairCheck.errors);
+  }
+
+  return Object.freeze({
+    valid: errors.length === 0,
+    errors: Object.freeze(errors),
+    derivedPublicKeyPem: pairCheck.derivedPublicKeyPem,
+  });
+}
+
 const isMain =
   process.argv[1] &&
   (fileURLToPath(import.meta.url).toLowerCase() ===
@@ -305,6 +402,17 @@ if (isMain) {
       }),
     );
     process.exit(0);
+  }
+
+  const composePreflight = verifyComposeEd25519Preflight({
+    repoRoot,
+    autoProvisionIfMissing: true,
+  });
+  if (!composePreflight.valid) {
+    for (const err of composePreflight.errors) {
+      console.error(`[ed25519-keys] PREFLIGHT ERROR: ${err}`);
+    }
+    process.exit(1);
   }
 
   const privateKey =
@@ -349,6 +457,7 @@ if (isMain) {
     JSON.stringify({
       status: 'verified',
       algorithm: 'Ed25519',
+      composePreflight: 'ok',
       audiencesVerified: ['chat', 'agent', 'billing'],
     }),
   );

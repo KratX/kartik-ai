@@ -136,18 +136,15 @@ export function isPlaceholderEd25519KeyMaterial(raw: string | undefined): boolea
 }
 
 /**
- * Resolves a secret or key value from either a direct environment variable (`valueKey`)
- * or a mounted secret file path (`fileKey`, e.g. `/run/secrets/user_context_signing_key`).
+ * Resolves a secret or key value from a mounted secret file path (`fileKey`, e.g.
+ * `/run/secrets/user_context_signing_key` or `/run/secrets/user_context_public_key`) when
+ * configured and present, falling back to the direct environment variable (`valueKey`).
  */
 export function resolveSecretOrFileEnv(
   env: Record<string, string | undefined>,
   valueKey: string,
   fileKey = `${valueKey}_FILE`,
 ): string | undefined {
-  const direct = env[valueKey]?.trim();
-  if (direct && direct.length > 0) {
-    return direct;
-  }
   const filePath = env[fileKey]?.trim();
   if (filePath && filePath.length > 0) {
     try {
@@ -158,8 +155,12 @@ export function resolveSecretOrFileEnv(
         }
       }
     } catch {
-      return undefined;
+      // Fall back to direct valueKey if file cannot be read
     }
+  }
+  const direct = env[valueKey]?.trim();
+  if (direct && direct.length > 0) {
+    return direct;
   }
   return undefined;
 }
