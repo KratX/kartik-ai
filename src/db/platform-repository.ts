@@ -54,7 +54,7 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
     if (!isCloudSqlConfigured()) {
       return;
     }
-    await getOrCreateUser(userId, `${userId}@kartik.ai`, 'Kartik Rawat', null);
+    await getOrCreateUser(userId, `${userId}@kartik.ai`, userId, null);
   }
 
   public async saveFile(file: UploadedFileRecord): Promise<void> {
@@ -88,6 +88,7 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
             chunkCount: file.chunkCount,
             status: file.status,
           },
+          setWhere: eq(uploadedFiles.userUid, file.userId),
         });
     } catch (error) {
       throw new Error('Database query failed. Please try again later.', {
@@ -467,6 +468,7 @@ export async function syncPlatformConversationToCloudSql(input: {
           messageCount: input.messageCount,
           updatedAt: new Date(),
         },
+        setWhere: eq(conversations.userUid, input.userId),
       });
   } catch (error) {
     throw new Error('Database query failed. Please try again later.', {
@@ -599,6 +601,7 @@ export async function syncPlatformPaymentOrderToCloudSql(input: {
           settled: input.settled,
           updatedAt: new Date(),
         },
+        setWhere: eq(paymentOrders.userUid, input.userId),
       });
   } catch (error) {
     throw new Error('Database query failed. Please try again later.', {
@@ -627,7 +630,7 @@ export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
       await getOrCreateUser(
         input.ownerUserId,
         `${input.ownerUserId}@kartik.ai`,
-        'Kartik Rawat',
+        input.ownerUserId,
         null,
       );
       const contentBase64 = Buffer.from(input.body).toString('base64');
@@ -650,6 +653,7 @@ export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
             sha256Hex: input.sha256,
             contentBase64,
           },
+          setWhere: eq(privateObjects.ownerUserUid, input.ownerUserId),
         });
       return metadata;
     } catch (error) {

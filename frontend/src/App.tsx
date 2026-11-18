@@ -559,11 +559,15 @@ export function App() {
     readonly avatarUrl?: string | null;
     readonly idToken?: string;
   }) => {
-    const resolvedIdToken = input.idToken?.trim() || 'mock-google-token:kartik';
-    const isRealJwt = resolvedIdToken.split('.').length === 3;
+    const resolvedIdToken = input.idToken?.trim() ?? '';
+    if (!resolvedIdToken) {
+      const msg = 'Verified Firebase ID token is required to sign in.';
+      setErrorBanner(msg);
+      throw new Error(msg);
+    }
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      ...(isRealJwt ? { Authorization: `Bearer ${resolvedIdToken}` } : {}),
+      Authorization: `Bearer ${resolvedIdToken}`,
     };
     const res = await fetch('/api/v1/auth/google', {
       method: 'POST',
@@ -571,10 +575,6 @@ export function App() {
       headers,
       body: JSON.stringify({
         idToken: resolvedIdToken,
-        uid: input.uid,
-        email: input.email,
-        displayName: input.displayName,
-        avatarUrl: input.avatarUrl,
       }),
     });
     const json = (await res.json()) as {
@@ -603,10 +603,10 @@ export function App() {
 
     const rawUser = json.data.user;
     const normalizedUser: PlatformUser = {
-      userId: rawUser.userId ?? rawUser.id ?? input.uid ?? 'usr_authenticated',
-      email: rawUser.email || input.email,
-      displayName: rawUser.displayName || input.displayName,
-      avatarUrl: rawUser.avatarUrl ?? input.avatarUrl ?? null,
+      userId: rawUser.userId ?? rawUser.id ?? 'usr_authenticated',
+      email: rawUser.email,
+      displayName: rawUser.displayName,
+      avatarUrl: rawUser.avatarUrl ?? null,
       planId: rawUser.planId ?? 'plan_free',
     };
     setUser(normalizedUser);
@@ -619,7 +619,10 @@ export function App() {
     setStatusBanner(
       `Signed in as ${normalizedUser.displayName} (${normalizedUser.email} · session ${sessionTag}…).`,
     );
-    await refreshConversations(activeConversationId);
+    await Promise.all([
+      refreshBillingAndAuth(),
+      refreshConversations(`conv_welcome_${normalizedUser.userId}`),
+    ]);
   };
 
   const handleLogout = async () => {
@@ -633,6 +636,10 @@ export function App() {
     };
     if (json.ok === true || (res.ok && !json.error)) {
       setUser(null);
+      setConversations([]);
+      setMessages([]);
+      setUploadedFiles([]);
+      setActiveCodeArtifact(null);
       setStatusBanner('Signed out and revoked server-side session cookie.');
     }
   };

@@ -5,7 +5,7 @@ import { users } from './schema.ts';
 export async function getOrCreateUser(
   uid: string,
   email: string,
-  displayName = 'Kartik Rawat',
+  displayName = '',
   avatarUrl: string | null = null,
 ) {
   try {

@@ -1,15 +1,14 @@
 /**
  * @file server.ts
- * @description Kartik.ai Full-Stack Express + Vite Platform Server (Port 3000, Micro-step 9.3.a).
+ * @description Kartik.ai Full-Stack Express + Vite Platform Server (Demo / Local Mode, Port 3000).
  *
- * Mounts:
- * 1. Health & Readiness probes (`GET /healthz`, `GET /readyz`)
- * 2. Public Gateway API (`/api/v1/*`) backed by `sharedPlatformRuntime` (`@kartik/agent` with
- *    `LiveGemini*Provider`, `AgentSlidingWindowRateLimiter`, `FileIngestionAndArtifactService`,
- *    `@kartik/billing`, `@kartik/auth`, and `@kartik/chat`)
- * 3. Direct Binary Artifact Streaming (`GET /api/v1/artifacts/:artifactId/raw`) delivering real
- *    `%PDF-1.4` (`application/pdf`), OpenXML `.pptx` (`PK\x03\x04`), and `.png` downloads
- * 4. Vite dev middleware in development or static `dist/` in production on Port 3000.
+ * Security & Multi-User Isolation:
+ * - Restricted to demo/local use (`assertRootRuntimeDemoOrLocalOnly`).
+ * - Zero global `currentUser` state: every request resolves its own authenticated identity
+ *   (`req.authIdentity`) from a verified Firebase ID token (`Authorization: Bearer <idToken>`)
+ *   or a server-issued `HttpOnly` session cookie created strictly from a verified Firebase ID token.
+ * - Never trusts caller-supplied `uid`, `email`, `displayName`, or unverified JWT payloads.
+ * - Protected routes enforce `requireAuth` and scope all operations to the authenticated user.
  */
 
 import 'dotenv/config';
@@ -20,12 +19,25 @@ import express, { type Request, type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import { isExecutedAsMainModule } from './backend/shared/http/index.js';
 import {
+  AppError,
   createSuccessEnvelope,
   mapErrorToHttpResponse,
 } from './backend/shared/errors/index.js';
 import type { SpecialistAgentName } from './backend/shared/contracts/index.js';
-import { sharedPlatformRuntime } from './src/server/platform-api-runtime.js';
-import { optionalAuth, type AuthRequest } from './src/middleware/auth.ts';
+import {
+  assertRootRuntimeDemoOrLocalOnly,
+  type KartikPlatformRuntime,
+  sharedPlatformRuntime,
+} from './src/server/platform-api-runtime.js';
+import {
+  extractSessionCookieId,
+  optionalAuth,
+  registerSessionIdentityResolver,
+  requireAuth,
+  verifyRequestFirebaseToken,
+  type AuthRequest,
+  type VerifiedRequestIdentity,
+} from './src/middleware/auth.ts';
 
 function readHeaderString(req: Request, headerName: string): string | undefined {
   const raw = req.headers[headerName.toLowerCase()];
@@ -38,7 +50,26 @@ function readHeaderString(req: Request, headerName: string): string | undefined 
   return undefined;
 }
 
-export function createKartikExpressApp() {
+function requireAuthenticatedIdentity(req: Request): VerifiedRequestIdentity {
+  const authReq = req as AuthRequest;
+  if (!authReq.authIdentity || !authReq.authIdentity.uid) {
+    throw new AppError(
+      'UNAUTHENTICATED',
+      'Authentication required: provide a verified Firebase ID token',
+    );
+  }
+  return authReq.authIdentity;
+}
+
+export function createKartikExpressApp(
+  runtime: KartikPlatformRuntime = sharedPlatformRuntime,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  assertRootRuntimeDemoOrLocalOnly(env);
+  registerSessionIdentityResolver((sessionId) =>
+    runtime.resolveSessionIdentity(sessionId),
+  );
+
   const app = express();
   app.use(express.json({ limit: '15mb' }));
   app.use(optionalAuth);
@@ -77,13 +108,18 @@ export function createKartikExpressApp() {
 
   // 1. Health & Readiness Probes
   app.get(['/healthz', '/api/v1/healthz'], (req, res) => {
-    sendEnvelope(req, res, 200, { status: 'ok', service: 'gateway' });
+    sendEnvelope(req, res, 200, {
+      status: 'ok',
+      service: 'gateway',
+      runtimeScope: 'demo-local-only',
+    });
   });
 
   app.get(['/readyz', '/api/v1/readyz'], (req, res) => {
     sendEnvelope(req, res, 200, {
       status: 'ready',
       service: 'gateway',
+      runtimeScope: 'demo-local-only',
       upstreams: {
         auth: 'ready',
         chat: 'ready',
@@ -149,44 +185,23 @@ export function createKartikExpressApp() {
     }
   });
 
-  app.post('/api/v1/auth/google', (req, res) => {
+  app.post('/api/v1/auth/google', async (req, res) => {
     try {
       const authReq = req as AuthRequest;
-      const body = (req.body ?? {}) as {
-        idToken?: string;
-        uid?: string;
-        email?: string;
-        displayName?: string;
-        avatarUrl?: string | null;
-      };
-      let jwtClaims: {
-        sub?: string;
-        email?: string;
-        name?: string;
-        picture?: string;
-      } = {};
+      const body = (req.body ?? {}) as { idToken?: string };
       const bearerHeader = readHeaderString(req, 'authorization');
       const rawToken =
         body.idToken?.trim() ||
         (bearerHeader?.startsWith('Bearer ') ? bearerHeader.slice(7).trim() : '');
-      if (rawToken && rawToken.split('.').length === 3) {
-        try {
-          const payloadB64 = rawToken.split('.')[1] ?? '';
-          jwtClaims = JSON.parse(
-            Buffer.from(payloadB64, 'base64url').toString('utf8'),
-          ) as typeof jwtClaims;
-        } catch {
-          // Ignore non-JSON token payload
-        }
+
+      // Strictly require a verified Firebase ID token; never trust caller-supplied uid/email
+      let verifiedIdentity = authReq.authIdentity;
+      if (!verifiedIdentity || rawToken) {
+        const verified = await verifyRequestFirebaseToken(rawToken);
+        verifiedIdentity = verified.identity;
       }
 
-      const session = sharedPlatformRuntime.loginWithGoogle({
-        uid: authReq.user?.uid ?? body.uid ?? jwtClaims.sub,
-        email: authReq.user?.email ?? body.email ?? jwtClaims.email,
-        displayName: authReq.user?.name ?? body.displayName ?? jwtClaims.name,
-        avatarUrl:
-          authReq.user?.picture ?? body.avatarUrl ?? jwtClaims.picture ?? null,
-      });
+      const session = runtime.loginWithGoogle(verifiedIdentity);
       res.setHeader(
         'Set-Cookie',
         `kartik_session=${session.sessionId}; Path=/; HttpOnly; SameSite=Lax`,
@@ -199,7 +214,8 @@ export function createKartikExpressApp() {
 
   app.get('/api/v1/auth/me', (req, res) => {
     try {
-      const status = sharedPlatformRuntime.getAuthStatus();
+      const authReq = req as AuthRequest;
+      const status = runtime.getAuthStatus(authReq.authIdentity ?? null);
       sendEnvelope(req, res, 200, status);
     } catch (err) {
       sendError(req, res, err);
@@ -208,7 +224,9 @@ export function createKartikExpressApp() {
 
   app.post('/api/v1/auth/logout', (req, res) => {
     try {
-      const result = sharedPlatformRuntime.logout();
+      const sessionId =
+        (req as AuthRequest).sessionId ?? extractSessionCookieId(req);
+      const result = runtime.logout(sessionId);
       res.setHeader('Set-Cookie', 'kartik_session=; Path=/; Max-Age=0; HttpOnly');
       sendEnvelope(req, res, 200, result);
     } catch (err) {
@@ -216,129 +234,213 @@ export function createKartikExpressApp() {
     }
   });
 
-  // 3. Demo Read-Only Toggle (/api/v1/demo/toggle-read-only)
-  app.post('/api/v1/demo/toggle-read-only', (req, res) => {
+  // 3. Demo Read-Only Toggle (/api/v1/demo/toggle-read-only) — Protected
+  app.post('/api/v1/demo/toggle-read-only', requireAuth, (req, res) => {
     try {
+      const actor = requireAuthenticatedIdentity(req);
       const body = (req.body ?? {}) as { enabled?: boolean };
-      const result = sharedPlatformRuntime.toggleDemoReadOnly(body.enabled);
+      const result = runtime.toggleDemoReadOnly(actor, body.enabled);
       sendEnvelope(req, res, 200, result);
     } catch (err) {
       sendError(req, res, err);
     }
   });
 
-  // 4. Conversations & Multi-Agent Turns
-  app.get('/api/v1/conversations', (req, res) => {
+  // 4. Conversations & Multi-Agent Turns — Protected & Request-Scoped
+  app.get('/api/v1/conversations', requireAuth, (req, res) => {
     try {
-      const list = sharedPlatformRuntime.listConversations();
+      const actor = requireAuthenticatedIdentity(req);
+      const list = runtime.listConversations(actor);
       sendEnvelope(req, res, 200, list);
     } catch (err) {
       sendError(req, res, err);
     }
   });
 
-  app.post('/api/v1/conversations', (req, res) => {
+  app.post('/api/v1/conversations', requireAuth, (req, res) => {
     try {
+      const actor = requireAuthenticatedIdentity(req);
       const body = (req.body ?? {}) as { title?: string };
-      const conv = sharedPlatformRuntime.createConversation(body.title);
+      const conv = runtime.createConversation(actor, body.title);
       sendEnvelope(req, res, 201, conv);
     } catch (err) {
       sendError(req, res, err);
     }
   });
 
-  app.get('/api/v1/conversations/:conversationId/messages', (req, res) => {
+  app.get(
+    '/api/v1/conversations/:conversationId/messages',
+    requireAuth,
+    (req, res) => {
+      try {
+        const actor = requireAuthenticatedIdentity(req);
+        const data = runtime.getConversationMessages(
+          actor,
+          req.params.conversationId ?? '',
+        );
+        sendEnvelope(req, res, 200, data);
+      } catch (err) {
+        sendError(req, res, err);
+      }
+    },
+  );
+
+  app.post(
+    '/api/v1/conversations/:conversationId/messages',
+    requireAuth,
+    async (req, res) => {
+      try {
+        const actor = requireAuthenticatedIdentity(req);
+        const requestId =
+          readHeaderString(req, 'idempotency-key') ??
+          readHeaderString(req, 'x-request-id') ??
+          `req_${crypto.randomBytes(8).toString('hex')}`;
+        const traceId =
+          readHeaderString(req, 'x-trace-id') ??
+          `trc_${crypto.randomBytes(8).toString('hex')}`;
+        const body = (req.body ?? {}) as {
+          prompt?: string;
+          preferredAgent?: SpecialistAgentName;
+          attachmentFileIds?: string[];
+        };
+
+        const turn = await runtime.sendMessageTurn(actor, {
+          conversationId: req.params.conversationId ?? '',
+          requestId,
+          traceId,
+          prompt: String(body.prompt ?? ''),
+          preferredAgent: body.preferredAgent,
+          attachmentFileIds: body.attachmentFileIds,
+        });
+
+        sendEnvelope(
+          req,
+          res,
+          turn.idempotentReplay ? 200 : 201,
+          turn,
+          requestId,
+        );
+      } catch (err) {
+        sendError(req, res, err);
+      }
+    },
+  );
+
+  app.delete(
+    '/api/v1/conversations/:conversationId',
+    requireAuth,
+    async (req, res) => {
+      try {
+        const actor = requireAuthenticatedIdentity(req);
+        const deleted = await runtime.deleteConversation(
+          actor,
+          req.params.conversationId ?? '',
+        );
+        sendEnvelope(req, res, 200, deleted);
+      } catch (err) {
+        sendError(req, res, err);
+      }
+    },
+  );
+
+  // 5. File Upload & Listing (/api/v1/files, /api/v1/files/upload) — Protected & Request-Scoped
+  app.post(
+    ['/api/v1/files', '/api/v1/files/upload'],
+    requireAuth,
+    async (req, res) => {
+      try {
+        const actor = requireAuthenticatedIdentity(req);
+        const body = (req.body ?? {}) as {
+          conversationId?: string;
+          originalFilename?: string;
+          declaredMimeType?: string;
+          contentBase64?: string;
+        };
+        const uploaded = await runtime.uploadFile(actor, {
+          conversationId: String(body.conversationId ?? 'conv_welcome_01'),
+          originalFilename: String(body.originalFilename ?? ''),
+          declaredMimeType: String(body.declaredMimeType ?? ''),
+          contentBase64: String(body.contentBase64 ?? ''),
+        });
+        sendEnvelope(req, res, 201, uploaded);
+      } catch (err) {
+        sendError(req, res, err);
+      }
+    },
+  );
+
+  app.get('/api/v1/files', requireAuth, async (req, res) => {
     try {
-      const data = sharedPlatformRuntime.getConversationMessages(
-        req.params.conversationId ?? '',
-      );
-      sendEnvelope(req, res, 200, data);
-    } catch (err) {
-      sendError(req, res, err);
-    }
-  });
-
-  app.post('/api/v1/conversations/:conversationId/messages', async (req, res) => {
-    try {
-      const requestId =
-        readHeaderString(req, 'idempotency-key') ??
-        readHeaderString(req, 'x-request-id') ??
-        `req_${crypto.randomBytes(8).toString('hex')}`;
-      const traceId =
-        readHeaderString(req, 'x-trace-id') ??
-        `trc_${crypto.randomBytes(8).toString('hex')}`;
-      const body = (req.body ?? {}) as {
-        prompt?: string;
-        preferredAgent?: SpecialistAgentName;
-        attachmentFileIds?: string[];
-      };
-
-      const turn = await sharedPlatformRuntime.sendMessageTurn({
-        conversationId: req.params.conversationId ?? '',
-        requestId,
-        traceId,
-        prompt: String(body.prompt ?? ''),
-        preferredAgent: body.preferredAgent,
-        attachmentFileIds: body.attachmentFileIds,
-      });
-
-      sendEnvelope(
-        req,
-        res,
-        turn.idempotentReplay ? 200 : 201,
-        turn,
-        requestId,
-      );
-    } catch (err) {
-      sendError(req, res, err);
-    }
-  });
-
-  app.delete('/api/v1/conversations/:conversationId', async (req, res) => {
-    try {
-      const deleted = await sharedPlatformRuntime.deleteConversation(
-        req.params.conversationId ?? '',
-      );
-      sendEnvelope(req, res, 200, deleted);
-    } catch (err) {
-      sendError(req, res, err);
-    }
-  });
-
-  // 5. File Upload & Listing (/api/v1/files, /api/v1/files/upload)
-  app.post(['/api/v1/files', '/api/v1/files/upload'], async (req, res) => {
-    try {
-      const body = (req.body ?? {}) as {
-        conversationId?: string;
-        originalFilename?: string;
-        declaredMimeType?: string;
-        contentBase64?: string;
-      };
-      const uploaded = await sharedPlatformRuntime.uploadFile({
-        conversationId: String(body.conversationId ?? 'conv_welcome_01'),
-        originalFilename: String(body.originalFilename ?? ''),
-        declaredMimeType: String(body.declaredMimeType ?? ''),
-        contentBase64: String(body.contentBase64 ?? ''),
-      });
-      sendEnvelope(req, res, 201, uploaded);
-    } catch (err) {
-      sendError(req, res, err);
-    }
-  });
-
-  app.get('/api/v1/files', async (req, res) => {
-    try {
-      const list = await sharedPlatformRuntime.listFiles();
+      const actor = requireAuthenticatedIdentity(req);
+      const list = await runtime.listFiles(actor);
       sendEnvelope(req, res, 200, list);
     } catch (err) {
       sendError(req, res, err);
     }
   });
 
-  // 6. Artifacts & Direct Binary Streaming (/api/v1/artifacts/:artifactId, /content, /raw)
-  app.get('/api/v1/artifacts/:artifactId/content', async (req, res) => {
+  // 6. Artifacts & Direct Binary Streaming (/api/v1/artifacts/:artifactId, /content, /raw) — Protected & Request-Scoped
+  app.get(
+    '/api/v1/artifacts/:artifactId/content',
+    requireAuth,
+    async (req, res) => {
+      try {
+        const actor = requireAuthenticatedIdentity(req);
+        const data = await runtime.getArtifactContent(
+          actor,
+          req.params.artifactId ?? '',
+        );
+        sendEnvelope(req, res, 200, data);
+      } catch (err) {
+        sendError(req, res, err);
+      }
+    },
+  );
+
+  app.get(
+    '/api/v1/artifacts/:artifactId/raw',
+    requireAuth,
+    async (req, res) => {
+      try {
+        const actor = requireAuthenticatedIdentity(req);
+        const data = await runtime.getArtifactContent(
+          actor,
+          req.params.artifactId ?? '',
+        );
+        const rawBuffer = Buffer.from(data.contentBase64, 'base64');
+        const safeTitle =
+          data.artifact.title
+            .replace(/[^A-Za-z0-9._-]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .toLowerCase()
+            .slice(0, 60) || 'kartik-artifact';
+        const ext =
+          data.artifact.artifactType === 'pdf_document'
+            ? '.pdf'
+            : data.artifact.artifactType === 'ppt_presentation'
+              ? '.pptx'
+              : data.artifact.artifactType === 'generated_image'
+                ? '.png'
+                : '.json';
+
+        res.setHeader('Content-Type', data.artifact.mimeType);
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${safeTitle}${ext}"`,
+        );
+        res.setHeader('Content-Length', String(rawBuffer.byteLength));
+        res.status(200).send(rawBuffer);
+      } catch (err) {
+        sendError(req, res, err);
+      }
+    },
+  );
+
+  app.get('/api/v1/artifacts/:artifactId', requireAuth, async (req, res) => {
     try {
-      const data = await sharedPlatformRuntime.getArtifactContent(
+      const actor = requireAuthenticatedIdentity(req);
+      const data = await runtime.getArtifactContent(
+        actor,
         req.params.artifactId ?? '',
       );
       sendEnvelope(req, res, 200, data);
@@ -347,66 +449,29 @@ export function createKartikExpressApp() {
     }
   });
 
-  app.get('/api/v1/artifacts/:artifactId/raw', async (req, res) => {
-    try {
-      const data = await sharedPlatformRuntime.getArtifactContent(
-        req.params.artifactId ?? '',
-      );
-      const rawBuffer = Buffer.from(data.contentBase64, 'base64');
-      const safeTitle = data.artifact.title
-        .replace(/[^A-Za-z0-9._-]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .toLowerCase()
-        .slice(0, 60) || 'kartik-artifact';
-      const ext =
-        data.artifact.artifactType === 'pdf_document'
-          ? '.pdf'
-          : data.artifact.artifactType === 'ppt_presentation'
-            ? '.pptx'
-            : data.artifact.artifactType === 'generated_image'
-              ? '.png'
-              : '.json';
+  // 7. Billing Balance, Plans, Server-Priced Orders & Razorpay Checkout Verification — Protected & Request-Scoped
+  app.get(
+    ['/api/v1/billing/balance', '/api/v1/billing/plans'],
+    requireAuth,
+    (req, res) => {
+      try {
+        const actor = requireAuthenticatedIdentity(req);
+        const summary = runtime.getBillingSummary(actor);
+        sendEnvelope(req, res, 200, summary);
+      } catch (err) {
+        sendError(req, res, err);
+      }
+    },
+  );
 
-      res.setHeader('Content-Type', data.artifact.mimeType);
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${safeTitle}${ext}"`,
-      );
-      res.setHeader('Content-Length', String(rawBuffer.byteLength));
-      res.status(200).send(rawBuffer);
-    } catch (err) {
-      sendError(req, res, err);
-    }
-  });
-
-  app.get('/api/v1/artifacts/:artifactId', async (req, res) => {
+  app.post('/api/v1/billing/orders', requireAuth, async (req, res) => {
     try {
-      const data = await sharedPlatformRuntime.getArtifactContent(
-        req.params.artifactId ?? '',
-      );
-      sendEnvelope(req, res, 200, data);
-    } catch (err) {
-      sendError(req, res, err);
-    }
-  });
-
-  // 7. Billing Balance, Plans, Server-Priced Orders & Razorpay Checkout Verification
-  app.get(['/api/v1/billing/balance', '/api/v1/billing/plans'], (req, res) => {
-    try {
-      const summary = sharedPlatformRuntime.getBillingSummary();
-      sendEnvelope(req, res, 200, summary);
-    } catch (err) {
-      sendError(req, res, err);
-    }
-  });
-
-  app.post('/api/v1/billing/orders', async (req, res) => {
-    try {
+      const actor = requireAuthenticatedIdentity(req);
       const requestId =
         readHeaderString(req, 'idempotency-key') ??
         `req_ord_${crypto.randomBytes(8).toString('hex')}`;
       const body = (req.body ?? {}) as { planId?: string };
-      const order = await sharedPlatformRuntime.createBillingOrder({
+      const order = await runtime.createBillingOrder(actor, {
         planId: String(body.planId ?? ''),
         requestId,
       });
@@ -418,8 +483,10 @@ export function createKartikExpressApp() {
 
   app.post(
     ['/api/v1/billing/verify', '/api/v1/billing/verify-checkout', '/billing/verify'],
+    requireAuth,
     (req, res) => {
       try {
+        const actor = requireAuthenticatedIdentity(req);
         const requestId =
           readHeaderString(req, 'idempotency-key') ??
           `req_chk_${crypto.randomBytes(8).toString('hex')}`;
@@ -431,7 +498,7 @@ export function createKartikExpressApp() {
           razorpayPaymentId?: string;
           razorpaySignature?: string;
         };
-        const verified = sharedPlatformRuntime.verifyCheckoutAndCredit({
+        const verified = runtime.verifyCheckoutAndCredit(actor, {
           orderId: String(body.orderId ?? body.razorpayOrderId ?? ''),
           paymentId: body.paymentId ?? body.razorpayPaymentId,
           signature: body.signature ?? body.razorpaySignature,
@@ -448,6 +515,7 @@ export function createKartikExpressApp() {
 }
 
 async function startServer() {
+  assertRootRuntimeDemoOrLocalOnly(process.env);
   const app = createKartikExpressApp();
   const port = Number(process.env.PORT ?? 3000);
 
@@ -466,7 +534,9 @@ async function startServer() {
   }
 
   app.listen(port, '0.0.0.0', () => {
-    console.log(`[Kartik.ai] Full-stack platform server ready at http://localhost:${port}`);
+    console.log(
+      `[Kartik.ai] Demo/local full-stack platform server ready at http://localhost:${port}`,
+    );
   });
 }
 

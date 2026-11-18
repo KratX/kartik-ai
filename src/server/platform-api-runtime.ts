@@ -1,12 +1,14 @@
 /**
  * @file src/server/platform-api-runtime.ts
- * @description Unified Full-Stack Multi-Agent Platform Runtime (Micro-step 9.3.a).
+ * @description Unified Full-Stack Multi-Agent Platform Runtime (Demo / Local Mode).
  *
- * Connects the Gateway API contract (`/api/v1/*`) to the real `@kartik/agent` execution engine
- * (`AgentGraphExecutor`, `LiveGemini*Provider`, `AgentSlidingWindowRateLimiter`,
- * `FileIngestionAndArtifactService`, `buildPdfBinaryBuffer`, `buildPptxBinaryBuffer`),
- * `@kartik/billing` integer-paise plans & credit ledger, `@kartik/auth` sessions, and
- * `@kartik/chat` conversation/message lifecycle with ordered cascade deletion.
+ * Security & Multi-User Isolation:
+ * - Strictly restricted to demo/local use (`assertRootRuntimeDemoOrLocalOnly`).
+ * - Maintains zero global current-user state (`currentUser` removed).
+ * - Requires request-scoped authenticated identity (`userId` / `VerifiedRequestIdentity`) for all
+ *   protected operations and scopes all conversations, messages, files, artifacts, credits,
+ *   idempotency keys, and Cloud SQL database queries strictly to the authenticated user.
+ * - Never reassigns conversation ownership across users on login.
  */
 
 import 'dotenv/config';
@@ -53,6 +55,7 @@ import {
   syncPlatformPaymentOrderToCloudSql,
 } from '../db/platform-repository.ts';
 import { getOrCreateUser } from '../db/users.ts';
+import type { VerifiedRequestIdentity } from '../middleware/auth.ts';
 
 export interface PlatformUser {
   readonly userId: string;
@@ -60,6 +63,13 @@ export interface PlatformUser {
   readonly displayName: string;
   readonly avatarUrl: string | null;
   readonly planId: 'plan_free' | 'plan_starter_199' | 'plan_pro_499';
+}
+
+export interface PlatformSessionRecord {
+  readonly sessionId: string;
+  readonly userId: string;
+  readonly expiresAt: string;
+  readonly expiresAtMs: number;
 }
 
 export interface PlatformMessage {
@@ -138,6 +148,40 @@ export interface PlatformLedgerEntry {
   readonly requestId: string;
 }
 
+const INITIAL_FREE_CREDITS = 250;
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Enforces that the monolithic root runtime (`server.ts` + `KartikPlatformRuntime`)
+ * is restricted to local development, automated testing, and explicit demo environments.
+ * Production deployments must run the isolated microservice architecture unless
+ * `DEMO_MODE=true` or `ALLOW_ROOT_DEMO_RUNTIME=true` is explicitly configured.
+ */
+export function assertRootRuntimeDemoOrLocalOnly(
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const nodeEnv = (env.NODE_ENV ?? 'development').trim().toLowerCase();
+  const demoMode = (env.DEMO_MODE ?? '').trim().toLowerCase() === 'true';
+  const allowRootDemo =
+    (env.ALLOW_ROOT_DEMO_RUNTIME ?? '').trim().toLowerCase() === 'true';
+
+  if (nodeEnv === 'production' && !demoMode && !allowRootDemo) {
+    throw new AppError(
+      'FORBIDDEN',
+      'Root Express runtime is restricted to demo/local use. For production deployments, run the isolated microservice architecture (@kartik/gateway, @kartik/auth, @kartik/chat, @kartik/agent, @kartik/billing) or set DEMO_MODE=true for demo hosting.',
+    );
+  }
+}
+
+function sanitizeUserId(rawUid: string): string {
+  const trimmed = rawUid.trim();
+  const safe = trimmed.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
+  if (!safe) {
+    throw new AppError('UNAUTHENTICATED', 'Authenticated user ID is required');
+  }
+  return safe;
+}
+
 export class KartikPlatformRuntime {
   private readonly redisClient = createRedisClientFromUrl(process.env.REDIS_URL);
   public readonly repository = new DrizzleCloudSqlAgentRepository();
@@ -166,20 +210,15 @@ export class KartikPlatformRuntime {
   public readonly ingestionService: FileIngestionAndArtifactService;
   public readonly graphExecutor: AgentGraphExecutor;
 
-  private currentUser: PlatformUser = {
-    userId: 'usr_session_01',
-    email: '',
-    displayName: '',
-    avatarUrl: null,
-    planId: 'plan_free',
-  };
-  private isAuthenticated = false;
   private demoReadOnly = false;
-  private availableCredits = 250;
-  private readonly ledger: PlatformLedgerEntry[] = [];
+  private readonly usersById = new Map<string, PlatformUser>();
+  private readonly sessionsById = new Map<string, PlatformSessionRecord>();
+  private readonly creditsByUserId = new Map<string, number>();
+  private readonly ledgerByUserId = new Map<string, PlatformLedgerEntry[]>();
+  private readonly seededWelcomeUsers = new Set<string>();
   private readonly conversations = new Map<string, PlatformConversation>();
   private readonly messagesByConversation = new Map<string, PlatformMessage[]>();
-  private readonly processedTurnsByRequestId = new Map<
+  private readonly processedTurnsByUserAndRequestId = new Map<
     string,
     {
       readonly conversationId: string;
@@ -203,6 +242,8 @@ export class KartikPlatformRuntime {
   >();
 
   constructor() {
+    assertRootRuntimeDemoOrLocalOnly(process.env);
+
     const { publicKey } = crypto.generateKeyPairSync('ed25519');
     const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
 
@@ -260,117 +301,214 @@ export class KartikPlatformRuntime {
         return obj.body;
       },
     });
-
-    this.seedInitialWorkspace();
   }
 
-  private seedInitialWorkspace(): void {
-    const convId = 'conv_welcome_01';
-    const nowIso = new Date().toISOString();
-    this.conversations.set(convId, {
-      conversationId: convId,
-      userId: this.currentUser.userId,
-      title: 'Kartik.ai Multi-Agent Architecture & Capabilities',
-      deletionState: 'active',
-      createdAt: nowIso,
-      updatedAt: nowIso,
-    });
+  private ensureUserProvisioned(
+    userId: string,
+    profile?: {
+      readonly email?: string;
+      readonly displayName?: string;
+      readonly avatarUrl?: string | null;
+    },
+  ): PlatformUser {
+    const safeUserId = sanitizeUserId(userId);
+    const existing = this.usersById.get(safeUserId);
+    const updatedUser: PlatformUser = {
+      userId: safeUserId,
+      email: profile?.email?.trim().toLowerCase() || existing?.email || '',
+      displayName:
+        profile?.displayName?.trim() ||
+        existing?.displayName ||
+        profile?.email?.split('@')[0] ||
+        safeUserId,
+      avatarUrl:
+        profile?.avatarUrl !== undefined
+          ? profile.avatarUrl
+          : (existing?.avatarUrl ?? null),
+      planId: existing?.planId ?? 'plan_free',
+    };
+    this.usersById.set(safeUserId, updatedUser);
 
-    this.ledger.push({
-      entryId: 'led_grant_initial',
-      timestamp: nowIso,
-      description: 'Initial Free-Tier Starter Grant',
-      deltaCredits: 250,
-      balanceAfter: 250,
-      requestId: 'req_initial_grant_0001',
-    });
+    if (!this.creditsByUserId.has(safeUserId)) {
+      this.creditsByUserId.set(safeUserId, INITIAL_FREE_CREDITS);
+    }
 
-    this.messagesByConversation.set(convId, [
-      {
-        messageId: 'msg_welcome_assistant_01',
+    if (!this.ledgerByUserId.has(safeUserId)) {
+      this.ledgerByUserId.set(safeUserId, [
+        {
+          entryId: `led_grant_${safeUserId}`,
+          timestamp: new Date().toISOString(),
+          description: 'Initial Free-Tier Starter Grant',
+          deltaCredits: INITIAL_FREE_CREDITS,
+          balanceAfter: INITIAL_FREE_CREDITS,
+          requestId: `req_initial_grant_${safeUserId}`,
+        },
+      ]);
+    }
+
+    if (!this.seededWelcomeUsers.has(safeUserId)) {
+      this.seededWelcomeUsers.add(safeUserId);
+      const convId = `conv_welcome_${safeUserId}`;
+      const nowIso = new Date().toISOString();
+      this.conversations.set(convId, {
         conversationId: convId,
-        role: 'assistant',
-        agentUsed: 'chat',
-        content: [
-          '### Welcome to **Kartik.ai** — Multi-Agent AI Workspace',
-          '',
-          'Select any specialist agent pill below or type naturally and the **LangGraph Router** will dispatch your turn automatically:',
-          '',
-          '| Specialist Agent | What It Produces | Cost / Rate Limit |',
-          '| :--- | :--- | :--- |',
-          '| **Chat (`chat`)** | Multi-turn technical synthesis, Markdown tables & architecture reasoning | `1 credit` · `20 req/min` |',
-          '| **Web Search (`search`)** | Live Google Search grounding citations + **4-image Interactive Lightbox Gallery** | `2 credits` · `5 req/min` |',
-          '| **Coding (`coding`)** | Two-stage classifier: builds 3-file (`index.html`, `styles.css`, `app.js`) live sandboxed apps OR inline code reviews | `5 credits` · `5 req/min` |',
-          '| **PDF Generator (`pdf`)** | Compiles real downloadable **`%PDF-1.4`** multi-page binary reports with page numbers & footer | `5 credits` · `5 req/min` |',
-          '| **PPT Generator (`ppt`)** | Compiles real downloadable **OpenXML `.pptx`** slide decks + **Interactive 16:9 Slide Deck Preview** in chat | `8 credits` · `5 req/min` |',
-          '| **PDF RAG (`rag`)** | Extracts multi-page text from uploaded `.pdf` files, chunks, embeds (`768-dim`), and cites `[Document, p. N]` | `2 credits` · `5 req/min` |',
-          '| **Vision & Image (`vision` / `image`)** | Multimodal OCR/diagram inspection on uploaded images & prompt-enhanced visual artwork generation | `3–10 credits` · `5 req/min` |',
-        ].join('\n'),
-        citations: [],
+        userId: safeUserId,
+        title: 'Kartik.ai Multi-Agent Architecture & Capabilities',
+        deletionState: 'active',
         createdAt: nowIso,
-      },
-    ]);
+        updatedAt: nowIso,
+      });
+
+      this.messagesByConversation.set(convId, [
+        {
+          messageId: `msg_welcome_assistant_${safeUserId}`,
+          conversationId: convId,
+          role: 'assistant',
+          agentUsed: 'chat',
+          content: [
+            '### Welcome to **Kartik.ai** — Multi-Agent AI Workspace',
+            '',
+            'Select any specialist agent pill below or type naturally and the **LangGraph Router** will dispatch your turn automatically:',
+            '',
+            '| Specialist Agent | What It Produces | Cost / Rate Limit |',
+            '| :--- | :--- | :--- |',
+            '| **Chat (`chat`)** | Multi-turn technical synthesis, Markdown tables & architecture reasoning | `1 credit` · `20 req/min` |',
+            '| **Web Search (`search`)** | Live Google Search grounding citations + **4-image Interactive Lightbox Gallery** | `2 credits` · `5 req/min` |',
+            '| **Coding (`coding`)** | Two-stage classifier: builds 3-file (`index.html`, `styles.css`, `app.js`) live sandboxed apps OR inline code reviews | `5 credits` · `5 req/min` |',
+            '| **PDF Generator (`pdf`)** | Compiles real downloadable **`%PDF-1.4`** multi-page binary reports with page numbers & footer | `5 credits` · `5 req/min` |',
+            '| **PPT Generator (`ppt`)** | Compiles real downloadable **OpenXML `.pptx`** slide decks + **Interactive 16:9 Slide Deck Preview** in chat | `8 credits` · `5 req/min` |',
+            '| **PDF RAG (`rag`)** | Extracts multi-page text from uploaded `.pdf` files, chunks, embeds (`768-dim`), and cites `[Document, p. N]` | `2 credits` · `5 req/min` |',
+            '| **Vision & Image (`vision` / `image`)** | Multimodal OCR/diagram inspection on uploaded images & prompt-enhanced visual artwork generation | `3–10 credits` · `5 req/min` |',
+          ].join('\n'),
+          citations: [],
+          createdAt: nowIso,
+        },
+      ]);
+    }
+
+    return updatedUser;
   }
 
-  public getAuthStatus() {
+  private requireUser(identityOrUserId: VerifiedRequestIdentity | string): PlatformUser {
+    if (typeof identityOrUserId === 'string') {
+      const safeId = sanitizeUserId(identityOrUserId);
+      return this.ensureUserProvisioned(safeId);
+    }
+    if (!identityOrUserId || !identityOrUserId.uid) {
+      throw new AppError('UNAUTHENTICATED', 'Authenticated user identity is required');
+    }
+    return this.ensureUserProvisioned(identityOrUserId.uid, {
+      email: identityOrUserId.email,
+      displayName: identityOrUserId.displayName,
+      avatarUrl: identityOrUserId.avatarUrl,
+    });
+  }
+
+  public resolveSessionIdentity(
+    sessionId: string | undefined,
+  ): VerifiedRequestIdentity | null {
+    if (!sessionId || typeof sessionId !== 'string') {
+      return null;
+    }
+    const session = this.sessionsById.get(sessionId.trim());
+    if (!session) {
+      return null;
+    }
+    if (Date.now() > session.expiresAtMs) {
+      this.sessionsById.delete(session.sessionId);
+      return null;
+    }
+    const user = this.usersById.get(session.userId);
+    if (!user) {
+      return null;
+    }
+    return Object.freeze({
+      uid: user.userId,
+      email: user.email,
+      displayName: user.displayName,
+      avatarUrl: user.avatarUrl,
+      emailVerified: true,
+    });
+  }
+
+  public getAuthStatus(identity?: VerifiedRequestIdentity | null) {
+    if (!identity || !identity.uid) {
+      return {
+        isAuthenticated: false,
+        user: null,
+        demoReadOnly: this.demoReadOnly,
+      };
+    }
+    const user = this.requireUser(identity);
     return {
-      isAuthenticated: this.isAuthenticated,
-      user: this.isAuthenticated ? this.currentUser : null,
+      isAuthenticated: true,
+      user,
       demoReadOnly: this.demoReadOnly,
     };
   }
 
-  public loginWithGoogle(input?: {
-    readonly uid?: string;
-    readonly email?: string;
-    readonly displayName?: string;
-    readonly avatarUrl?: string | null;
-  }) {
-    const prevUserId = this.currentUser.userId;
-    this.isAuthenticated = true;
-    if (input?.uid || input?.email || input?.displayName) {
-      const rawUid = input.uid?.trim() || this.currentUser.userId;
-      const safeUid = rawUid.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || this.currentUser.userId;
-      this.currentUser = {
-        ...this.currentUser,
-        userId: safeUid,
-        email: input.email?.trim() || this.currentUser.email,
-        displayName: input.displayName?.trim() || this.currentUser.displayName,
-        avatarUrl: input.avatarUrl ?? this.currentUser.avatarUrl,
-      };
+  /**
+   * Authenticates a user strictly from a verified Firebase token identity.
+   * Never trusts caller-supplied UID/email and never reassigns existing conversation ownership.
+   */
+  public loginWithGoogle(verifiedIdentity: VerifiedRequestIdentity) {
+    if (
+      !verifiedIdentity ||
+      typeof verifiedIdentity.uid !== 'string' ||
+      verifiedIdentity.uid.trim().length === 0 ||
+      typeof verifiedIdentity.email !== 'string' ||
+      !verifiedIdentity.email.includes('@')
+    ) {
+      throw new AppError(
+        'UNAUTHENTICATED',
+        'Verified Firebase identity (uid and email) is required to establish a session',
+      );
     }
-    if (prevUserId !== this.currentUser.userId) {
-      for (const [id, conv] of this.conversations.entries()) {
-        if (conv.userId === prevUserId) {
-          this.conversations.set(id, {
-            ...conv,
-            userId: this.currentUser.userId,
-          });
-        }
-      }
-    }
+
+    const user = this.ensureUserProvisioned(verifiedIdentity.uid, {
+      email: verifiedIdentity.email,
+      displayName: verifiedIdentity.displayName,
+      avatarUrl: verifiedIdentity.avatarUrl,
+    });
+
+    const sessionId = `sess_${crypto.randomBytes(16).toString('hex')}`;
+    const expiresAtMs = Date.now() + SESSION_TTL_MS;
+    const expiresAt = new Date(expiresAtMs).toISOString();
+    this.sessionsById.set(sessionId, {
+      sessionId,
+      userId: user.userId,
+      expiresAt,
+      expiresAtMs,
+    });
+
     void getOrCreateUser(
-      this.currentUser.userId,
-      this.currentUser.email,
-      this.currentUser.displayName,
-      this.currentUser.avatarUrl,
+      user.userId,
+      user.email,
+      user.displayName,
+      user.avatarUrl,
     ).catch(() => undefined);
 
     return {
       isAuthenticated: true,
-      sessionId: `sess_${crypto.randomBytes(12).toString('hex')}`,
-      user: this.currentUser,
+      sessionId,
+      user,
       demoReadOnly: this.demoReadOnly,
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      expiresAt,
     };
   }
 
-  public logout() {
-    this.isAuthenticated = false;
+  public logout(sessionId?: string) {
+    if (sessionId && typeof sessionId === 'string') {
+      this.sessionsById.delete(sessionId.trim());
+    }
     return { loggedOut: true };
   }
 
-  public toggleDemoReadOnly(enabled?: boolean) {
+  public toggleDemoReadOnly(
+    actor: VerifiedRequestIdentity | string,
+    enabled?: boolean,
+  ) {
+    this.requireUser(actor);
     this.demoReadOnly = enabled ?? !this.demoReadOnly;
     return { demoReadOnly: this.demoReadOnly };
   }
@@ -384,11 +522,10 @@ export class KartikPlatformRuntime {
     }
   }
 
-  public listConversations() {
+  public listConversations(actor: VerifiedRequestIdentity | string) {
+    const user = this.requireUser(actor);
     const items = Array.from(this.conversations.values())
-      .filter(
-        (c) => c.userId === this.currentUser.userId && c.deletionState === 'active',
-      )
+      .filter((c) => c.userId === user.userId && c.deletionState === 'active')
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return {
       items,
@@ -396,14 +533,21 @@ export class KartikPlatformRuntime {
     };
   }
 
-  public createConversation(title?: string) {
+  public createConversation(
+    actor: VerifiedRequestIdentity | string,
+    title?: string,
+  ) {
     this.assertWritable();
+    const user = this.requireUser(actor);
     const convId = `conv_${crypto.randomBytes(6).toString('hex')}`;
     const nowIso = new Date().toISOString();
     const record: PlatformConversation = {
       conversationId: convId,
-      userId: this.currentUser.userId,
-      title: title && title.trim().length > 0 ? title.trim().slice(0, 80) : 'New Conversation',
+      userId: user.userId,
+      title:
+        title && title.trim().length > 0
+          ? title.trim().slice(0, 80)
+          : 'New Conversation',
       deletionState: 'active',
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -412,9 +556,9 @@ export class KartikPlatformRuntime {
     this.messagesByConversation.set(convId, []);
     void syncPlatformConversationToCloudSql({
       conversationId: record.conversationId,
-      userId: this.currentUser.userId,
-      email: this.currentUser.email,
-      displayName: this.currentUser.displayName,
+      userId: user.userId,
+      email: user.email,
+      displayName: user.displayName,
       title: record.title,
       deletionState: 'active',
       messageCount: 0,
@@ -422,16 +566,24 @@ export class KartikPlatformRuntime {
     return record;
   }
 
-  public getConversationMessages(conversationId: string) {
-    const conv = this.conversations.get(conversationId);
+  public getConversationMessages(
+    actor: VerifiedRequestIdentity | string,
+    conversationId: string,
+  ) {
+    const user = this.requireUser(actor);
+    const resolvedId =
+      conversationId === 'conv_welcome_01'
+        ? `conv_welcome_${user.userId}`
+        : conversationId;
+    const conv = this.conversations.get(resolvedId);
     if (
       !conv ||
-      conv.userId !== this.currentUser.userId ||
+      conv.userId !== user.userId ||
       conv.deletionState === 'deleted'
     ) {
       throw new AppError('NOT_FOUND', 'Conversation not found');
     }
-    const items = this.messagesByConversation.get(conversationId) ?? [];
+    const items = this.messagesByConversation.get(resolvedId) ?? [];
     return {
       conversation: conv,
       items,
@@ -439,24 +591,32 @@ export class KartikPlatformRuntime {
     };
   }
 
-  public async deleteConversation(conversationId: string) {
+  public async deleteConversation(
+    actor: VerifiedRequestIdentity | string,
+    conversationId: string,
+  ) {
     this.assertWritable();
-    const conv = this.conversations.get(conversationId);
+    const user = this.requireUser(actor);
+    const resolvedId =
+      conversationId === 'conv_welcome_01'
+        ? `conv_welcome_${user.userId}`
+        : conversationId;
+    const conv = this.conversations.get(resolvedId);
     if (
       !conv ||
-      conv.userId !== this.currentUser.userId ||
+      conv.userId !== user.userId ||
       conv.deletionState === 'deleted'
     ) {
       throw new AppError('NOT_FOUND', 'Conversation not found');
     }
 
-    const userFiles = await this.repository.listFilesByUser(this.currentUser.userId);
+    const userFiles = await this.repository.listFilesByUser(user.userId);
     const convFiles = userFiles.filter((f) =>
-      f.storageKey.includes(`/${conversationId}/`),
+      f.storageKey.includes(`/${resolvedId}/`),
     );
     const convArtifacts = await this.repository.listArtifactsByConversation(
-      this.currentUser.userId,
-      conversationId,
+      user.userId,
+      resolvedId,
     );
     const purgedStorageKeys = [
       ...convFiles.map((f) => f.storageKey),
@@ -464,26 +624,26 @@ export class KartikPlatformRuntime {
     ];
 
     const purgeReport = await this.ingestionService.purgeResources({
-      userId: this.currentUser.userId,
-      conversationId,
+      userId: user.userId,
+      conversationId: resolvedId,
       fileIds: convFiles.map((f) => f.fileId),
     });
 
     conv.deletionState = 'deleted';
-    this.messagesByConversation.delete(conversationId);
+    this.messagesByConversation.delete(resolvedId);
 
     void syncPlatformConversationToCloudSql({
       conversationId: conv.conversationId,
-      userId: this.currentUser.userId,
-      email: this.currentUser.email,
-      displayName: this.currentUser.displayName,
+      userId: user.userId,
+      email: user.email,
+      displayName: user.displayName,
       title: conv.title,
       deletionState: 'deleted',
       messageCount: 0,
     }).catch(() => undefined);
 
     return {
-      conversationId,
+      conversationId: resolvedId,
       status: 'deleted' as const,
       deletionState: 'deleted' as const,
       purgeReport,
@@ -494,17 +654,31 @@ export class KartikPlatformRuntime {
     };
   }
 
-  public async uploadFile(input: {
-    readonly conversationId: string;
-    readonly originalFilename: string;
-    readonly declaredMimeType: string;
-    readonly contentBase64: string;
-  }) {
+  public async uploadFile(
+    actor: VerifiedRequestIdentity | string,
+    input: {
+      readonly conversationId: string;
+      readonly originalFilename: string;
+      readonly declaredMimeType: string;
+      readonly contentBase64: string;
+    },
+  ) {
     this.assertWritable();
+    const user = this.requireUser(actor);
+    const resolvedConvId =
+      !input.conversationId || input.conversationId === 'conv_welcome_01'
+        ? `conv_welcome_${user.userId}`
+        : input.conversationId;
+
+    const existingConv = this.conversations.get(resolvedConvId);
+    if (existingConv && existingConv.userId !== user.userId) {
+      throw new AppError('NOT_FOUND', 'Conversation not found');
+    }
+
     const contentBytes = new Uint8Array(Buffer.from(input.contentBase64, 'base64'));
     const fileRecord = await this.ingestionService.ingestUploadedFile({
-      userId: this.currentUser.userId,
-      conversationId: input.conversationId,
+      userId: user.userId,
+      conversationId: resolvedConvId,
       originalFilename: input.originalFilename,
       declaredMimeType: input.declaredMimeType,
       contentBytes,
@@ -516,30 +690,39 @@ export class KartikPlatformRuntime {
     };
   }
 
-  public async listFiles() {
-    const items = await this.repository.listFilesByUser(this.currentUser.userId);
+  public async listFiles(actor: VerifiedRequestIdentity | string) {
+    const user = this.requireUser(actor);
+    const items = await this.repository.listFilesByUser(user.userId);
     return {
       items,
       files: items,
     };
   }
 
-  public async getArtifactContent(artifactId: string) {
+  public async getArtifactContent(
+    actor: VerifiedRequestIdentity | string,
+    artifactId: string,
+  ) {
+    const user = this.requireUser(actor);
     return this.ingestionService.getArtifactWithRawBytes({
-      userId: this.currentUser.userId,
+      userId: user.userId,
       artifactId,
     });
   }
 
-  public async sendMessageTurn(input: {
-    readonly conversationId: string;
-    readonly requestId: string;
-    readonly traceId: string;
-    readonly prompt: string;
-    readonly preferredAgent?: SpecialistAgentName;
-    readonly attachmentFileIds?: readonly string[];
-  }) {
+  public async sendMessageTurn(
+    actor: VerifiedRequestIdentity | string,
+    input: {
+      readonly conversationId: string;
+      readonly requestId: string;
+      readonly traceId: string;
+      readonly prompt: string;
+      readonly preferredAgent?: SpecialistAgentName;
+      readonly attachmentFileIds?: readonly string[];
+    },
+  ) {
     this.assertWritable();
+    const user = this.requireUser(actor);
 
     if (!input.requestId || input.requestId.trim().length === 0) {
       throw new AppError(
@@ -548,7 +731,8 @@ export class KartikPlatformRuntime {
       );
     }
 
-    const existingReplay = this.processedTurnsByRequestId.get(input.requestId);
+    const scopedRequestIdKey = `${user.userId}:${input.requestId.trim()}`;
+    const existingReplay = this.processedTurnsByUserAndRequestId.get(scopedRequestIdKey);
     if (existingReplay) {
       return {
         ...existingReplay,
@@ -556,14 +740,22 @@ export class KartikPlatformRuntime {
       };
     }
 
-    let conv = this.conversations.get(input.conversationId);
+    const resolvedConvId =
+      input.conversationId === 'conv_welcome_01'
+        ? `conv_welcome_${user.userId}`
+        : input.conversationId;
+
+    let conv = this.conversations.get(resolvedConvId);
+    if (conv && conv.userId !== user.userId) {
+      throw new AppError('NOT_FOUND', 'Conversation not found');
+    }
     if (!conv || conv.deletionState === 'deleted') {
-      conv = this.createConversation(input.prompt.slice(0, 56));
+      conv = this.createConversation(actor, input.prompt.slice(0, 56));
     }
 
     const attachedFiles: UploadedFileRecord[] = [];
     for (const fileId of input.attachmentFileIds ?? []) {
-      const f = await this.repository.getFileById(this.currentUser.userId, fileId);
+      const f = await this.repository.getFileById(user.userId, fileId);
       if (!f) {
         throw new AppError('NOT_FOUND', `Attached file "${fileId}" not found`);
       }
@@ -588,12 +780,15 @@ export class KartikPlatformRuntime {
       vision: 3,
       image: 10,
     };
-    const creditCost = agentCreditCosts[targetAgent] ?? OPERATION_CREDIT_COSTS[billingOp] ?? 1;
+    const creditCost =
+      agentCreditCosts[targetAgent] ?? OPERATION_CREDIT_COSTS[billingOp] ?? 1;
 
-    if (this.availableCredits < creditCost) {
+    const currentBalance =
+      this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS;
+    if (currentBalance < creditCost) {
       throw new AppError(
         'QUOTA_EXHAUSTED',
-        `Operation "${billingOp}" requires ${creditCost} credits, but your available balance is ${this.availableCredits}. Please top up in the Billing Drawer.`,
+        `Operation "${billingOp}" requires ${creditCost} credits, but your available balance is ${currentBalance}. Please top up in the Billing Drawer.`,
       );
     }
 
@@ -611,7 +806,7 @@ export class KartikPlatformRuntime {
     const execResult = await this.graphExecutor.execute({
       requestId: input.requestId,
       traceId: input.traceId,
-      userId: this.currentUser.userId,
+      userId: user.userId,
       conversationId: conv.conversationId,
       messageId: userMessage.messageId,
       prompt: input.prompt,
@@ -619,21 +814,24 @@ export class KartikPlatformRuntime {
       attachmentFileIds: input.attachmentFileIds,
     });
 
-    // Deduct credits atomically after durable execution
-    this.availableCredits -= creditCost;
+    // Deduct credits atomically for this specific user after durable execution
+    const updatedBalance = currentBalance - creditCost;
+    this.creditsByUserId.set(user.userId, updatedBalance);
     const ledgerEntry: PlatformLedgerEntry = {
       entryId: `led_${crypto.randomBytes(6).toString('hex')}`,
       timestamp: new Date().toISOString(),
       description: `${execResult.agent.toUpperCase()} Agent (${billingOp})`,
       deltaCredits: -creditCost,
-      balanceAfter: this.availableCredits,
+      balanceAfter: updatedBalance,
       requestId: input.requestId,
     };
-    this.ledger.unshift(ledgerEntry);
+    const userLedger = this.ledgerByUserId.get(user.userId) ?? [];
+    userLedger.unshift(ledgerEntry);
+    this.ledgerByUserId.set(user.userId, userLedger);
 
     const hydratedArtifacts: ArtifactRecord[] = [];
     for (const artId of execResult.artifactIds ?? []) {
-      const art = await this.repository.getArtifactById(this.currentUser.userId, artId);
+      const art = await this.repository.getArtifactById(user.userId, artId);
       if (art) {
         hydratedArtifacts.push(art);
       }
@@ -671,9 +869,9 @@ export class KartikPlatformRuntime {
     void (async () => {
       await syncPlatformConversationToCloudSql({
         conversationId: conv.conversationId,
-        userId: this.currentUser.userId,
-        email: this.currentUser.email,
-        displayName: this.currentUser.displayName,
+        userId: user.userId,
+        email: user.email,
+        displayName: user.displayName,
         title: conv.title,
         deletionState: 'active',
         messageCount: list.length,
@@ -681,7 +879,7 @@ export class KartikPlatformRuntime {
       await syncPlatformMessageToCloudSql({
         messageId: userMessage.messageId,
         conversationId: conv.conversationId,
-        userId: this.currentUser.userId,
+        userId: user.userId,
         role: 'user',
         content: userMessage.content,
         requestId: input.requestId,
@@ -690,7 +888,7 @@ export class KartikPlatformRuntime {
       await syncPlatformMessageToCloudSql({
         messageId: assistantMessage.messageId,
         conversationId: conv.conversationId,
-        userId: this.currentUser.userId,
+        userId: user.userId,
         role: 'assistant',
         content: assistantMessage.content,
         agentUsed: assistantMessage.agentUsed,
@@ -702,11 +900,11 @@ export class KartikPlatformRuntime {
         artifactIdsJson: assistantMessage.artifactIds ?? [],
       });
       await syncPlatformBillingLedgerToCloudSql({
-        userId: this.currentUser.userId,
-        email: this.currentUser.email,
-        displayName: this.currentUser.displayName,
-        planId: this.currentUser.planId,
-        availableCredits: this.availableCredits,
+        userId: user.userId,
+        email: user.email,
+        displayName: user.displayName,
+        planId: user.planId,
+        availableCredits: updatedBalance,
         entryId: ledgerEntry.entryId,
         requestId: ledgerEntry.requestId,
         description: ledgerEntry.description,
@@ -719,35 +917,43 @@ export class KartikPlatformRuntime {
       conversationId: conv.conversationId,
       requestId: input.requestId,
       traceId: input.traceId,
-      remainingCredits: this.availableCredits,
+      remainingCredits: updatedBalance,
       creditsCharged: creditCost,
       idempotentReplay: false,
       userMessage,
       assistantMessage,
     };
 
-    this.processedTurnsByRequestId.set(input.requestId, turnResult);
+    this.processedTurnsByUserAndRequestId.set(scopedRequestIdKey, turnResult);
     return turnResult;
   }
 
-  public getBillingSummary() {
+  public getBillingSummary(actor: VerifiedRequestIdentity | string) {
+    const user = this.requireUser(actor);
+    const availableCredits =
+      this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS;
+    const ledger = this.ledgerByUserId.get(user.userId) ?? [];
     return {
-      userId: this.currentUser.userId,
-      planId: this.currentUser.planId,
-      availableCredits: this.availableCredits,
+      userId: user.userId,
+      planId: user.planId,
+      availableCredits,
       reservedCredits: 0,
       billingMode: 'mock' as const,
       plans: PLATFORM_CREDIT_PLANS,
       operationCosts: OPERATION_CREDIT_COSTS,
-      ledger: this.ledger.slice(0, 25),
+      ledger: ledger.slice(0, 25),
     };
   }
 
-  public async createBillingOrder(input: {
-    readonly planId: string;
-    readonly requestId: string;
-  }) {
+  public async createBillingOrder(
+    actor: VerifiedRequestIdentity | string,
+    input: {
+      readonly planId: string;
+      readonly requestId: string;
+    },
+  ) {
     this.assertWritable();
+    const user = this.requireUser(actor);
     const plan = PLATFORM_CREDIT_PLANS.find((p) => p.planId === input.planId);
     if (!plan) {
       throw new AppError(
@@ -784,7 +990,7 @@ export class KartikPlatformRuntime {
             receipt: input.requestId.slice(0, 40),
             notes: {
               planId: plan.planId,
-              userId: this.currentUser.userId,
+              userId: user.userId,
             },
           }),
           signal: AbortSignal.timeout(8000),
@@ -804,15 +1010,15 @@ export class KartikPlatformRuntime {
     this.pendingOrders.set(orderId, {
       orderId,
       plan,
-      userId: this.currentUser.userId,
+      userId: user.userId,
       settled: false,
     });
 
     void syncPlatformPaymentOrderToCloudSql({
       orderId,
-      userId: this.currentUser.userId,
-      email: this.currentUser.email,
-      displayName: this.currentUser.displayName,
+      userId: user.userId,
+      email: user.email,
+      displayName: user.displayName,
       planId: plan.planId,
       requestId: input.requestId,
       amountPaise: plan.amountPaise,
@@ -836,15 +1042,19 @@ export class KartikPlatformRuntime {
     };
   }
 
-  public verifyCheckoutAndCredit(input: {
-    readonly orderId: string;
-    readonly paymentId?: string;
-    readonly signature?: string;
-    readonly requestId: string;
-  }) {
+  public verifyCheckoutAndCredit(
+    actor: VerifiedRequestIdentity | string,
+    input: {
+      readonly orderId: string;
+      readonly paymentId?: string;
+      readonly signature?: string;
+      readonly requestId: string;
+    },
+  ) {
     this.assertWritable();
+    const user = this.requireUser(actor);
     const order = this.pendingOrders.get(input.orderId);
-    if (!order) {
+    if (!order || order.userId !== user.userId) {
       throw new AppError('NOT_FOUND', `Order "${input.orderId}" was not found`);
     }
 
@@ -873,6 +1083,9 @@ export class KartikPlatformRuntime {
     }
     const signature = expectedSignature;
 
+    const currentBalance =
+      this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS;
+
     if (order.settled) {
       return {
         verified: true,
@@ -881,34 +1094,39 @@ export class KartikPlatformRuntime {
         signature,
         planId: order.plan.planId,
         creditsAdded: 0,
-        availableCredits: this.availableCredits,
+        availableCredits: currentBalance,
         idempotentReplay: true,
       };
     }
 
     order.settled = true;
-    this.availableCredits += order.plan.creditsGranted;
-    this.currentUser = {
-      ...this.currentUser,
+    const updatedBalance = currentBalance + order.plan.creditsGranted;
+    this.creditsByUserId.set(user.userId, updatedBalance);
+
+    const updatedUser: PlatformUser = {
+      ...user,
       planId: order.plan.planId,
     };
+    this.usersById.set(user.userId, updatedUser);
 
     const ledgerEntry: PlatformLedgerEntry = {
       entryId: `led_${crypto.randomBytes(6).toString('hex')}`,
       timestamp: new Date().toISOString(),
       description: `Razorpay Purchase — ${order.plan.name} (${order.plan.amountInrLabel}, ${paymentId})`,
       deltaCredits: order.plan.creditsGranted,
-      balanceAfter: this.availableCredits,
+      balanceAfter: updatedBalance,
       requestId: input.requestId,
     };
-    this.ledger.unshift(ledgerEntry);
+    const userLedger = this.ledgerByUserId.get(user.userId) ?? [];
+    userLedger.unshift(ledgerEntry);
+    this.ledgerByUserId.set(user.userId, userLedger);
 
     void (async () => {
       await syncPlatformPaymentOrderToCloudSql({
         orderId: order.orderId,
-        userId: this.currentUser.userId,
-        email: this.currentUser.email,
-        displayName: this.currentUser.displayName,
+        userId: updatedUser.userId,
+        email: updatedUser.email,
+        displayName: updatedUser.displayName,
         planId: order.plan.planId,
         requestId: input.requestId,
         amountPaise: order.plan.amountPaise,
@@ -917,11 +1135,11 @@ export class KartikPlatformRuntime {
         settled: true,
       });
       await syncPlatformBillingLedgerToCloudSql({
-        userId: this.currentUser.userId,
-        email: this.currentUser.email,
-        displayName: this.currentUser.displayName,
-        planId: this.currentUser.planId,
-        availableCredits: this.availableCredits,
+        userId: updatedUser.userId,
+        email: updatedUser.email,
+        displayName: updatedUser.displayName,
+        planId: updatedUser.planId,
+        availableCredits: updatedBalance,
         entryId: ledgerEntry.entryId,
         requestId: ledgerEntry.requestId,
         description: ledgerEntry.description,
@@ -937,7 +1155,7 @@ export class KartikPlatformRuntime {
       signature,
       planId: order.plan.planId,
       creditsAdded: order.plan.creditsGranted,
-      availableCredits: this.availableCredits,
+      availableCredits: updatedBalance,
       idempotentReplay: false,
     };
   }
