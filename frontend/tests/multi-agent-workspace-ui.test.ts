@@ -63,4 +63,51 @@ describe('@kartik/frontend Multi-Agent Selector Pills & Multi-File Sandbox Assem
     assert.ok(htmlContent.includes('<div id="root"></div>'));
     assert.ok(htmlContent.includes('/src/main.tsx'));
   });
+
+  it('enforces single-source-of-truth component tree by keeping root src/components/** as thin re-exports of @kartik/frontend', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+
+    let repoRoot = process.cwd();
+    for (let i = 0; i < 4; i += 1) {
+      if (fs.existsSync(path.join(repoRoot, 'pnpm-workspace.yaml'))) {
+        break;
+      }
+      repoRoot = path.dirname(repoRoot);
+    }
+
+    const rootComponentFiles = [
+      'src/components/artifacts/ArtifactPanel.tsx',
+      'src/components/auth/AuthModal.tsx',
+      'src/components/billing/BillingDrawer.tsx',
+      'src/components/chat/ChatArea.tsx',
+      'src/components/chat/ChatInput.tsx',
+      'src/components/chat/MarkdownRenderer.tsx',
+      'src/components/chat/MessageBubble.tsx',
+      'src/components/chat/MessageList.tsx',
+      'src/components/chat/SlideDeckPreview.tsx',
+      'src/components/common/LoadingAnimation.tsx',
+      'src/components/layout/Nav.tsx',
+      'src/components/layout/Sidebar.tsx',
+      'src/dev-exports/StepFileDownloads.tsx',
+    ];
+
+    for (const relFile of rootComponentFiles) {
+      const fullPath = path.join(repoRoot, relFile);
+      assert.ok(fs.existsSync(fullPath), `${relFile} must exist`);
+      const source = fs.readFileSync(fullPath, 'utf8').trim();
+      assert.ok(
+        source.includes('frontend/src/components/'),
+        `${relFile} must re-export from frontend/src/components/`,
+      );
+      assert.ok(
+        !source.includes('backend/services/'),
+        `${relFile} must not import directly from backend/services/`,
+      );
+      assert.ok(
+        !source.includes('server/platform-api-runtime'),
+        `${relFile} must not import directly from server/platform-api-runtime`,
+      );
+    }
+  });
 });

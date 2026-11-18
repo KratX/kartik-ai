@@ -514,6 +514,32 @@ export function createKartikExpressApp(
     },
   );
 
+  // 8. Static Fix & Step ZIP Downloads (/public/__downloads) & Direct Changed File Download
+  const downloadsDir = path.join(process.cwd(), 'public', '__downloads');
+  app.get('/__downloads/file', (req, res) => {
+    const rawRelPath = typeof req.query.path === 'string' ? req.query.path.trim() : '';
+    if (
+      !rawRelPath ||
+      rawRelPath.includes('..') ||
+      rawRelPath.startsWith('/') ||
+      rawRelPath.startsWith('.')
+    ) {
+      res.status(400).send('Invalid file path');
+      return;
+    }
+    const repoRoot = process.cwd();
+    const resolvedPath = path.resolve(repoRoot, rawRelPath);
+    if (!resolvedPath.startsWith(repoRoot + path.sep) || !fs.existsSync(resolvedPath)) {
+      res.status(404).send('File not found');
+      return;
+    }
+    const filename = path.basename(resolvedPath);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.sendFile(resolvedPath);
+  });
+  app.use('/__downloads', express.static(downloadsDir));
+
   return app;
 }
 

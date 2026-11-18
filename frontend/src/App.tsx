@@ -36,6 +36,7 @@ import { ChatArea } from './components/chat/ChatArea.js';
 import { ChatInput } from './components/chat/ChatInput.js';
 import { Nav } from './components/layout/Nav.js';
 import { Sidebar } from './components/layout/Sidebar.js';
+import { StepFileDownloads } from './components/common/StepFileDownloads.js';
 
 function createClientIdempotencyKey(): string {
   return `idem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -47,6 +48,7 @@ export function App() {
   const [isArtifactPanelOpen, setIsArtifactPanelOpen] = useState(false);
   const [isBillingDrawerOpen, setIsBillingDrawerOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isFixDownloadsOpen, setIsFixDownloadsOpen] = useState(false);
 
   // Domain State from `/api/v1/*`
   const [user, setUser] = useState<PlatformUser | null>(null);
@@ -686,6 +688,7 @@ export function App() {
               setIsArtifactPanelOpen((prev) => !prev)
             }
             onOpenBillingDrawer={() => setIsBillingDrawerOpen(true)}
+            onOpenFixDownloads={() => setIsFixDownloadsOpen(true)}
           />
 
           {/* Status / Error Banner */}
@@ -773,6 +776,40 @@ export function App() {
         onClose={() => setIsAuthModalOpen(false)}
         onGoogleSignIn={handleLoginWithGoogle}
       />
+
+      {/* Fix & Changed Files Download Modal */}
+      {isFixDownloadsOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setIsFixDownloadsOpen(false)}
+        >
+          <div
+            className="max-w-4xl w-full max-h-[88vh] flex flex-col bg-[#090d18] border border-slate-700/90 rounded-2xl shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/80">
+              <div>
+                <h2 className="text-sm sm:text-base font-bold text-white">
+                  Updated &amp; Changed Files + Git Commit Messages
+                </h2>
+                <p className="text-xs text-slate-400 font-mono mt-0.5">
+                  Download full fix ZIP packages or individual changed files with repo-relative paths
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsFixDownloadsOpen(false)}
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto">
+              <StepFileDownloads />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

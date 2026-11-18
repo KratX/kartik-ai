@@ -2,6 +2,7 @@ import React from 'react';
 import {
   Code2,
   CreditCard,
+  FolderArchive,
   Lock,
   PanelLeft,
   RotateCcw,
@@ -21,6 +22,7 @@ export interface NavProps {
   readonly onReplayLastTurn: () => void;
   readonly onToggleArtifactPanel: () => void;
   readonly onOpenBillingDrawer: () => void;
+  readonly onOpenFixDownloads?: () => void;
 }
 
 export function Nav({
@@ -35,6 +37,7 @@ export function Nav({
   onReplayLastTurn,
   onToggleArtifactPanel,
   onOpenBillingDrawer,
+  onOpenFixDownloads,
 }: NavProps) {
   return (
     <header className="h-14 shrink-0 px-4 bg-[#090d18]/95 border-b border-slate-800/90 flex items-center justify-between gap-3">
@@ -124,6 +127,18 @@ export function Nav({
           <span>{availableCredits} cr</span>
           <CreditCard className="w-3.5 h-3.5 ml-0.5 text-emerald-400/80" />
         </button>
+
+        {/* Fix & Changed Files ZIP Downloads Trigger */}
+        {onOpenFixDownloads && (
+          <button
+            type="button"
+            onClick={onOpenFixDownloads}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-xs font-semibold text-indigo-200 cursor-pointer"
+          >
+            <FolderArchive className="w-3.5 h-3.5 text-indigo-300" />
+            <span className="hidden sm:inline">Fix &amp; ZIP Downloads</span>
+          </button>
+        )}
       </div>
     </header>
   );
