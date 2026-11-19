@@ -287,4 +287,281 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
     assert.equal(imgOut.mimeType, 'image/png');
     assert.ok(imgOut.caption.includes('Enhanced Prompt:'));
   });
+
+  it('Fix #6: synthesizes live Search, RAG, and non-generation Coding replies via LLM instead of static stubs', async () => {
+    const liveConfig = loadAgentConfig({
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
+      REDIS_URL: 'redis://127.0.0.1:6379',
+      USER_CONTEXT_PUBLIC_KEY: TEST_PUBLIC_PEM,
+      INTERNAL_CALLER_TOKEN_CHAT: 'internal-secret-token-chat-to-agent',
+      MOCK_AI: 'false',
+      IMAGE_PROVIDER: 'live',
+      GEMINI_API_KEY: 'live-stub-key-for-unit-test',
+      TAVILY_API_KEY: 'live-tavily-stub-key',
+      DAILY_LIVE_CALL_BUDGET: '25',
+    });
+
+    const repository = new InMemoryAgentRepository();
+    const objectStorage = new InMemoryObjectStorage();
+    const vectorStore = new InMemoryVectorStore();
+    const embeddingProvider = new LiveGeminiEmbeddingProvider();
+    const chatPrompts: string[] = [];
+
+    const stubChatProvider = {
+      providerName: 'stub-live-llm',
+      async generateReply(params: { prompt: string; systemInstruction?: string; maxOutputTokens: number }) {
+        chatPrompts.push(params.prompt);
+        if (params.systemInstruction?.includes('Document RAG Specialist')) {
+          return {
+            content: 'Quorum intersection guarantees a single leader per term [consensus-paper.pdf, p. 1].',
+            tokensUsed: 18,
+          };
+        }
+        if (params.systemInstruction?.includes('DEBUGGING')) {
+          return {
+            content: '### Root Cause\nGuard against undefined `req.user` before reading `.id`.\n```ts\nconst id = req.user?.id;\n```',
+            tokensUsed: 24,
+          };
+        }
+        return {
+          content: 'Synthesized live web answer citing [src_1].',
+          tokensUsed: 16,
+        };
+      },
+    };
+
+    const stubSearchProvider = {
+      providerName: 'stub-live-search',
+      lastSynthesizedAnswer: 'MVCC isolates readers from writers using row version snapshots [src_1].',
+      async searchWeb() {
+        return [
+          {
+            title: 'PostgreSQL MVCC Documentation',
+            url: 'https://www.postgresql.org/docs/current/mvcc.html',
+            snippet: 'Readers never block writers in PostgreSQL MVCC.',
+          },
+        ];
+      },
+    };
+
+    const executor = new AgentGraphExecutor({
+      config: liveConfig,
+      budgetGuard: new DailyLiveBudgetGuard({
+        store: new InMemoryDailyBudgetStore(),
+        dailyLimit: 25,
+        mockAiDefault: false,
+      }),
+      chatProvider: stubChatProvider,
+      codingProvider: new LiveGeminiCodingModelProvider(),
+      searchProvider: stubSearchProvider,
+      embeddingProvider,
+      imageProvider: new LiveGeminiImageGenerationProvider(),
+      visionProvider: new LiveGeminiVisionProvider(),
+      pdfProvider: new LiveGeminiPdfDocumentProvider(),
+      pptProvider: new LiveGeminiPptPresentationProvider(),
+      vectorStore,
+      objectStorage,
+      metadataStore: repository,
+    });
+
+    // 1. Search uses lastSynthesizedAnswer instead of "Synthesized from 1 cited source(s)"
+    const searchRes = await executor.execute({
+      requestId: 'req_fix6_search_1',
+      traceId: 'trc_fix6_search_1',
+      userId: 'usr_fix6',
+      conversationId: 'conv_fix6',
+      messageId: 'msg_fix6_search_1',
+      prompt: 'How does PostgreSQL MVCC work?',
+      preferredAgent: 'search',
+    });
+    assert.equal(searchRes.agent, 'search');
+    assert.ok(searchRes.replyContent.includes('row version snapshots [src_1]'));
+    assert.ok(!searchRes.replyContent.includes('Synthesized from 1 cited source(s)'));
+
+    // 2. RAG synthesizes an LLM answer grounded in ingested PDF chunks
+    const ingestion = new FileIngestionAndArtifactService({
+      config: liveConfig,
+      repository,
+      objectStorage,
+      vectorStore,
+      embeddingProvider,
+    });
+    const compiledPdf = buildPdfBinaryBuffer({
+      title: 'Consensus Paper',
+      subtitle: 'Raft Safety',
+      sections: [
+        {
+          heading: 'Quorum Intersection',
+          content: 'Quorum intersection guarantees at most one leader per term.',
+          bullets: ['Majority votes required'],
+        },
+      ],
+      footer: 'Test',
+    });
+    const uploaded = await ingestion.ingestUploadedFile({
+      userId: 'usr_fix6',
+      conversationId: 'conv_fix6',
+      originalFilename: 'consensus-paper.pdf',
+      declaredMimeType: 'application/pdf',
+      contentBytes: compiledPdf.pdfBytes,
+    });
+    const ragRes = await executor.execute({
+      requestId: 'req_fix6_rag_1',
+      traceId: 'trc_fix6_rag_1',
+      userId: 'usr_fix6',
+      conversationId: 'conv_fix6',
+      messageId: 'msg_fix6_rag_1',
+      prompt: 'What does quorum intersection guarantee?',
+      preferredAgent: 'rag',
+      attachmentFileIds: [uploaded.fileId],
+    });
+    assert.equal(ragRes.agent, 'rag');
+    assert.ok(ragRes.replyContent.includes('Quorum intersection guarantees a single leader per term'));
+    assert.ok(ragRes.replyContent.includes('### Grounded Document Evidence'));
+
+    // 3. Coding non-generation DEBUGGING invokes live chatProvider instead of static template
+    const debugRes = await executor.execute({
+      requestId: 'req_fix6_debug_1',
+      traceId: 'trc_fix6_debug_1',
+      userId: 'usr_fix6',
+      conversationId: 'conv_fix6',
+      messageId: 'msg_fix6_debug_1',
+      prompt: 'Debug TypeError: Cannot read properties of undefined reading id',
+      preferredAgent: 'coding',
+    });
+    assert.equal(debugRes.agent, 'coding');
+    assert.ok(debugRes.replyContent.includes('Guard against undefined `req.user`'));
+    assert.ok(chatPrompts.length >= 2);
+  });
+
+  it('Fix #6: decodes real Gemini inlineData image bytes and routes Coding/PDF/PPT through Groq fallback when Gemini key is absent', async () => {
+    const prevFetch = globalThis.fetch;
+    const prevGeminiKey = process.env.GEMINI_API_KEY;
+    const prevGroqKey = process.env.GROQ_API_KEY;
+    const prevOpenRouterKey = process.env.OPENROUTER_API_KEY;
+
+    try {
+      // A. Real Gemini image inlineData decoding
+      const fakePngPayload = Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.alloc(256, 0x42),
+      ]);
+      process.env.GEMINI_API_KEY = 'AIzaSyRealLookingUnitTestKey987654321';
+      delete process.env.GROQ_API_KEY;
+      delete process.env.OPENROUTER_API_KEY;
+
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    { text: 'Rendered cyberpunk skyline at dusk' },
+                    {
+                      inlineData: {
+                        mimeType: 'image/png',
+                        data: fakePngPayload.toString('base64'),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )) as typeof fetch;
+
+      const imageProvider = new LiveGeminiImageGenerationProvider();
+      const generatedImage = await imageProvider.generateImage({
+        prompt: 'Cyberpunk skyline at dusk',
+      });
+      assert.equal(generatedImage.mimeType, 'image/png');
+      assert.equal(generatedImage.data.byteLength, fakePngPayload.byteLength);
+      assert.deepEqual(Buffer.from(generatedImage.data), fakePngPayload);
+
+      // B. Groq fallback for Coding + PDF + PPT when only GROQ_API_KEY is configured
+      delete process.env.GEMINI_API_KEY;
+      process.env.GROQ_API_KEY = 'gsk_real_looking_unit_test_key_987654321';
+
+      globalThis.fetch = (async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          messages?: Array<{ role: string; content: string }>;
+        };
+        const sys = (body.messages?.[0]?.content ?? '').toLowerCase();
+        const userMsg = (body.messages?.[1]?.content ?? '').toLowerCase();
+        let content = '{}';
+        if (sys.includes('frontend engineer') || userMsg.includes('index.html')) {
+          content = JSON.stringify({
+            title: 'Live Groq Todo App',
+            summary: 'Built via Groq live coding fallback.',
+            html: '<!doctype html><html><body><h1>Groq App</h1></body></html>',
+            css: 'body { color: #fff; background: #0f172a; }',
+            js: 'console.log("live");',
+          });
+        } else if (sys.includes('technical author') || userMsg.includes('pdf document')) {
+          content = JSON.stringify({
+            title: 'Groq Live Architecture Brief',
+            subtitle: 'Executive Overview',
+            footer: 'Kartik.ai',
+            sections: [
+              {
+                heading: 'Summary',
+                content: 'Generated dynamically through Groq JSON mode.',
+                bullets: ['Real structured PDF content'],
+              },
+            ],
+          });
+        } else if (sys.includes('presentation strategist') || userMsg.includes('presentation deck')) {
+          content = JSON.stringify({
+            title: 'Groq Live Deck',
+            subtitle: 'Generated Slides',
+            slides: [
+              { title: 'Overview', subtitle: 'Intro', bullets: ['Point A', 'Point B'] },
+              { title: 'Architecture', subtitle: 'Design', bullets: ['Point C', 'Point D'] },
+            ],
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content } }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }) as typeof fetch;
+
+      const codingProvider = new LiveGeminiCodingModelProvider();
+      const codeBundle = await codingProvider.generateCodeBundle({
+        prompt: 'Build a todo app',
+        maxOutputTokens: 2048,
+      });
+      assert.ok(codeBundle.rawManifestJson.includes('Live Groq Todo App'));
+
+      const pdfProvider = new LiveGeminiPdfDocumentProvider();
+      const pdfDoc = await pdfProvider.generatePdfDocument({
+        prompt: 'Create a PDF brief on event-driven architecture',
+        maxOutputTokens: 2048,
+      });
+      assert.equal(pdfDoc.spec.title, 'Groq Live Architecture Brief');
+      assert.equal(Buffer.from(pdfDoc.pdfBytes.subarray(0, 8)).toString('ascii'), '%PDF-1.4');
+
+      const pptProvider = new LiveGeminiPptPresentationProvider();
+      const pptDeck = await pptProvider.generatePptPresentation({
+        prompt: 'Create a presentation on distributed systems',
+        maxOutputTokens: 2048,
+      });
+      assert.equal(pptDeck.spec.title, 'Groq Live Deck');
+      assert.equal(pptDeck.pptxBytes[0], 0x50);
+      assert.equal(pptDeck.pptxBytes[1], 0x4b);
+    } finally {
+      globalThis.fetch = prevFetch;
+      if (prevGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = prevGeminiKey;
+      if (prevGroqKey === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = prevGroqKey;
+      if (prevOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = prevOpenRouterKey;
+    }
+  });
 });

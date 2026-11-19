@@ -278,33 +278,63 @@ export function MessageBubble({
               }
 
               // generated_image
+              const imageExt =
+                art.mimeType === 'image/jpeg'
+                  ? '.jpg'
+                  : art.mimeType === 'image/webp'
+                    ? '.webp'
+                    : '.png';
+              const imageFormatLabel =
+                art.mimeType === 'image/jpeg'
+                  ? 'JPEG'
+                  : art.mimeType === 'image/webp'
+                    ? 'WEBP'
+                    : 'PNG';
+              const inlineImageUrl = `${rawDownloadUrl}?inline=1`;
+              const safeImageFilename =
+                art.title
+                  .replace(/[^A-Za-z0-9._-]+/g, '-')
+                  .replace(/^-+|-+$/g, '')
+                  .toLowerCase()
+                  .slice(0, 48) || 'kartik-generated-image';
+
               return (
                 <div
                   key={art.artifactId}
-                  className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-900/90 border border-purple-500/30"
+                  className="overflow-hidden rounded-xl bg-slate-900/90 border border-purple-500/30"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-9 h-9 rounded-lg bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
-                      <ImageIcon className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-semibold text-slate-100 truncate">
-                        {art.title}
-                      </div>
-                      <div className="text-[11px] font-mono text-slate-400">
-                        PNG Artwork · {art.sizeBytes} bytes
-                      </div>
-                    </div>
+                  <div className="bg-slate-950/90 border-b border-purple-500/20 flex items-center justify-center p-2">
+                    <img
+                      src={inlineImageUrl}
+                      alt={art.title}
+                      loading="lazy"
+                      className="max-h-[420px] w-auto max-w-full rounded-lg object-contain shadow-lg"
+                    />
                   </div>
+                  <div className="flex flex-wrap items-center justify-between gap-3 p-3.5">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-lg bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
+                        <ImageIcon className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-slate-100 truncate">
+                          {art.title}
+                        </div>
+                        <div className="text-[11px] font-mono text-slate-400">
+                          {imageFormatLabel} Artwork · {Math.max(1, Math.round(art.sizeBytes / 1024))} KB
+                        </div>
+                      </div>
+                    </div>
 
-                  <a
-                    href={rawDownloadUrl}
-                    download="kartik-generated-image.png"
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-purple-500 hover:bg-purple-400 text-white rounded-lg transition-colors shrink-0"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Download .PNG
-                  </a>
+                    <a
+                      href={rawDownloadUrl}
+                      download={`${safeImageFilename}${imageExt}`}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-purple-500 hover:bg-purple-400 text-white rounded-lg transition-colors shrink-0"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Download {imageExt.toUpperCase()}
+                    </a>
+                  </div>
                 </div>
               );
             })}

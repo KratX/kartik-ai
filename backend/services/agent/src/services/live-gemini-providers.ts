@@ -1,15 +1,17 @@
 /**
- * @kartik/agent/services/live-gemini-providers — Live Server-Side Gemini AI Providers
+ * @kartik/agent/services/live-gemini-providers — Live Server-Side Multi-Provider AI Adapters
  * (Blueprint §2.4, §10, ADR 0005 & Gemini API Skill Guidelines).
  *
- * Implements live server-side AI adapters (`gemini-3.8-flash`, `googleSearch` grounding,
- * `gemini-embedding-2` 768-dim embeddings, multimodal `inlineData` Vision, and structured JSON
- * schemas for Coding, PDF, and PPT) while keeping `@kartik/agent` 100% free of external
- * `package.json` dependencies so `pnpm-lock.yaml` remains frozen (ADR 0005):
- * - Dynamically uses `@google/genai` (`GoogleGenAI`) when available in the host runtime, or
- *   falls back to Node 22 native `fetch` against the Gemini `v1beta` REST API with
- *   `'User-Agent': 'aistudio-build'`.
- * - Gracefully falls back to deterministic synthesis when no live `GEMINI_API_KEY` is configured.
+ * Implements live server-side AI adapters for all 8 specialist agents (Chat, Search, Coding,
+ * PDF, PPT, RAG Embeddings, Vision, and Image Generation):
+ * - Primary: Google Gemini API (`gemini-4-hydrogen` with resilient `gemini-2.5-flash` fallback,
+ *   `googleSearch` grounding, `gemini-embedding-2`, multimodal Vision, and `gemini-3.1-flash-lite-image`
+ *   real image generation) using `'User-Agent': 'aistudio-build'`.
+ * - Secondary / Tertiary: Groq (`GROQ_API_KEY` honoring `MODEL_CHAT` / `MODEL_CODING` / `MODEL_VISION`),
+ *   OpenRouter (`OPENROUTER_API_KEY`), Tavily (`TAVILY_API_KEY`), and Cloudflare Workers AI Flux
+ *   (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`) for image generation.
+ * - Uses configurable `PROVIDER_TIMEOUT_MS` (default 45s) so complex Coding/PDF/PPT/Image turns
+ *   never abort prematurely at 8s.
  */
 
 import crypto from 'node:crypto';
@@ -39,6 +41,7 @@ import {
 import { buildRichCodingTemplateBundle } from '../agents/coding/index.js';
 import { computeDeterministicEmbedding } from './mock-providers.js';
 import {
+  stripMarkdownJsonFences,
   validatePdfDocumentSpec,
   validatePptPresentationSpec,
 } from '../schemas/index.js';
@@ -63,9 +66,24 @@ interface GeminiGroundingChunk {
   };
 }
 
+interface GeminiInlineDataPart {
+  readonly mimeType?: string;
+  readonly data?: string;
+}
+
+interface GeminiResponsePart {
+  readonly text?: string;
+  readonly thought?: boolean;
+  readonly inlineData?: GeminiInlineDataPart;
+}
+
 interface GeminiGenerateContentResult {
   readonly text?: string;
+  readonly parts?: readonly GeminiResponsePart[];
   readonly candidates?: ReadonlyArray<{
+    readonly content?: {
+      readonly parts?: readonly GeminiResponsePart[];
+    };
     readonly groundingMetadata?: {
       readonly groundingChunks?: ReadonlyArray<GeminiGroundingChunk>;
     };
@@ -83,14 +101,29 @@ interface GeminiEmbedContentResult {
 interface GeminiClientAdapter {
   generateContent(params: {
     readonly model: string;
+    readonly fallbackModels?: readonly string[];
     readonly contents: unknown;
     readonly config?: Record<string, unknown>;
+    readonly timeoutMs?: number;
   }): Promise<GeminiGenerateContentResult>;
   embedContent(params: {
     readonly model: string;
     readonly contents: readonly string[];
+    readonly timeoutMs?: number;
   }): Promise<GeminiEmbedContentResult>;
+  predictImagen?(params: {
+    readonly model: string;
+    readonly prompt: string;
+    readonly timeoutMs?: number;
+  }): Promise<{ readonly mimeType: 'image/png' | 'image/jpeg'; readonly data: Uint8Array } | null>;
 }
+
+const DEFAULT_TEXT_MODEL = 'gemini-4-hydrogen';
+const TEXT_MODEL_FALLBACKS = ['gemini-2.5-flash', 'gemini-3-flash-preview'] as const;
+const DEFAULT_IMAGE_MODELS = [
+  'gemini-3.1-flash-lite-image',
+  'gemini-2.5-flash-image',
+] as const;
 
 function stripEnvQuotes(val: string | undefined): string {
   if (!val) {
@@ -99,76 +132,219 @@ function stripEnvQuotes(val: string | undefined): string {
   return val.trim().replace(/^["']|["']$/g, '');
 }
 
-async function callGroqFallback(params: {
+function isUsableSecretKey(raw: string | undefined): boolean {
+  const key = stripEnvQuotes(raw);
+  if (!key || key.length < 8) {
+    return false;
+  }
+  const lower = key.toLowerCase();
+  return (
+    !lower.includes('placeholder') &&
+    !lower.startsWith('test-') &&
+    !lower.startsWith('your_') &&
+    !lower.startsWith('paste_your_') &&
+    !lower.includes('replace_me') &&
+    !lower.includes('0123456789abcdef')
+  );
+}
+
+function resolveProviderTimeoutMs(defaultMs = 45_000): number {
+  const parsed = Number(process.env.PROVIDER_TIMEOUT_MS);
+  if (Number.isFinite(parsed) && parsed >= 5_000 && parsed <= 180_000) {
+    return parsed;
+  }
+  return defaultMs;
+}
+
+function extractJsonObjectString(rawText: string): string {
+  const unfenced = stripMarkdownJsonFences(rawText);
+  const firstBrace = unfenced.indexOf('{');
+  const lastBrace = unfenced.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return unfenced.slice(firstBrace, lastBrace + 1);
+  }
+  return unfenced;
+}
+
+function uniqueNonEmpty(items: ReadonlyArray<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    const cleaned = stripEnvQuotes(item);
+    if (cleaned && !seen.has(cleaned)) {
+      seen.add(cleaned);
+      out.push(cleaned);
+    }
+  }
+  return out;
+}
+
+/**
+ * Calls Groq (`GROQ_API_KEY`) or OpenRouter (`OPENROUTER_API_KEY`) as secondary/tertiary
+ * OpenAI-compatible text, JSON, or multimodal vision providers across all specialist agents.
+ */
+async function callOpenAiCompatibleFallback(params: {
   readonly prompt: string;
   readonly systemInstruction?: string;
   readonly jsonMode?: boolean;
+  readonly role?: 'chat' | 'coding' | 'vision' | 'search';
+  readonly imageDataUrl?: string;
+  readonly maxTokens?: number;
 }): Promise<string | null> {
-  const groqKey = stripEnvQuotes(process.env.GROQ_API_KEY);
-  if (!groqKey || groqKey.startsWith('test-') || groqKey.startsWith('placeholder')) {
-    return null;
-  }
+  const timeoutMs = resolveProviderTimeoutMs(45_000);
+  const maxTokens = params.maxTokens ?? 4096;
 
-  const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
+  const userContent: unknown = params.imageDataUrl
+    ? [
+        { type: 'text', text: params.prompt },
+        { type: 'image_url', image_url: { url: params.imageDataUrl } },
+      ]
+    : params.prompt;
+
+  const messages: Array<{ role: 'system' | 'user'; content: unknown }> = [];
   if (params.systemInstruction) {
     messages.push({ role: 'system', content: params.systemInstruction });
   }
-  messages.push({ role: 'user', content: params.prompt });
+  messages.push({ role: 'user', content: userContent });
 
-  for (const model of ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b']) {
-    try {
-      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${groqKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages,
-          max_tokens: 2048,
-          ...(params.jsonMode ? { response_format: { type: 'json_object' } } : {}),
-        }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) {
-        continue;
+  const groqKey = stripEnvQuotes(process.env.GROQ_API_KEY);
+  if (isUsableSecretKey(groqKey)) {
+    const groqModels =
+      params.role === 'vision'
+        ? uniqueNonEmpty([
+            process.env.MODEL_VISION,
+            'meta-llama/llama-4-scout-17b-16e-instruct',
+            'llama-3.2-11b-vision-preview',
+          ])
+        : params.role === 'coding'
+          ? uniqueNonEmpty([
+              process.env.MODEL_CHAT,
+              'llama-3.3-70b-versatile',
+              'openai/gpt-oss-120b',
+              'llama-3.1-8b-instant',
+            ])
+          : uniqueNonEmpty([
+              params.role === 'search' ? process.env.MODEL_SEARCH_SYNTHESIS : process.env.MODEL_CHAT,
+              'llama-3.3-70b-versatile',
+              'openai/gpt-oss-120b',
+              'llama-3.1-8b-instant',
+            ]);
+
+    for (const model of groqModels) {
+      try {
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${groqKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages,
+            max_tokens: maxTokens,
+            ...(params.jsonMode ? { response_format: { type: 'json_object' } } : {}),
+          }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!res.ok) {
+          continue;
+        }
+        const data = (await res.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+        const text = data.choices?.[0]?.message?.content?.trim();
+        if (text && text.length > 0) {
+          return text;
+        }
+      } catch {
+        // Try next Groq model
       }
-      const data = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      const text = data.choices?.[0]?.message?.content?.trim();
-      if (text && text.length > 0) {
-        return text;
-      }
-    } catch {
-      // Try next Groq model
     }
   }
+
+  const openRouterKey = stripEnvQuotes(process.env.OPENROUTER_API_KEY);
+  if (isUsableSecretKey(openRouterKey)) {
+    const openRouterModels =
+      params.role === 'vision'
+        ? uniqueNonEmpty([
+            process.env.MODEL_VISION,
+            'google/gemini-2.5-flash',
+            'meta-llama/llama-4-scout',
+          ])
+        : params.role === 'coding'
+          ? uniqueNonEmpty([
+              process.env.MODEL_CODING,
+              'qwen/qwen-2.5-coder-32b-instruct',
+              'google/gemini-2.5-flash',
+            ])
+          : uniqueNonEmpty([
+              'google/gemini-2.5-flash',
+              process.env.MODEL_CODING,
+              'meta-llama/llama-3.3-70b-instruct',
+            ]);
+
+    for (const model of openRouterModels) {
+      try {
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${openRouterKey}`,
+            'HTTP-Referer': stripEnvQuotes(process.env.PUBLIC_APP_ORIGIN) || 'http://localhost:3000',
+            'X-Title': 'Kartik.ai',
+          },
+          body: JSON.stringify({
+            model,
+            messages,
+            max_tokens: maxTokens,
+            ...(params.jsonMode ? { response_format: { type: 'json_object' } } : {}),
+          }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!res.ok) {
+          continue;
+        }
+        const data = (await res.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+        const text = data.choices?.[0]?.message?.content?.trim();
+        if (text && text.length > 0) {
+          return text;
+        }
+      } catch {
+        // Try next OpenRouter model
+      }
+    }
+  }
+
   return null;
 }
 
-async function createServerGeminiClient(explicitApiKey?: string): Promise<GeminiClientAdapter | null> {
+async function createServerGeminiClient(
+  explicitApiKey?: string,
+): Promise<GeminiClientAdapter | null> {
   const key = stripEnvQuotes(
     explicitApiKey ??
       process.env.GEMINI_API_KEY ??
       process.env.GOOGLE_AI_API_KEY ??
       '',
   );
-  if (
-    !key ||
-    key === 'test-gemini-api-key-value' ||
-    key === 'your_gemini_api_key_here' ||
-    key.startsWith('placeholder')
-  ) {
+  if (!isUsableSecretKey(key)) {
     return null;
   }
 
+  const defaultTimeout = resolveProviderTimeoutMs(45_000);
+
   return {
     async generateContent(params): Promise<GeminiGenerateContentResult> {
-      const targetModel =
-        params.model === 'gemini-3.8-flash' ? 'gemini-3-flash-preview' : params.model;
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:generateContent`;
+      const configuredModel = stripEnvQuotes(process.env.GEMINI_MODEL);
+      const candidates = uniqueNonEmpty([
+        configuredModel && params.model === DEFAULT_TEXT_MODEL ? configuredModel : undefined,
+        params.model,
+        ...(params.fallbackModels ??
+          (params.model === DEFAULT_TEXT_MODEL ? TEXT_MODEL_FALLBACKS : [])),
+      ]);
+
       const bodyPayload: Record<string, unknown> = {
         contents:
           typeof params.contents === 'string'
@@ -184,53 +360,112 @@ async function createServerGeminiClient(explicitApiKey?: string): Promise<Gemini
         if (params.config.tools) {
           bodyPayload.tools = params.config.tools;
         }
-        if (params.config.responseMimeType || params.config.responseSchema) {
-          bodyPayload.generationConfig = {
-            responseMimeType: params.config.responseMimeType,
-            responseSchema: params.config.responseSchema,
-          };
+        const genConfig: Record<string, unknown> = {};
+        if (params.config.responseMimeType) {
+          genConfig.responseMimeType = params.config.responseMimeType;
+        }
+        if (params.config.responseSchema) {
+          genConfig.responseSchema = params.config.responseSchema;
+        }
+        if (params.config.responseModalities) {
+          genConfig.responseModalities = params.config.responseModalities;
+        }
+        if (params.config.imageConfig) {
+          genConfig.imageConfig = params.config.imageConfig;
+        }
+        if (Object.keys(genConfig).length > 0) {
+          bodyPayload.generationConfig = genConfig;
         }
       }
 
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': key,
-          'User-Agent': 'aistudio-build',
-        },
-        body: JSON.stringify(bodyPayload),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) {
-        throw new Error(`Gemini HTTP ${res.status}`);
+      let lastErr: Error | null = null;
+      for (const targetModel of candidates) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:generateContent`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': key,
+            'User-Agent': 'aistudio-build',
+          },
+          body: JSON.stringify(bodyPayload),
+          signal: AbortSignal.timeout(params.timeoutMs ?? defaultTimeout),
+        });
+        if (!res.ok) {
+          lastErr = new Error(`Gemini HTTP ${res.status} (${targetModel})`);
+          // Retry next model candidate on 404 (model unavailable on tier) or 429/5xx
+          if (res.status === 404 || res.status === 429 || res.status >= 500) {
+            continue;
+          }
+          throw lastErr;
+        }
+        const data = (await res.json()) as {
+          candidates?: Array<{
+            content?: { parts?: GeminiResponsePart[] };
+            groundingMetadata?: { groundingChunks?: GeminiGroundingChunk[] };
+          }>;
+        };
+        const firstCandidate = data.candidates?.[0];
+        const parts = firstCandidate?.content?.parts ?? [];
+        const nonThoughtParts = parts.filter((p) => !p.thought);
+        const effectiveParts = nonThoughtParts.length > 0 ? nonThoughtParts : parts;
+        const text = effectiveParts.map((p) => p.text ?? '').join('');
+        return {
+          text,
+          parts,
+          candidates: data.candidates,
+        };
       }
-      const data = (await res.json()) as {
-        candidates?: Array<{
-          content?: { parts?: Array<{ text?: string; thought?: boolean }> };
-          groundingMetadata?: { groundingChunks?: GeminiGroundingChunk[] };
-        }>;
-      };
-      const firstCandidate = data.candidates?.[0];
-      const parts = firstCandidate?.content?.parts ?? [];
-      const nonThoughtParts = parts.filter((p) => !p.thought);
-      const effectiveParts = nonThoughtParts.length > 0 ? nonThoughtParts : parts;
-      const text = effectiveParts.map((p) => p.text ?? '').join('');
-      return {
-        text,
-        candidates: data.candidates,
-      };
+
+      throw lastErr ?? new Error('Gemini generateContent failed across all model candidates');
     },
 
     async embedContent(params): Promise<GeminiEmbedContentResult> {
-      const targetModel =
-        params.model === 'gemini-embedding-2' ? 'gemini-embedding-001' : params.model;
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:batchEmbedContents`;
-      const requests = params.contents.map((t) => ({
-        model: `models/${targetModel}`,
-        content: { parts: [{ text: t }] },
-        outputDimensionality: 768,
-      }));
+      const embedCandidates = uniqueNonEmpty([
+        params.model,
+        'gemini-embedding-001',
+        'text-embedding-004',
+      ]);
+
+      let lastErr: Error | null = null;
+      for (const targetModel of embedCandidates) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:batchEmbedContents`;
+        const requests = params.contents.map((t) => ({
+          model: `models/${targetModel}`,
+          content: { parts: [{ text: t }] },
+          outputDimensionality: 768,
+        }));
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': key,
+            'User-Agent': 'aistudio-build',
+          },
+          body: JSON.stringify({ requests }),
+          signal: AbortSignal.timeout(params.timeoutMs ?? defaultTimeout),
+        });
+        if (!res.ok) {
+          lastErr = new Error(`Gemini Embed HTTP ${res.status} (${targetModel})`);
+          if (res.status === 404 || res.status === 429 || res.status >= 500) {
+            continue;
+          }
+          throw lastErr;
+        }
+        const data = (await res.json()) as {
+          embeddings?: GeminiEmbeddingItem[];
+        };
+        return { embeddings: data.embeddings ?? [] };
+      }
+
+      throw lastErr ?? new Error('Gemini embedContent failed');
+    },
+
+    async predictImagen(params): Promise<{
+      readonly mimeType: 'image/png' | 'image/jpeg';
+      readonly data: Uint8Array;
+    } | null> {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.model)}:predict`;
       const res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -238,18 +473,84 @@ async function createServerGeminiClient(explicitApiKey?: string): Promise<Gemini
           'x-goog-api-key': key,
           'User-Agent': 'aistudio-build',
         },
-        body: JSON.stringify({ requests }),
-        signal: AbortSignal.timeout(8000),
+        body: JSON.stringify({
+          instances: [{ prompt: params.prompt }],
+          parameters: { sampleCount: 1 },
+        }),
+        signal: AbortSignal.timeout(params.timeoutMs ?? defaultTimeout),
       });
       if (!res.ok) {
-        throw new Error(`Gemini Embed HTTP ${res.status}`);
+        return null;
       }
       const data = (await res.json()) as {
-        embeddings?: GeminiEmbeddingItem[];
+        predictions?: Array<{
+          bytesBase64Encoded?: string;
+          mimeType?: string;
+        }>;
       };
-      return { embeddings: data.embeddings ?? [] };
+      const b64 = data.predictions?.[0]?.bytesBase64Encoded;
+      if (!b64) {
+        return null;
+      }
+      const mime =
+        data.predictions?.[0]?.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+      return {
+        mimeType: mime,
+        data: new Uint8Array(Buffer.from(b64, 'base64')),
+      };
     },
   };
+}
+
+async function callCloudflareFluxImage(prompt: string): Promise<{
+  readonly mimeType: 'image/png' | 'image/jpeg';
+  readonly data: Uint8Array;
+} | null> {
+  const accountId = stripEnvQuotes(process.env.CLOUDFLARE_ACCOUNT_ID);
+  const apiToken = stripEnvQuotes(process.env.CLOUDFLARE_API_TOKEN);
+  if (!isUsableSecretKey(accountId) || !isUsableSecretKey(apiToken)) {
+    return null;
+  }
+
+  try {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/@cf/black-forest-labs/flux-1-schnell`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiToken}`,
+        },
+        body: JSON.stringify({ prompt, num_steps: 4 }),
+        signal: AbortSignal.timeout(resolveProviderTimeoutMs(45_000)),
+      },
+    );
+    if (!res.ok) {
+      return null;
+    }
+    const contentType = res.headers.get('content-type') ?? '';
+    if (contentType.includes('application/json')) {
+      const json = (await res.json()) as { result?: { image?: string } };
+      const b64 = json.result?.image;
+      if (!b64) {
+        return null;
+      }
+      return {
+        mimeType: 'image/jpeg',
+        data: new Uint8Array(Buffer.from(b64, 'base64')),
+      };
+    }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (buf.byteLength < 64) {
+      return null;
+    }
+    return {
+      mimeType: contentType.includes('jpeg') ? 'image/jpeg' : 'image/png',
+      data: buf,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export class LiveGeminiChatModelProvider implements ChatModelProvider {
@@ -273,7 +574,7 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
     if (ai) {
       try {
         const response = await ai.generateContent({
-          model: 'gemini-3.8-flash',
+          model: DEFAULT_TEXT_MODEL,
           contents: input.prompt,
           config: {
             systemInstruction: sysInstruction,
@@ -287,18 +588,20 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
           };
         }
       } catch {
-        // Fall through to Groq or structured local synthesis if upstream call errors
+        // Fall through to Groq / OpenRouter fallback
       }
     }
 
-    const groqReply = await callGroqFallback({
+    const fallbackReply = await callOpenAiCompatibleFallback({
       prompt: input.prompt,
       systemInstruction: sysInstruction,
+      role: 'chat',
+      maxTokens: input.maxOutputTokens,
     });
-    if (groqReply) {
+    if (fallbackReply) {
       return {
-        content: groqReply,
-        tokensUsed: Math.max(16, Math.ceil(groqReply.length / 4)),
+        content: fallbackReply,
+        tokensUsed: Math.max(16, Math.ceil(fallbackReply.length / 4)),
       };
     }
 
@@ -334,6 +637,52 @@ export class LiveGeminiCodingModelProvider implements CodingModelProvider {
     this.apiKey = options?.apiKey;
   }
 
+  private buildValidatedBundleFromJson(rawText: string): {
+    readonly summary: string;
+    readonly rawManifestJson: string;
+    readonly tokensUsed: number;
+  } | null {
+    try {
+      const parsed = JSON.parse(extractJsonObjectString(rawText)) as {
+        title?: string;
+        summary?: string;
+        html?: string;
+        css?: string;
+        js?: string;
+      };
+
+      if (parsed.title && parsed.html && parsed.css && parsed.js) {
+        const mkFile = (path: string, mimeType: string, content: string) => ({
+          path,
+          mimeType,
+          sizeBytes: Buffer.byteLength(content, 'utf8'),
+          sha256: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
+          content,
+        });
+        const files = [
+          mkFile('index.html', 'text/html', parsed.html),
+          mkFile('styles.css', 'text/css', parsed.css),
+          mkFile('app.js', 'text/javascript', parsed.js),
+        ];
+        const rawManifestJson = JSON.stringify({
+          title: parsed.title.slice(0, 80),
+          entryFile: 'index.html',
+          files,
+        });
+        return {
+          summary:
+            parsed.summary ||
+            `Generated interactive **${parsed.title}** project (\`index.html\`, \`styles.css\`, \`app.js\`).`,
+          rawManifestJson,
+          tokensUsed: Math.max(120, Math.ceil(rawManifestJson.length / 4)),
+        };
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
   public async generateCodeBundle(input: {
     readonly prompt: string;
     readonly maxOutputTokens: number;
@@ -342,18 +691,20 @@ export class LiveGeminiCodingModelProvider implements CodingModelProvider {
     readonly rawManifestJson: string;
     readonly tokensUsed: number;
   }> {
+    const codingPrompt = `Build a complete, self-contained, interactive dark-mode web application for: "${input.prompt}".
+Return ONLY a valid JSON object with exact keys:
+- title: short project title
+- summary: 2-sentence Markdown overview of what was built
+- html: complete index.html markup (no external CDN scripts required)
+- css: modern dark-mode CSS styles
+- js: interactive vanilla JavaScript wiring all buttons, state, and interactions`;
+
     const ai = await createServerGeminiClient(this.apiKey);
     if (ai) {
       try {
         const response = await ai.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: `Build a complete, self-contained, interactive dark-mode web application for: "${input.prompt}".
-Return a JSON object with:
-- title: short project title
-- summary: 2-sentence Markdown overview of what was built
-- html: complete index.html body markup (no external CDN scripts required)
-- css: modern dark-mode CSS styles
-- js: interactive vanilla JavaScript wiring all buttons and state`,
+          model: DEFAULT_TEXT_MODEL,
+          contents: codingPrompt,
           config: {
             responseMimeType: 'application/json',
             responseSchema: {
@@ -369,43 +720,27 @@ Return a JSON object with:
             },
           },
         });
-
-        const parsed = JSON.parse((response.text ?? '{}').trim()) as {
-          title?: string;
-          summary?: string;
-          html?: string;
-          css?: string;
-          js?: string;
-        };
-
-        if (parsed.title && parsed.html && parsed.css && parsed.js) {
-          const mkFile = (path: string, mimeType: string, content: string) => ({
-            path,
-            mimeType,
-            sizeBytes: Buffer.byteLength(content, 'utf8'),
-            sha256: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
-            content,
-          });
-          const files = [
-            mkFile('index.html', 'text/html', parsed.html),
-            mkFile('styles.css', 'text/css', parsed.css),
-            mkFile('app.js', 'text/javascript', parsed.js),
-          ];
-          const rawManifestJson = JSON.stringify({
-            title: parsed.title.slice(0, 80),
-            entryFile: 'index.html',
-            files,
-          });
-          return {
-            summary:
-              parsed.summary ||
-              `Generated interactive **${parsed.title}** project (\`index.html\`, \`styles.css\`, \`app.js\`).`,
-            rawManifestJson,
-            tokensUsed: Math.max(120, Math.ceil(rawManifestJson.length / 4)),
-          };
+        const built = this.buildValidatedBundleFromJson(response.text ?? '');
+        if (built) {
+          return built;
         }
       } catch {
-        // Fall through to rich deterministic template bundle
+        // Fall through to Groq / OpenRouter JSON generation
+      }
+    }
+
+    const fallbackJson = await callOpenAiCompatibleFallback({
+      prompt: codingPrompt,
+      systemInstruction:
+        'You are a senior frontend engineer. Respond strictly with a valid JSON object containing title, summary, html, css, and js.',
+      jsonMode: true,
+      role: 'coding',
+      maxTokens: Math.max(4096, input.maxOutputTokens),
+    });
+    if (fallbackJson) {
+      const built = this.buildValidatedBundleFromJson(fallbackJson);
+      if (built) {
+        return built;
       }
     }
 
@@ -469,15 +804,12 @@ export class LiveGeminiSearchProvider implements SearchProvider {
     readonly query: string;
     readonly maxResults?: number;
   }): Promise<readonly SearchResultItem[]> {
+    this.lastSynthesizedAnswer = null;
     this.lastSearchImages = LiveGeminiSearchProvider.buildTopicImages(input.query);
     const maxItems = input.maxResults ?? 4;
 
     const tavilyKey = stripEnvQuotes(process.env.TAVILY_API_KEY);
-    if (
-      tavilyKey &&
-      tavilyKey !== 'test-tavily-api-key' &&
-      !tavilyKey.startsWith('placeholder')
-    ) {
+    if (isUsableSecretKey(tavilyKey)) {
       try {
         const tavRes = await fetch('https://api.tavily.com/search', {
           method: 'POST',
@@ -489,6 +821,7 @@ export class LiveGeminiSearchProvider implements SearchProvider {
             include_images: true,
             include_answer: true,
           }),
+          signal: AbortSignal.timeout(resolveProviderTimeoutMs(30_000)),
         });
         if (tavRes.ok) {
           const tavData = (await tavRes.json()) as {
@@ -506,7 +839,7 @@ export class LiveGeminiSearchProvider implements SearchProvider {
               items.push({
                 title: r.title,
                 url: r.url,
-                snippet: (r.content ?? `Verified web source for ${input.query}`).slice(0, 260),
+                snippet: (r.content ?? `Verified web source for ${input.query}`).slice(0, 320),
               });
             }
             if (items.length >= maxItems) {
@@ -538,11 +871,10 @@ export class LiveGeminiSearchProvider implements SearchProvider {
     }
 
     const ai = await createServerGeminiClient(this.apiKey);
-
     if (ai) {
       try {
         const response = await ai.generateContent({
-          model: 'gemini-3.8-flash',
+          model: DEFAULT_TEXT_MODEL,
           contents: input.query,
           config: {
             tools: [{ googleSearch: {} }],
@@ -560,7 +892,7 @@ export class LiveGeminiSearchProvider implements SearchProvider {
               title: web.title,
               url: web.uri,
               snippet: this.lastSynthesizedAnswer
-                ? this.lastSynthesizedAnswer.slice(0, 220)
+                ? this.lastSynthesizedAnswer.slice(0, 260)
                 : `Verified web source for ${input.query}`,
             });
           }
@@ -571,6 +903,18 @@ export class LiveGeminiSearchProvider implements SearchProvider {
 
         if (items.length > 0) {
           return Object.freeze(items);
+        }
+
+        // If Gemini returned a grounded text answer without explicit chunks, still preserve it
+        if (this.lastSynthesizedAnswer) {
+          const q = encodeURIComponent(input.query.trim());
+          return Object.freeze([
+            {
+              title: `${input.query.slice(0, 60)} — Live Google Search Summary`,
+              url: `https://www.google.com/search?q=${q}`,
+              snippet: this.lastSynthesizedAnswer.slice(0, 260),
+            },
+          ]);
         }
       } catch {
         // Fall through to structured search results if grounding call fails
@@ -640,7 +984,7 @@ export class LiveGeminiEmbeddingProvider implements EmbeddingProvider {
 }
 
 export class LiveGeminiVisionProvider implements VisionProvider {
-  public readonly providerName = 'gemini-3.8-flash-vision';
+  public readonly providerName = 'gemini-live-vision';
   private readonly apiKey?: string;
 
   constructor(options?: { readonly apiKey?: string }) {
@@ -652,12 +996,14 @@ export class LiveGeminiVisionProvider implements VisionProvider {
     readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
     readonly imageBytes: Uint8Array;
   }): Promise<{ readonly analysis: string; readonly tokensUsed: number }> {
+    const base64Data = Buffer.from(input.imageBytes).toString('base64');
+    const visionInstruction = `Analyze this uploaded image (${input.mimeType}, ${input.imageBytes.byteLength} bytes). Extract any visible text (OCR), describe its layout/diagram/scene structure, and answer the user's prompt: "${input.prompt}"`;
+
     const ai = await createServerGeminiClient(this.apiKey);
     if (ai) {
       try {
-        const base64Data = Buffer.from(input.imageBytes).toString('base64');
         const response = await ai.generateContent({
-          model: 'gemini-3.8-flash',
+          model: DEFAULT_TEXT_MODEL,
           contents: [
             {
               role: 'user',
@@ -669,7 +1015,7 @@ export class LiveGeminiVisionProvider implements VisionProvider {
                   },
                 },
                 {
-                  text: `Analyze this uploaded image (${input.mimeType}, ${input.imageBytes.byteLength} bytes). Extract any visible text (OCR), describe its layout/diagram/scene structure, and answer the user's prompt: "${input.prompt}"`,
+                  text: visionInstruction,
                 },
               ],
             },
@@ -683,8 +1029,21 @@ export class LiveGeminiVisionProvider implements VisionProvider {
           };
         }
       } catch {
-        // Fall back to deterministic inspection summary
+        // Fall through to Groq/OpenRouter Vision
       }
+    }
+
+    const fallbackVision = await callOpenAiCompatibleFallback({
+      prompt: visionInstruction,
+      role: 'vision',
+      imageDataUrl: `data:${input.mimeType};base64,${base64Data}`,
+      maxTokens: 2048,
+    });
+    if (fallbackVision) {
+      return {
+        analysis: fallbackVision,
+        tokensUsed: Math.max(32, Math.ceil(fallbackVision.length / 4)),
+      };
     }
 
     const kb = (input.imageBytes.byteLength / 1024).toFixed(1);
@@ -712,17 +1071,38 @@ export class LiveGeminiPdfDocumentProvider implements PdfDocumentProvider {
     this.apiKey = options?.apiKey;
   }
 
+  private compilePdfFromJson(rawJson: string): PdfDocumentGenerationResult | null {
+    try {
+      const spec = validatePdfDocumentSpec(extractJsonObjectString(rawJson));
+      const compiled = buildPdfBinaryBuffer(spec);
+      return {
+        spec: compiled.spec,
+        pdfBytes: compiled.pdfBytes,
+        pageCount: compiled.pageCount,
+        summaryMarkdown: formatPdfSummaryMarkdown(compiled.spec, compiled.pageCount),
+        tokensUsed: Math.max(180, Math.ceil(rawJson.length / 4)),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   public async generatePdfDocument(input: {
     readonly prompt: string;
     readonly maxOutputTokens: number;
   }): Promise<PdfDocumentGenerationResult> {
+    const pdfPrompt = `Generate a comprehensive, professional multi-section technical PDF document for: "${input.prompt}".
+Return ONLY a valid JSON object with exact keys:
+- title (string)
+- subtitle (string)
+- sections (array of 4 to 6 objects, each with: heading (string), content (rich paragraph string), bullets (array of 3 to 4 actionable bullet strings))`;
+
     const ai = await createServerGeminiClient(this.apiKey);
     if (ai) {
       try {
         const response = await ai.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: `Generate a comprehensive, professional multi-section technical PDF document for: "${input.prompt}".
-Include a clear title, subtitle, and 4 to 6 detailed sections. Each section must have a heading, a rich paragraph of content, and 3 to 4 actionable bullet points.`,
+          model: DEFAULT_TEXT_MODEL,
+          contents: pdfPrompt,
           config: {
             responseMimeType: 'application/json',
             responseSchema: {
@@ -750,21 +1130,27 @@ Include a clear title, subtitle, and 4 to 6 detailed sections. Each section must
             },
           },
         });
-
-        const rawJson = (response.text ?? '').trim();
-        if (rawJson) {
-          const spec = validatePdfDocumentSpec(rawJson);
-          const compiled = buildPdfBinaryBuffer(spec);
-          return {
-            spec: compiled.spec,
-            pdfBytes: compiled.pdfBytes,
-            pageCount: compiled.pageCount,
-            summaryMarkdown: formatPdfSummaryMarkdown(compiled.spec, compiled.pageCount),
-            tokensUsed: Math.max(180, Math.ceil(rawJson.length / 4)),
-          };
+        const compiled = this.compilePdfFromJson(response.text ?? '');
+        if (compiled) {
+          return compiled;
         }
       } catch {
-        // Fall through to deterministic PDF generator
+        // Fall through to Groq / OpenRouter JSON generation
+      }
+    }
+
+    const fallbackJson = await callOpenAiCompatibleFallback({
+      prompt: pdfPrompt,
+      systemInstruction:
+        'You are a technical author. Respond strictly with a valid JSON object matching { title, subtitle, sections: [{ heading, content, bullets }] }.',
+      jsonMode: true,
+      role: 'chat',
+      maxTokens: Math.max(3000, input.maxOutputTokens),
+    });
+    if (fallbackJson) {
+      const compiled = this.compilePdfFromJson(fallbackJson);
+      if (compiled) {
+        return compiled;
       }
     }
 
@@ -781,17 +1167,38 @@ export class LiveGeminiPptPresentationProvider implements PptPresentationProvide
     this.apiKey = options?.apiKey;
   }
 
+  private compilePptFromJson(rawJson: string): PptPresentationGenerationResult | null {
+    try {
+      const spec = validatePptPresentationSpec(extractJsonObjectString(rawJson));
+      const compiled = buildPptxBinaryBuffer(spec);
+      return {
+        spec: compiled.spec,
+        pptxBytes: compiled.pptxBytes,
+        slideCount: compiled.slideCount,
+        summaryMarkdown: formatPptSummaryMarkdown(compiled.spec),
+        tokensUsed: Math.max(220, Math.ceil(rawJson.length / 4)),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   public async generatePptPresentation(input: {
     readonly prompt: string;
     readonly maxOutputTokens: number;
   }): Promise<PptPresentationGenerationResult> {
+    const pptPrompt = `Create a 6-slide executive and technical presentation deck for: "${input.prompt}".
+Return ONLY a valid JSON object with exact keys:
+- title (string)
+- subtitle (string)
+- slides (array of exactly 6 objects, each with: title (string), subtitle (string), bullets (array of 3 to 4 concise bullet strings))`;
+
     const ai = await createServerGeminiClient(this.apiKey);
     if (ai) {
       try {
         const response = await ai.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: `Create a 6-slide executive and technical presentation deck for: "${input.prompt}".
-Provide a presentation title, subtitle, and exactly 6 content slides. Each slide must have a concise title, subtitle, and 3 to 4 punchy bullet points.`,
+          model: DEFAULT_TEXT_MODEL,
+          contents: pptPrompt,
           config: {
             responseMimeType: 'application/json',
             responseSchema: {
@@ -819,21 +1226,27 @@ Provide a presentation title, subtitle, and exactly 6 content slides. Each slide
             },
           },
         });
-
-        const rawJson = (response.text ?? '').trim();
-        if (rawJson) {
-          const spec = validatePptPresentationSpec(rawJson);
-          const compiled = buildPptxBinaryBuffer(spec);
-          return {
-            spec: compiled.spec,
-            pptxBytes: compiled.pptxBytes,
-            slideCount: compiled.slideCount,
-            summaryMarkdown: formatPptSummaryMarkdown(compiled.spec),
-            tokensUsed: Math.max(220, Math.ceil(rawJson.length / 4)),
-          };
+        const compiled = this.compilePptFromJson(response.text ?? '');
+        if (compiled) {
+          return compiled;
         }
       } catch {
-        // Fall through to deterministic 6-slide PPTX generator
+        // Fall through to Groq / OpenRouter JSON generation
+      }
+    }
+
+    const fallbackJson = await callOpenAiCompatibleFallback({
+      prompt: pptPrompt,
+      systemInstruction:
+        'You are a presentation strategist. Respond strictly with a valid JSON object matching { title, subtitle, slides: [{ title, subtitle, bullets }] }.',
+      jsonMode: true,
+      role: 'chat',
+      maxTokens: Math.max(3000, input.maxOutputTokens),
+    });
+    if (fallbackJson) {
+      const compiled = this.compilePptFromJson(fallbackJson);
+      if (compiled) {
+        return compiled;
       }
     }
 
@@ -852,16 +1265,18 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
   public async generateImage(input: {
     readonly prompt: string;
   }): Promise<{
-    readonly mimeType: 'image/png';
+    readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
     readonly data: Uint8Array;
     readonly caption: string;
   }> {
     let enhancedPrompt = input.prompt.trim();
     const ai = await createServerGeminiClient(this.apiKey);
+
+    // 1. Optional prompt enhancement via Gemini or Groq/OpenRouter
     if (ai) {
       try {
         const res = await ai.generateContent({
-          model: 'gemini-3.8-flash',
+          model: DEFAULT_TEXT_MODEL,
           contents: `Enhance this image generation prompt into a vivid 1-sentence artistic and technical visual description (max 35 words): "${input.prompt}"`,
         });
         if (res.text && res.text.trim().length > 0) {
@@ -870,9 +1285,94 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
       } catch {
         // Keep original prompt
       }
+    } else {
+      const enhancedViaFallback = await callOpenAiCompatibleFallback({
+        prompt: `Enhance this image generation prompt into a vivid 1-sentence artistic description (max 35 words): "${input.prompt}"`,
+        role: 'chat',
+        maxTokens: 120,
+      });
+      if (enhancedViaFallback) {
+        enhancedPrompt = enhancedViaFallback.replace(/\n+/g, ' ').slice(0, 220);
+      }
     }
 
-    // Valid PNG magic header + rich caption with Enhanced Prompt
+    // 2. Primary real image generation: Gemini native image models (gemini-3.1-flash-lite-image / gemini-2.5-flash-image)
+    if (ai) {
+      for (const imageModel of DEFAULT_IMAGE_MODELS) {
+        try {
+          const imgRes = await ai.generateContent({
+            model: imageModel,
+            fallbackModels: [],
+            contents: {
+              parts: [{ text: enhancedPrompt }],
+            },
+            config: {
+              imageConfig: {
+                aspectRatio: '1:1',
+              },
+            },
+            timeoutMs: resolveProviderTimeoutMs(60_000),
+          });
+          const parts =
+            imgRes.parts ?? imgRes.candidates?.[0]?.content?.parts ?? [];
+          for (const part of parts) {
+            if (part.inlineData?.data) {
+              const rawMime = (part.inlineData.mimeType ?? 'image/png').toLowerCase();
+              const mimeType: 'image/png' | 'image/jpeg' | 'image/webp' =
+                rawMime === 'image/jpeg' || rawMime === 'image/jpg'
+                  ? 'image/jpeg'
+                  : rawMime === 'image/webp'
+                    ? 'image/webp'
+                    : 'image/png';
+              const bytes = new Uint8Array(
+                Buffer.from(part.inlineData.data, 'base64'),
+              );
+              if (bytes.byteLength > 64) {
+                return {
+                  mimeType,
+                  data: bytes,
+                  caption: `### Generated Visual Artwork\n**Enhanced Prompt:** *${enhancedPrompt}*`,
+                };
+              }
+            }
+          }
+        } catch {
+          // Try next image model
+        }
+      }
+
+      // 3. Secondary real image generation: Imagen 3 :predict endpoint
+      if (ai.predictImagen) {
+        try {
+          const imagen = await ai.predictImagen({
+            model: 'imagen-3.0-generate-002',
+            prompt: enhancedPrompt,
+            timeoutMs: resolveProviderTimeoutMs(60_000),
+          });
+          if (imagen && imagen.data.byteLength > 64) {
+            return {
+              mimeType: imagen.mimeType,
+              data: imagen.data,
+              caption: `### Generated Visual Artwork\n**Enhanced Prompt:** *${enhancedPrompt}*`,
+            };
+          }
+        } catch {
+          // Fall through to Cloudflare Flux
+        }
+      }
+    }
+
+    // 4. Tertiary real image generation: Cloudflare Workers AI Flux (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`)
+    const cfImage = await callCloudflareFluxImage(enhancedPrompt);
+    if (cfImage && cfImage.data.byteLength > 64) {
+      return {
+        mimeType: cfImage.mimeType,
+        data: cfImage.data,
+        caption: `### Generated Visual Artwork\n**Enhanced Prompt:** *${enhancedPrompt}*`,
+      };
+    }
+
+    // 5. Offline/test deterministic PNG fallback when no live image key is configured
     const pngBytes = new Uint8Array([
       0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
       0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,

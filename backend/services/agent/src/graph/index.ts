@@ -264,10 +264,36 @@ export class AgentGraphExecutor {
         .map((r, idx) => `- [src_${idx + 1}] **${r.title}** (${r.url}): ${r.snippet}`)
         .join('\n');
 
+      let synthesisText =
+        typeof this.deps.searchProvider.lastSynthesizedAnswer === 'string' &&
+        this.deps.searchProvider.lastSynthesizedAnswer.trim().length > 0
+          ? this.deps.searchProvider.lastSynthesizedAnswer.trim()
+          : '';
+
+      if (!synthesisText && results.length > 0 && budgetDecision.allowLive && !this.deps.config.mockAi) {
+        try {
+          const synthReply = await this.deps.chatProvider.generateReply({
+            prompt: `User question: "${trimmedPrompt}"\n\nCited web search results:\n${citedLines}\n\nSynthesize a clear, direct, accurate Markdown answer grounded in these cited sources. Reference sources inline as [src_1], [src_2], etc.`,
+            systemInstruction:
+              'You are Kartik.ai Web Search Synthesis Agent. Answer directly and accurately using the provided search results and cite [src_N] inline.',
+            maxOutputTokens: this.deps.config.maxOutputTokens,
+          });
+          if (synthReply.content.trim().length > 0) {
+            synthesisText = synthReply.content.trim();
+          }
+        } catch {
+          // Fall back to summary sentence if synthesis call fails
+        }
+      }
+
+      if (!synthesisText && results.length > 0) {
+        synthesisText = `Synthesized from ${results.length} cited source(s) for "${trimmedPrompt.slice(0, 80)}".`;
+      }
+
       const replyContent =
         results.length === 0
           ? `${fallbackNotice}No verified web search results were found for your query.`
-          : `${fallbackNotice}### Cited Source Material\n${citedLines}\n\n### Synthesis\nSynthesized from ${results.length} cited source(s) for "${trimmedPrompt.slice(0, 80)}".`;
+          : `${fallbackNotice}### Synthesis\n${synthesisText}\n\n### Cited Source Material\n${citedLines}`;
 
       return {
         executionId,
@@ -335,7 +361,24 @@ export class AgentGraphExecutor {
         )
         .join('\n');
 
-      const replyContent = `${fallbackNotice}### Grounded Document Evidence\n${groundedPassages}`;
+      let groundedAnswer = '';
+      if (budgetDecision.allowLive && !this.deps.config.mockAi) {
+        try {
+          const ragReply = await this.deps.chatProvider.generateReply({
+            prompt: `User question: "${trimmedPrompt}"\n\nRetrieved document excerpts:\n${groundedPassages}\n\nAnswer the user's question directly and thoroughly using ONLY the retrieved document excerpts above, citing [Document Title, p. N] inline.`,
+            systemInstruction:
+              'You are Kartik.ai Document RAG Specialist. Ground every statement in the retrieved document excerpts and include [Document Title, p. N] citations.',
+            maxOutputTokens: this.deps.config.maxOutputTokens,
+          });
+          groundedAnswer = ragReply.content.trim();
+        } catch {
+          // Fall back to direct evidence block
+        }
+      }
+
+      const replyContent = groundedAnswer
+        ? `${fallbackNotice}${groundedAnswer}\n\n### Grounded Document Evidence\n${groundedPassages}`
+        : `${fallbackNotice}### Grounded Document Evidence\n${groundedPassages}`;
 
       return {
         executionId,
@@ -358,7 +401,22 @@ export class AgentGraphExecutor {
     if (specialist === 'coding') {
       const codingIntent = classifyCodingIntent(trimmedPrompt);
       if (codingIntent !== 'CODE_GENERATION') {
-        const inlineMarkdown = buildNonGenerationCodingMarkdown(codingIntent, trimmedPrompt);
+        let inlineMarkdown = '';
+        if (budgetDecision.allowLive && !this.deps.config.mockAi) {
+          try {
+            const codingReply = await this.deps.chatProvider.generateReply({
+              prompt: trimmedPrompt,
+              systemInstruction: `You are Kartik.ai Senior Software Engineering & ${codingIntent.replace('_', ' ')} Specialist. Provide precise, concrete, production-ready technical analysis with syntax-highlighted fenced code blocks, root-cause diagnostics, and corrected code examples.`,
+              maxOutputTokens: this.deps.config.maxOutputTokens,
+            });
+            inlineMarkdown = codingReply.content.trim();
+          } catch {
+            // Fall through to deterministic markdown template
+          }
+        }
+        if (!inlineMarkdown) {
+          inlineMarkdown = buildNonGenerationCodingMarkdown(codingIntent, trimmedPrompt);
+        }
         return {
           executionId,
           requestId: request.requestId,
@@ -740,20 +798,26 @@ export class AgentGraphExecutor {
     const imageGen = await this.deps.imageProvider.generateImage({
       prompt: trimmedPrompt,
     });
+    const imageExt =
+      imageGen.mimeType === 'image/jpeg'
+        ? '.jpg'
+        : imageGen.mimeType === 'image/webp'
+          ? '.webp'
+          : '.png';
     const artifactId = `art_${crypto.randomBytes(8).toString('hex')}`;
     const storageKey = buildObjectStorageKey({
       namespace: 'images',
       userId: request.userId,
       resourceId: request.conversationId,
       fileId: artifactId,
-      extension: '.png',
+      extension: imageExt,
     });
     const imageSha256 = crypto.createHash('sha256').update(imageGen.data).digest('hex');
 
     await this.deps.objectStorage.putPrivateObject({
       key: storageKey,
       ownerUserId: request.userId,
-      mimeType: 'image/png',
+      mimeType: imageGen.mimeType,
       body: imageGen.data,
       sha256: imageSha256,
     });
@@ -765,9 +829,9 @@ export class AgentGraphExecutor {
       conversationId: request.conversationId,
       artifactType: 'generated_image',
       title: trimmedPrompt.slice(0, 80),
-      entryFile: 'image.png',
+      entryFile: `image${imageExt}`,
       storageKey,
-      mimeType: 'image/png',
+      mimeType: imageGen.mimeType,
       sizeBytes: imageGen.data.byteLength,
       filesManifest: Object.freeze([]),
       createdAt: new Date().toISOString(),
@@ -786,7 +850,7 @@ export class AgentGraphExecutor {
         completionTokens: 64,
         totalTokens: promptTokens + 64,
         provider: this.deps.imageProvider.providerName,
-        model: 'imagen-3.0',
+        model: 'gemini-3.1-flash-lite-image',
         durationMs: Math.max(1, Date.now() - startMs),
         mock: !budgetDecision.allowLive,
       },

@@ -34,6 +34,16 @@ import {
 } from './schema.ts';
 import { getOrCreateUser } from './users.ts';
 
+function isPlaceholderDatabaseUrl(rawUrl: string): boolean {
+  const normalized = rawUrl.trim().toLowerCase();
+  return (
+    normalized.includes('placeholder_password') ||
+    normalized.includes('ep-example') ||
+    normalized.includes('<your-endpoint>') ||
+    normalized.includes('replace_me')
+  );
+}
+
 export function isCloudSqlConfigured(): boolean {
   if (process.env.NODE_ENV === 'test') {
     return false;
@@ -41,7 +51,8 @@ export function isCloudSqlConfigured(): boolean {
   const hasCloudSql = Boolean(
     process.env.SQL_HOST && process.env.SQL_USER && process.env.SQL_DB_NAME,
   );
-  const hasDatabaseUrl = Boolean(process.env.DATABASE_URL?.trim());
+  const rawDbUrl = process.env.DATABASE_URL?.trim() ?? '';
+  const hasDatabaseUrl = Boolean(rawDbUrl && !isPlaceholderDatabaseUrl(rawDbUrl));
   return hasCloudSql || hasDatabaseUrl;
 }
 

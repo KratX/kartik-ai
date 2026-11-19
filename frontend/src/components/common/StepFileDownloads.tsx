@@ -17,6 +17,115 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-6',
+    title: 'Fix #6 — Fix All 7 Specialist Agents (Search, Coding, PDF, PPT, RAG, Vision, Image) for Real Live AI',
+    subtitle:
+      '8 files · Raises 8s timeout to 45s, adds Groq & OpenRouter fallbacks for every specialist, enables real Gemini/Flux image generation + inline <img> previews, and synthesizes Search/RAG/Coding replies via LLM',
+    zipFilename: 'fix-6-all-specialist-agents-live.zip',
+    zipHref: '/__downloads/fix-6-all-specialist-agents-live.zip',
+    commitMessage: `fix(agent): enable real multi-provider AI execution across all 7 specialist agents and inline image previews
+
+- Update LiveGemini* providers in backend/services/agent/src/services/live-gemini-providers.ts to use configurable PROVIDER_TIMEOUT_MS (default 45s instead of hardcoded 8s), current Gemini models (gemini-4-hydrogen with gemini-2.5-flash fallback, gemini-embedding-2), and placeholder-key filtering
+- Extend Groq (MODEL_CHAT, MODEL_CODING, MODEL_VISION) and OpenRouter fallbacks to all specialist agents (Coding JSON, PDF JSON, PPT JSON, Vision multimodal, Search synthesis, and Image prompt enhancement) instead of Chat only
+- Implement real image generation in LiveGeminiImageGenerationProvider via Gemini image models (gemini-3.1-flash-lite-image / gemini-2.5-flash-image), Imagen 3, and Cloudflare Workers AI Flux, preserving actual PNG/JPEG/WebP binary bytes
+- Update AgentGraphExecutor (backend/services/agent/src/graph/index.ts) so Search uses lastSynthesizedAnswer / LLM synthesis, RAG generates grounded LLM answers with page citations, and non-generation Coding intents (DEBUGGING, CODE_REVIEW, CODE_EXPLANATION, OPTIMIZATION) call the live LLM
+- Add ?inline=1 Content-Disposition and JPEG/WebP extension support on GET /api/v1/artifacts/:artifactId/raw in server.ts and render generated_image artifacts inline with <img> previews in MessageBubble.tsx
+- Detect OpenRouter/Cloudflare live keys, enable IMAGE_PROVIDER=live, and honor DAILY_LIVE_CALL_BUDGET in KartikPlatformRuntime
+- Add unit tests in backend/services/agent/tests/live-providers-and-limits.test.ts verifying live Search/RAG/Coding synthesis, real Gemini inlineData image decoding, and Groq specialist fallbacks`,
+    changedFiles: [
+      {
+        path: 'backend/services/agent/src/models/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/models/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'backend/services/agent/src/graph/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/graph/index.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'server.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=server.ts',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageBubble.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageBubble.tsx',
+      },
+      {
+        path: 'backend/services/agent/tests/live-providers-and-limits.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/tests/live-providers-and-limits.test.ts',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
+    id: 'fix-5',
+    title: 'Fix #5 — Local Machine .env.example & Environment Preflight (Zero-Dependency Dev Defaults)',
+    subtitle:
+      '6 files · Fixes .env.example so cp .env.example .env && pnpm dev runs immediately without stalling on fake Neon/Redis/Qdrant/S3 hosts + adds dotenv loading in check:env',
+    zipFilename: 'fix-5-local-env-setup.zip',
+    zipHref: '/__downloads/fix-5-local-env-setup.zip',
+    commitMessage: `fix(env): make .env.example and check-env work cleanly out-of-the-box on local machines
+
+- Replace unreachable placeholder Neon DATABASE_URL, Redis, Qdrant, and S3 defaults in .env.example with zero-dependency local dev defaults (OBJECT_STORAGE_MODE=filesystem, blank optional DATABASE_URL/REDIS_URL/QDRANT_URL, and commented presets for Local Postgres and Neon sslmode=verify-full)
+- Add missing runtime environment variables to .env.example (PORT, HOST, GEMINI_API_KEY, MOCK_AI, IMAGE_PROVIDER, DAILY_LIVE_CALL_BUDGET, PGSSL_REJECT_UNAUTHORIZED, PGSSLROOTCERT, VITE_GOOGLE_OAUTH_CLIENT_ID, VITE_GATEWAY_ORIGIN, ALLOW_ROOT_DEMO_RUNTIME)
+- Load .env via dotenv in scripts/check-env.mjs CLI entrypoint and prevent blank optional dev variables from clobbering development fallback defaults
+- Ignore placeholder DATABASE_URL templates in src/db/platform-repository.ts and honor OBJECT_STORAGE_MODE=filesystem and MOCK_AI=true in src/server/platform-api-runtime.ts
+- Allow downloading .env.example via /__downloads/file in server.ts while keeping real .env and dotfiles blocked`,
+    changedFiles: [
+      {
+        path: '.env.example',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=.env.example',
+      },
+      {
+        path: 'scripts/check-env.mjs',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=scripts/check-env.mjs',
+      },
+      {
+        path: 'src/db/platform-repository.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/db/platform-repository.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'server.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=server.ts',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
     id: 'fix-4',
     title: 'Fix #4 — Unify Chat & Billing Domain Logic (Idempotency Fingerprinting & Two-Phase Credit Reservations)',
     subtitle:

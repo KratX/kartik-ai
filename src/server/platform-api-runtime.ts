@@ -211,6 +211,8 @@ export class KartikPlatformRuntime {
   public readonly persistence: PlatformPersistenceAdapter;
   public readonly repository = new DrizzleCloudSqlAgentRepository();
   public readonly objectStorage =
+    process.env.OBJECT_STORAGE_MODE === 'filesystem' ||
+    process.env.OBJECT_STORAGE_MODE === 'memory' ||
     process.env.OBJECT_STORAGE_ENDPOINT ||
     process.env.AWS_ENDPOINT_URL_S3 ||
     process.env.R2_ENDPOINT
@@ -301,23 +303,53 @@ export class KartikPlatformRuntime {
     const { publicKey } = crypto.generateKeyPairSync('ed25519');
     const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
 
-    const hasLiveAiKey = Boolean(
-      process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY || process.env.TAVILY_API_KEY,
-    );
+    const isUsableApiKey = (val?: string): boolean => {
+      const trimmed = (val ?? '').trim().replace(/^["']|["']$/g, '');
+      if (!trimmed) {
+        return false;
+      }
+      const lower = trimmed.toLowerCase();
+      return (
+        !lower.startsWith('test-') &&
+        !lower.includes('placeholder') &&
+        !lower.startsWith('your_') &&
+        !lower.startsWith('paste_your_') &&
+        lower !== 'replace_me' &&
+        !lower.includes('0123456789abcdef')
+      );
+    };
+    const explicitMockAi =
+      process.env.MOCK_AI === 'true' || process.env.AI_PROVIDER_MODE === 'mock';
+    const hasLiveAiKey =
+      !explicitMockAi &&
+      (isUsableApiKey(process.env.GEMINI_API_KEY) ||
+        isUsableApiKey(process.env.GROQ_API_KEY) ||
+        isUsableApiKey(process.env.OPENROUTER_API_KEY) ||
+        isUsableApiKey(process.env.TAVILY_API_KEY) ||
+        isUsableApiKey(process.env.CLOUDFLARE_API_TOKEN));
+    const configuredImageProvider =
+      process.env.IMAGE_PROVIDER === 'mock'
+        ? 'mock'
+        : process.env.IMAGE_PROVIDER === 'live' || hasLiveAiKey
+          ? 'live'
+          : 'mock';
     const config = loadAgentConfig({
       NODE_ENV: process.env.NODE_ENV === 'production' ? 'production' : 'development',
       DATABASE_URL:
-        process.env.DATABASE_URL ?? 'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
-      REDIS_URL: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
+        process.env.DATABASE_URL?.trim() ||
+        'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
+      REDIS_URL: process.env.REDIS_URL?.trim() || 'redis://127.0.0.1:6379',
       USER_CONTEXT_PUBLIC_KEY: publicKeyPem,
       INTERNAL_CALLER_TOKEN_CHAT: 'internal-secret-token-chat-to-agent',
       MOCK_AI: hasLiveAiKey ? 'false' : 'true',
+      IMAGE_PROVIDER: configuredImageProvider,
       GEMINI_API_KEY:
-        process.env.GEMINI_API_KEY ??
-        process.env.GROQ_API_KEY ??
+        process.env.GEMINI_API_KEY?.trim() ||
+        process.env.GROQ_API_KEY?.trim() ||
+        process.env.OPENROUTER_API_KEY?.trim() ||
         'test-gemini-api-key-value',
-      TAVILY_API_KEY: process.env.TAVILY_API_KEY ?? 'test-tavily-api-key',
-      DAILY_LIVE_CALL_BUDGET: process.env.DAILY_LIVE_CALL_BUDGET ?? '100',
+      TAVILY_API_KEY: process.env.TAVILY_API_KEY?.trim() || 'test-tavily-api-key',
+      DAILY_LIVE_CALL_BUDGET: process.env.DAILY_LIVE_CALL_BUDGET?.trim() || '500',
     });
 
     const embeddingProvider = new LiveGeminiEmbeddingProvider();
@@ -331,8 +363,8 @@ export class KartikPlatformRuntime {
 
     const budgetGuard = new DailyLiveBudgetGuard({
       store: new RedisDailyBudgetStore(this.redisClient),
-      dailyLimit: 100,
-      mockAiDefault: false,
+      dailyLimit: config.dailyLiveCallBudget,
+      mockAiDefault: !hasLiveAiKey,
     });
 
     this.graphExecutor = new AgentGraphExecutor({

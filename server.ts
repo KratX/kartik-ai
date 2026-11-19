@@ -433,14 +433,25 @@ export function createKartikExpressApp(
             : data.artifact.artifactType === 'ppt_presentation'
               ? '.pptx'
               : data.artifact.artifactType === 'generated_image'
-                ? '.png'
+                ? data.artifact.mimeType === 'image/jpeg'
+                  ? '.jpg'
+                  : data.artifact.mimeType === 'image/webp'
+                    ? '.webp'
+                    : '.png'
                 : '.json';
+
+        const inlineRequested =
+          req.query.inline === '1' || req.query.inline === 'true';
+        const disposition = inlineRequested ? 'inline' : 'attachment';
 
         res.setHeader('Content-Type', data.artifact.mimeType);
         res.setHeader(
           'Content-Disposition',
-          `attachment; filename="${safeTitle}${ext}"`,
+          `${disposition}; filename="${safeTitle}${ext}"`,
         );
+        if (inlineRequested) {
+          res.setHeader('Cache-Control', 'private, max-age=300');
+        }
         res.setHeader('Content-Length', String(rawBuffer.byteLength));
         res.status(200).send(rawBuffer);
       } catch (err) {
@@ -536,11 +547,12 @@ export function createKartikExpressApp(
   const downloadsDir = path.join(process.cwd(), 'public', '__downloads');
   app.get('/__downloads/file', (req, res) => {
     const rawRelPath = typeof req.query.path === 'string' ? req.query.path.trim() : '';
+    const isAllowedTemplateDotfile = rawRelPath === '.env.example';
     if (
       !rawRelPath ||
       rawRelPath.includes('..') ||
       rawRelPath.startsWith('/') ||
-      rawRelPath.startsWith('.')
+      (rawRelPath.startsWith('.') && !isAllowedTemplateDotfile)
     ) {
       res.status(400).send('Invalid file path');
       return;

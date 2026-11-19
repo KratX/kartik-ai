@@ -258,6 +258,9 @@ const isMain =
     process.argv[1].endsWith('check-env.mjs'));
 
 if (isMain) {
+  const dotenv = await import('dotenv');
+  dotenv.config();
+
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const composePreflight = verifyComposeEd25519Preflight({
     repoRoot,
@@ -286,22 +289,32 @@ if (isMain) {
     'secrets',
     'user_context_public_key.pem',
   );
+
+  const nonEmptyProcessEnv = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([, v]) => typeof v === 'string' && v.trim().length > 0,
+    ),
+  );
+  const nodeEnv = nonEmptyProcessEnv.NODE_ENV || 'development';
+  const isDevLocal = nodeEnv !== 'production';
+
   const effectiveEnv = {
-    NODE_ENV: process.env.NODE_ENV || 'development',
-    DATABASE_URL:
-      process.env.DATABASE_URL || 'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
-    DIRECT_DATABASE_URL:
-      process.env.DIRECT_DATABASE_URL ||
-      'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
-    DATABASE_SCHEMA: process.env.DATABASE_SCHEMA || 'auth',
-    REDIS_URL: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
-    ...(!process.env.USER_CONTEXT_SIGNING_KEY && fs.existsSync(defaultPrivPath)
+    NODE_ENV: nodeEnv,
+    ...(isDevLocal
+      ? {
+          DATABASE_URL: 'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
+          DIRECT_DATABASE_URL: 'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
+          DATABASE_SCHEMA: 'auth',
+          REDIS_URL: 'redis://127.0.0.1:6379',
+        }
+      : {}),
+    ...(!nonEmptyProcessEnv.USER_CONTEXT_SIGNING_KEY && fs.existsSync(defaultPrivPath)
       ? { USER_CONTEXT_SIGNING_KEY_FILE: defaultPrivPath }
       : {}),
-    ...(!process.env.USER_CONTEXT_PUBLIC_KEY && fs.existsSync(defaultPubPath)
+    ...(!nonEmptyProcessEnv.USER_CONTEXT_PUBLIC_KEY && fs.existsSync(defaultPubPath)
       ? { USER_CONTEXT_PUBLIC_KEY_FILE: defaultPubPath }
       : {}),
-    ...process.env,
+    ...nonEmptyProcessEnv,
   };
   const result = validateOperationalEnvironment(effectiveEnv);
   if (!result.valid) {

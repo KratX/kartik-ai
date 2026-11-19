@@ -109,6 +109,7 @@ export interface SearchResultItem {
 
 export interface SearchProvider {
   readonly providerName: string;
+  readonly lastSynthesizedAnswer?: string | null;
   searchWeb(input: {
     readonly query: string;
     readonly maxResults?: number;
@@ -126,7 +127,7 @@ export interface ImageGenerationProvider {
   generateImage(input: {
     readonly prompt: string;
   }): Promise<{
-    readonly mimeType: 'image/png';
+    readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
     readonly data: Uint8Array;
     readonly caption: string;
   }>;
