@@ -113,6 +113,14 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
           `${item.relPath} must drop privileges to USER node`,
         );
       }
+      assert.ok(
+        content.includes('FROM node:24-alpine'),
+        `${item.relPath} must pin LTS base image node:24-alpine`,
+      );
+      assert.ok(
+        !content.includes('FROM node:26-alpine'),
+        `${item.relPath} must not use unreleased/non-LTS node:26-alpine`,
+      );
       if (item.expectedCmd) {
         assert.ok(
           content.includes(item.expectedCmd),
@@ -192,6 +200,40 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
     assert.ok(
       composeContent.includes('FIREBASE_PRIVATE_KEY:?'),
       'docker-compose.prod.yml must require FIREBASE_PRIVATE_KEY in production',
+    );
+
+    // Fix #13: Production Compose must fail closed on SERVICE_TO_SERVICE_TOKEN and configure live Gemini agent env vars
+    assert.ok(
+      !composeContent.includes('s2s-prod-compose-token-kartik-ai-v43'),
+      'docker-compose.prod.yml must not ship a hardcoded SERVICE_TO_SERVICE_TOKEN fallback',
+    );
+    assert.ok(
+      composeContent.includes('SERVICE_TO_SERVICE_TOKEN:?'),
+      'docker-compose.prod.yml must fail closed if SERVICE_TO_SERVICE_TOKEN is unset',
+    );
+    assert.ok(
+      composeContent.includes('GEMINI_API_KEY: ${GEMINI_API_KEY:-}'),
+      'docker-compose.prod.yml must pass GEMINI_API_KEY to agent service',
+    );
+    assert.ok(
+      composeContent.includes('GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}'),
+      'docker-compose.prod.yml must default GEMINI_MODEL to gemini-3.1-flash-lite',
+    );
+    assert.ok(
+      composeContent.includes('GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-lite-image}'),
+      'docker-compose.prod.yml must default GEMINI_IMAGE_MODEL to gemini-3.1-flash-lite-image',
+    );
+    assert.ok(
+      composeContent.includes('MAX_OUTPUT_TOKENS: ${MAX_OUTPUT_TOKENS:-8192}'),
+      'docker-compose.prod.yml must default MAX_OUTPUT_TOKENS to 8192',
+    );
+    assert.ok(
+      composeContent.includes('MOCK_AI: ${MOCK_AI:-false}'),
+      'docker-compose.prod.yml must default MOCK_AI to false in production',
+    );
+    assert.ok(
+      fs.existsSync(path.join(repoRoot, 'infra/aws/ec2-compose/.env.prod.example')),
+      'infra/aws/ec2-compose/.env.prod.example template must exist',
     );
 
     const privSecretPath = path.join(
@@ -342,6 +384,10 @@ describe('Phase 16 & 18 Multi-Service Dockerfiles & AWS Infrastructure Contracts
     );
     assert.ok(frontendDockerfile.includes('frontend/vite.config.ts'));
     assert.ok(frontendDockerfile.includes('frontend/index.html'));
+    assert.ok(
+      !frontendDockerfile.includes('COPY public ./public'),
+      'frontend/Dockerfile must not COPY nonexistent public directory into container',
+    );
     assert.ok(
       frontendDockerfile.includes('test -f /usr/share/nginx/html/index.html'),
     );

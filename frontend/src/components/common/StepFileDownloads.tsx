@@ -17,6 +17,125 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-13',
+    title: 'Fix #13 — Security Hardening (/__downloads, Redis TLS, Firebase Config), Docker/Compose Fixes & Fix #9 GitHub Sync',
+    subtitle:
+      '19 files · Hardens /__downloads/file against secrets/keys & disables it in production, verifies Redis TLS certs by default, removes hardcoded Firebase keys/project ID, fixes broken frontend/Dockerfile & pins Node 24 LTS across all 6 Dockerfiles, removes hardcoded S2S token & wires Gemini env vars in docker-compose.prod.yml, and syncs Fix #9 files to GitHub',
+    zipFilename: 'fix-13-security-docker-redis-tls-and-fix9-sync.zip',
+    zipHref: '/__downloads/fix-13-security-docker-redis-tls-and-fix9-sync.zip',
+    commitMessage: `security(server,redis,docker,firebase): harden /__downloads & Redis TLS, fix Dockerfiles/Compose, remove hardcoded Firebase config, and sync Fix #9
+
+- Harden GET /__downloads/file in server.ts with strict allowlist + nested dotfile/secrets/key blocking + realpath containment, disable /__downloads in production unless ALLOW_DEV_DOWNLOADS=true, and gate StepFileDownloads UI to import.meta.env.DEV in frontend/src/App.tsx
+- Enforce TLS certificate verification (rejectUnauthorized: true + SNI servername) for rediss:// in backend/shared/redis/index.ts with non-production REDIS_TLS_INSECURE opt-out only
+- Remove hardcoded Firebase Web API key and personal project ID fallback from src/lib/firebase.ts and src/lib/firebase-admin.ts
+- Fix broken COPY public ./public in frontend/Dockerfile, pin all 6 Dockerfiles to Node 24 LTS (node:24-alpine), remove hardcoded SERVICE_TO_SERVICE_TOKEN fallback in infra/aws/ec2-compose/docker-compose.prod.yml (fail-closed :?), wire GEMINI_API_KEY / GEMINI_MODEL=gemini-3.1-flash-lite / MAX_OUTPUT_TOKENS=8192 / OBJECT_STORAGE_* / MOCK_AI=false, and add infra/aws/ec2-compose/.env.prod.example
+- Sync Fix #9 cross-site iframe preview cookie/guest-header resilience (src/middleware/auth.ts, frontend/src/App.tsx, server.ts) and workspace build symlink helper (scripts/build-workspaces.mjs)
+- Add Fix #13 regression tests in backend/shared/tests/redis.test.ts, backend/gateway/tests/docker-and-aws-infra.test.ts, and src/server/platform-multi-user-isolation.test.ts`,
+    changedFiles: [
+      {
+        path: 'server.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=server.ts',
+      },
+      {
+        path: 'src/middleware/auth.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/middleware/auth.ts',
+      },
+      {
+        path: 'frontend/src/App.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/App.tsx',
+      },
+      {
+        path: 'backend/shared/redis/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/shared/redis/index.ts',
+      },
+      {
+        path: 'src/lib/firebase.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/lib/firebase.ts',
+      },
+      {
+        path: 'src/lib/firebase-admin.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/lib/firebase-admin.ts',
+      },
+      {
+        path: 'infra/aws/ec2-compose/docker-compose.prod.yml',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=infra/aws/ec2-compose/docker-compose.prod.yml',
+      },
+      {
+        path: 'infra/aws/ec2-compose/.env.prod.example',
+        status: 'added',
+        downloadHref:
+          '/__downloads/file?path=infra/aws/ec2-compose/.env.prod.example',
+      },
+      {
+        path: 'frontend/Dockerfile',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/Dockerfile',
+      },
+      {
+        path: 'backend/gateway/Dockerfile',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/gateway/Dockerfile',
+      },
+      {
+        path: 'backend/services/auth/Dockerfile',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/auth/Dockerfile',
+      },
+      {
+        path: 'backend/services/chat/Dockerfile',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/chat/Dockerfile',
+      },
+      {
+        path: 'backend/services/agent/Dockerfile',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/Dockerfile',
+      },
+      {
+        path: 'backend/services/billing/Dockerfile',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/billing/Dockerfile',
+      },
+      {
+        path: 'backend/shared/tests/redis.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/shared/tests/redis.test.ts',
+      },
+      {
+        path: 'backend/gateway/tests/docker-and-aws-infra.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/gateway/tests/docker-and-aws-infra.test.ts',
+      },
+      {
+        path: 'src/server/platform-multi-user-isolation.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=src/server/platform-multi-user-isolation.test.ts',
+      },
+      {
+        path: 'scripts/build-workspaces.mjs',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=scripts/build-workspaces.mjs',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
     id: 'fix-12',
     title: 'Fix #12 — Use Cheapest Highest-Output Gemini Model Only (gemini-3.1-flash-lite + 8192 Max Output Tokens)',
     subtitle:

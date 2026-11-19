@@ -16,13 +16,16 @@ function stripQuotes(value?: string): string {
   return (value ?? '').trim().replace(/^["']|["']$/g, '');
 }
 
-export function resolveFirebaseProjectId(): string {
+export function resolveFirebaseProjectId(): string | undefined {
   const envProjectId = stripQuotes(
-    process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID,
+    process.env.FIREBASE_PROJECT_ID ||
+      process.env.VITE_FIREBASE_PROJECT_ID ||
+      process.env.GOOGLE_CLOUD_PROJECT,
   );
   if (envProjectId && !PLACEHOLDER_PROJECT_IDS.has(envProjectId.toLowerCase())) {
     return envProjectId;
   }
+
   const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
   if (fs.existsSync(configPath)) {
     try {
@@ -37,13 +40,13 @@ export function resolveFirebaseProjectId(): string {
       // Ignore malformed optional local config
     }
   }
-  return 'gen-lang-client-0503610321';
+
+  return undefined;
 }
 
 if (!getApps().length) {
-  initializeApp({
-    projectId: resolveFirebaseProjectId(),
-  });
+  const projectId = resolveFirebaseProjectId();
+  initializeApp(projectId ? { projectId } : undefined);
 }
 
 export const adminAuth = getAuth();

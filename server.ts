@@ -30,6 +30,7 @@ import {
   sharedPlatformRuntime,
 } from './src/server/platform-api-runtime.js';
 import {
+  buildAuthCookieHeader,
   extractSessionCookieId,
   optionalAuth,
   registerSessionIdentityResolver,
@@ -82,6 +83,7 @@ export function createKartikExpressApp(
   );
 
   const app = express();
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '15mb' }));
   app.use(optionalAuth);
 
@@ -227,7 +229,7 @@ export function createKartikExpressApp(
       const session = runtime.loginWithGoogle(verifiedIdentity);
       res.setHeader(
         'Set-Cookie',
-        `kartik_session=${session.sessionId}; Path=/; HttpOnly; SameSite=Lax`,
+        buildAuthCookieHeader(req, 'kartik_session', session.sessionId),
       );
       sendEnvelope(req, res, 200, session);
     } catch (err) {
@@ -253,7 +255,10 @@ export function createKartikExpressApp(
       const sessionId =
         (req as AuthRequest).sessionId ?? extractSessionCookieId(req);
       const result = runtime.logout(sessionId);
-      res.setHeader('Set-Cookie', 'kartik_session=; Path=/; Max-Age=0; HttpOnly');
+      res.setHeader(
+        'Set-Cookie',
+        buildAuthCookieHeader(req, 'kartik_session', '', { maxAgeZero: true }),
+      );
       sendEnvelope(req, res, 200, result);
     } catch (err) {
       sendError(req, res, err);
@@ -554,34 +559,121 @@ export function createKartikExpressApp(
     },
   );
 
-  // 8. Static Fix & Step ZIP Downloads (/public/__downloads) & Direct Changed File Download
-  const downloadsDir = path.join(process.cwd(), 'public', '__downloads');
-  app.get('/__downloads/file', (req, res) => {
-    const rawRelPath = typeof req.query.path === 'string' ? req.query.path.trim() : '';
-    const isAllowedTemplateDotfile = rawRelPath === '.env.example';
-    if (
-      !rawRelPath ||
-      rawRelPath.includes('..') ||
-      rawRelPath.startsWith('/') ||
-      (rawRelPath.startsWith('.') && !isAllowedTemplateDotfile)
-    ) {
-      res.status(400).send('Invalid file path');
-      return;
-    }
-    const repoRoot = process.cwd();
-    const resolvedPath = path.resolve(repoRoot, rawRelPath);
-    if (!resolvedPath.startsWith(repoRoot + path.sep) || !fs.existsSync(resolvedPath)) {
-      res.status(404).send('File not found');
-      return;
-    }
-    const filename = path.basename(resolvedPath);
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.sendFile(resolvedPath);
-  });
-  app.use('/__downloads', express.static(downloadsDir));
+  // 8. Static Fix & Step ZIP Downloads (/public/__downloads) & Hardened Dev-Only File Download
+  const allowDevDownloads =
+    (env.NODE_ENV ?? '').trim().toLowerCase() !== 'production' ||
+    (env.ALLOW_DEV_DOWNLOADS ?? '').trim().toLowerCase() === 'true';
+
+  if (allowDevDownloads) {
+    const downloadsDir = path.join(process.cwd(), 'public', '__downloads');
+    app.get('/__downloads/file', (req, res) => {
+      const rawRelPath = typeof req.query.path === 'string' ? req.query.path.trim() : '';
+      if (!isAllowedDevDownloadPath(rawRelPath)) {
+        res.status(400).send('Invalid or forbidden file path');
+        return;
+      }
+      const repoRoot = fs.realpathSync(process.cwd());
+      const resolvedPath = path.resolve(repoRoot, rawRelPath);
+      if (!resolvedPath.startsWith(repoRoot + path.sep) || !fs.existsSync(resolvedPath)) {
+        res.status(404).send('File not found');
+        return;
+      }
+      let realTarget: string;
+      try {
+        realTarget = fs.realpathSync(resolvedPath);
+      } catch {
+        res.status(404).send('File not found');
+        return;
+      }
+      if (!realTarget.startsWith(repoRoot + path.sep)) {
+        res.status(403).send('Forbidden file path');
+        return;
+      }
+      const filename = path.basename(realTarget);
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.sendFile(realTarget, { dotfiles: 'allow' });
+    });
+    app.use('/__downloads', express.static(downloadsDir));
+  }
 
   return app;
+}
+
+const ALLOWED_DEV_DOWNLOAD_ROOT_FILES = new Set([
+  '.env.example',
+  'package.json',
+  'server.ts',
+  'pnpm-workspace.yaml',
+  'tsconfig.json',
+  'tsconfig.base.json',
+  'vite.config.ts',
+]);
+
+const ALLOWED_DEV_DOWNLOAD_PREFIXES = [
+  'src/',
+  'backend/',
+  'frontend/',
+  'infra/',
+  'scripts/',
+] as const;
+
+const FORBIDDEN_DEV_DOWNLOAD_EXTENSIONS = /\.(pem|key|p12|pfx|crt|cer|jks|env|sqlite|db)$/i;
+
+/**
+ * Validates that a repo-relative path requested via `/__downloads/file` is a safe,
+ * non-secret source or template file (blocks dotfiles in any subdirectory, `secrets/`,
+ * private keys, `.env*` files, and Firebase credential files).
+ */
+export function isAllowedDevDownloadPath(rawRelPath: string): boolean {
+  const normalized = rawRelPath.trim().replace(/\\/g, '/');
+  if (
+    !normalized ||
+    normalized.includes('\0') ||
+    normalized.startsWith('/') ||
+    normalized.includes('..')
+  ) {
+    return false;
+  }
+
+  if (ALLOWED_DEV_DOWNLOAD_ROOT_FILES.has(normalized)) {
+    return true;
+  }
+
+  if (!ALLOWED_DEV_DOWNLOAD_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
+    return false;
+  }
+
+  const segments = normalized.split('/');
+  for (const segment of segments) {
+    if (!segment || segment === '.' || segment === '..') {
+      return false;
+    }
+    const lower = segment.toLowerCase();
+    // Block hidden files/dirs (including nested `.env`, `.env.prod`, `.git`, etc.)
+    // Allow only explicit `*.example` templates if named `.env.*.example`
+    if (segment.startsWith('.')) {
+      if (!/^\.env(?:\.[a-z0-9_-]+)?\.example$/i.test(segment)) {
+        return false;
+      }
+    }
+    if (
+      lower === 'secrets' ||
+      lower === 'node_modules' ||
+      lower.includes('service-account') ||
+      lower.includes('firebase-applet-config') ||
+      lower.includes('credentials')
+    ) {
+      return false;
+    }
+  }
+
+  const basename = segments[segments.length - 1] ?? '';
+  if (FORBIDDEN_DEV_DOWNLOAD_EXTENSIONS.test(basename)) {
+    return false;
+  }
+
+  return true;
 }
 
 async function startServer() {

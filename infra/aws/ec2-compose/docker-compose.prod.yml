@@ -7,6 +7,8 @@
 # - `gateway` (:8000), `auth` (:8001), `chat` (:8002), `agent` (:8003), `billing` (:8004),
 #   `redis`, and `qdrant` run exclusively on the internal `kartik_internal` bridge network
 #   with zero host port mappings.
+# - All inter-service tokens, Neon PostgreSQL URLs, and Firebase Admin credentials fail closed
+#   via Compose required-var syntax (`:?`) — zero hardcoded fallback secrets.
 
 name: kartik-prod
 
@@ -38,8 +40,9 @@ services:
       CHAT_SERVICE_URL: http://chat:8002
       AGENT_SERVICE_URL: http://agent:8003
       BILLING_SERVICE_URL: http://billing:8004
-      REDIS_URL: redis://redis:6379
-      SERVICE_TO_SERVICE_TOKEN: ${SERVICE_TO_SERVICE_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      SERVICE_TO_SERVICE_TOKEN: ${SERVICE_TO_SERVICE_TOKEN:?SERVICE_TO_SERVICE_TOKEN must be set to a strong secret in production}
+      GATEWAY_TO_BILLING_TOKEN: ${GATEWAY_TO_BILLING_TOKEN:-${SERVICE_TO_SERVICE_TOKEN:?SERVICE_TO_SERVICE_TOKEN must be set}}
       USER_CONTEXT_SIGNING_KEY_FILE: /run/secrets/user_context_signing_key
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
@@ -69,7 +72,7 @@ services:
       PGPOOL_IDLE_TIMEOUT_MS: ${PGPOOL_IDLE_TIMEOUT_MS:-10000}
       PGPOOL_MAX: ${PGPOOL_MAX:-10}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      SERVICE_TO_SERVICE_TOKEN: ${SERVICE_TO_SERVICE_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
+      SERVICE_TO_SERVICE_TOKEN: ${SERVICE_TO_SERVICE_TOKEN:?SERVICE_TO_SERVICE_TOKEN must be set to a strong secret in production}
       AUTH_PROVIDER_MODE: ${AUTH_PROVIDER_MODE:-firebase}
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:?FIREBASE_PROJECT_ID must be set for production Firebase authentication}
       FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL:?FIREBASE_CLIENT_EMAIL must be set for production Firebase authentication}
@@ -98,9 +101,9 @@ services:
       AGENT_SERVICE_URL: http://agent:8003
       BILLING_SERVICE_URL: http://billing:8004
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      SERVICE_TO_SERVICE_TOKEN: ${SERVICE_TO_SERVICE_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
-      CHAT_TO_AGENT_TOKEN: ${CHAT_TO_AGENT_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
-      CHAT_TO_BILLING_TOKEN: ${CHAT_TO_BILLING_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
+      SERVICE_TO_SERVICE_TOKEN: ${SERVICE_TO_SERVICE_TOKEN:?SERVICE_TO_SERVICE_TOKEN must be set to a strong secret in production}
+      CHAT_TO_AGENT_TOKEN: ${CHAT_TO_AGENT_TOKEN:-${SERVICE_TO_SERVICE_TOKEN:?SERVICE_TO_SERVICE_TOKEN must be set}}
+      CHAT_TO_BILLING_TOKEN: ${CHAT_TO_BILLING_TOKEN:-${SERVICE_TO_SERVICE_TOKEN:?SERVICE_TO_SERVICE_TOKEN must be set}}
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
     depends_on:
       - agent
@@ -124,11 +127,21 @@ services:
       DATABASE_SCHEMA: agent
       PGPOOL_IDLE_TIMEOUT_MS: ${PGPOOL_IDLE_TIMEOUT_MS:-10000}
       PGPOOL_MAX: ${PGPOOL_MAX:-10}
-      MOCK_AI: ${MOCK_AI:-true}
-      IMAGE_PROVIDER: ${IMAGE_PROVIDER:-mock}
+      MOCK_AI: ${MOCK_AI:-false}
+      IMAGE_PROVIDER: ${IMAGE_PROVIDER:-live}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
+      GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-lite-image}
+      MAX_OUTPUT_TOKENS: ${MAX_OUTPUT_TOKENS:-8192}
+      OBJECT_STORAGE_MODE: ${OBJECT_STORAGE_MODE:-postgres}
+      OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-}
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:-}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:-}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-assets}
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-ap-southeast-1}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      INTERNAL_CALLER_TOKEN_CHAT: ${INTERNAL_CALLER_TOKEN_CHAT:-s2s-prod-compose-token-kartik-ai-v43}
+      INTERNAL_CALLER_TOKEN_CHAT: ${INTERNAL_CALLER_TOKEN_CHAT:-${CHAT_TO_AGENT_TOKEN:-${SERVICE_TO_SERVICE_TOKEN:?SERVICE_TO_SERVICE_TOKEN must be set}}}
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
     depends_on:
       - qdrant
@@ -153,10 +166,13 @@ services:
       PGPOOL_IDLE_TIMEOUT_MS: ${PGPOOL_IDLE_TIMEOUT_MS:-10000}
       PGPOOL_MAX: ${PGPOOL_MAX:-10}
       BILLING_MODE: ${BILLING_MODE:-mock}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      INTERNAL_CALLER_TOKEN_CHAT: ${INTERNAL_CALLER_TOKEN_CHAT:-s2s-prod-compose-token-kartik-ai-v43}
-      CHAT_TO_BILLING_TOKEN: ${CHAT_TO_BILLING_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
-      GATEWAY_TO_BILLING_TOKEN: ${GATEWAY_TO_BILLING_TOKEN:-s2s-prod-compose-token-kartik-ai-v43}
+      INTERNAL_CALLER_TOKEN_CHAT: ${INTERNAL_CALLER_TOKEN_CHAT:-${SERVICE_TO_SERVICE_TOKEN:?SERVICE_TO_SERVICE_TOKEN must be set}}
+      CHAT_TO_BILLING_TOKEN: ${CHAT_TO_BILLING_TOKEN:-${SERVICE_TO_SERVICE_TOKEN:?SERVICE_TO_SERVICE_TOKEN must be set}}
+      GATEWAY_TO_BILLING_TOKEN: ${GATEWAY_TO_BILLING_TOKEN:-${SERVICE_TO_SERVICE_TOKEN:?SERVICE_TO_SERVICE_TOKEN must be set}}
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
     depends_on:
       - redis

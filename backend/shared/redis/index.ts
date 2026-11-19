@@ -281,6 +281,26 @@ export function parseRespFrame(
 }
 
 /**
+ * Resolves TLS socket options for `rediss://` connections.
+ * Always verifies server certificates (`rejectUnauthorized: true`) with SNI
+ * (`servername: host`) by default. Opting out via `REDIS_TLS_INSECURE=true` is
+ * permitted only outside `NODE_ENV=production`.
+ */
+export function resolveRedisTlsOptions(
+  host: string,
+  env: Record<string, string | undefined> = process.env,
+): tls.ConnectionOptions {
+  const isProd = (env.NODE_ENV ?? '').trim().toLowerCase() === 'production';
+  const allowInsecure =
+    !isProd && (env.REDIS_TLS_INSECURE ?? '').trim().toLowerCase() === 'true';
+  return {
+    host,
+    servername: host,
+    rejectUnauthorized: !allowInsecure,
+  };
+}
+
+/**
  * Zero-dependency RESP2 TCP/TLS Redis client using `node:net` and `node:tls`.
  * Executes single-roundtrip commands with bounded socket timeouts.
  */
@@ -334,10 +354,8 @@ export class RespRedisClient implements RedisClient {
 
       const socket = this.useTls
         ? tls.connect({
-            host: this.host,
             port: this.port,
-            servername: this.host,
-            rejectUnauthorized: false,
+            ...resolveRedisTlsOptions(this.host),
           })
         : net.createConnection({ host: this.host, port: this.port });
 

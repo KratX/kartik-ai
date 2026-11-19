@@ -1,6 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { RedisKeys, REDIS_TTL_SECONDS } from '../redis/index.js';
+import {
+  RedisKeys,
+  REDIS_TTL_SECONDS,
+  resolveRedisTlsOptions,
+} from '../redis/index.js';
 
 describe('@kartik/shared/redis key contract & TTL builders (1.5.a)', () => {
   it('builds all 7 normative Redis keys with exact patterns, value types, and TTLs (§5.2)', () => {
@@ -65,5 +69,34 @@ describe('@kartik/shared/redis key contract & TTL builders (1.5.a)', () => {
     assert.throws(() => RedisKeys.session('eyJhbGciOiJFZERTQSJ9.payload.sig'), /raw JWT/);
     assert.throws(() => RedisKeys.userRateLimit('chat', 'usr:injected', 'w1'), /colons or whitespace/);
     assert.throws(() => RedisKeys.session('valid_id', 0), /positive integer/);
+  });
+
+  it('Fix #13: verifies Redis TLS certificates by default and refuses REDIS_TLS_INSECURE=true in production', () => {
+    const prodDefault = resolveRedisTlsOptions('cache.internal.kartik.ai', {
+      NODE_ENV: 'production',
+    });
+    assert.deepEqual(prodDefault, {
+      host: 'cache.internal.kartik.ai',
+      servername: 'cache.internal.kartik.ai',
+      rejectUnauthorized: true,
+    });
+
+    // Even if REDIS_TLS_INSECURE=true is set in production, TLS verification remains enforced
+    const prodInsecureIgnored = resolveRedisTlsOptions('cache.internal.kartik.ai', {
+      NODE_ENV: 'production',
+      REDIS_TLS_INSECURE: 'true',
+    });
+    assert.equal(prodInsecureIgnored.rejectUnauthorized, true);
+
+    // Local/dev environments may explicitly opt out for self-signed dev proxies
+    const devInsecure = resolveRedisTlsOptions('127.0.0.1', {
+      NODE_ENV: 'development',
+      REDIS_TLS_INSECURE: 'true',
+    });
+    assert.deepEqual(devInsecure, {
+      host: '127.0.0.1',
+      servername: '127.0.0.1',
+      rejectUnauthorized: false,
+    });
   });
 });

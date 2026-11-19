@@ -3,7 +3,7 @@
 # Build from repository root:
 #   docker build -f frontend/Dockerfile -t kartik-ai/frontend:latest .
 
-FROM node:26-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /workspace
 
 RUN corepack enable && corepack prepare pnpm@12.18.0 --activate
@@ -14,7 +14,6 @@ COPY frontend/package.json frontend/tsconfig.json frontend/vite.config.ts fronte
 
 RUN pnpm install --frozen-lockfile --filter . --filter @kartik/shared --filter @kartik/frontend
 
-COPY public ./public
 COPY backend/shared ./backend/shared
 COPY frontend ./frontend
 
@@ -27,8 +26,6 @@ COPY --from=builder /workspace/frontend/dist /usr/share/nginx/html
 RUN rm -rf /usr/share/nginx/html/src /usr/share/nginx/html/tests && test -f /usr/share/nginx/html/index.html
 
 EXPOSE 80
-
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:80/nginx-healthz || exit 1
-
 CMD ["nginx", "-g", "daemon off;"]

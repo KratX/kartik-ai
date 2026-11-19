@@ -189,6 +189,60 @@ export function extractGuestCookieId(req: Request): string | undefined {
   return safe.startsWith('gst_') && safe.length >= 12 ? safe : undefined;
 }
 
+export function extractGuestHeaderId(req: Request): string | undefined {
+  const rawHeader = req.headers['x-kartik-guest-id'];
+  const raw =
+    typeof rawHeader === 'string'
+      ? rawHeader.trim()
+      : Array.isArray(rawHeader) && typeof rawHeader[0] === 'string'
+        ? rawHeader[0].trim()
+        : '';
+  if (!raw) {
+    return undefined;
+  }
+  const safe = raw.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 48);
+  return safe.startsWith('gst_') && safe.length >= 12 ? safe : undefined;
+}
+
+export function isSecureRequest(req: Request): boolean {
+  if (req.secure) {
+    return true;
+  }
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  const protoStr =
+    typeof forwardedProto === 'string'
+      ? forwardedProto
+      : Array.isArray(forwardedProto)
+        ? forwardedProto[0] ?? ''
+        : '';
+  if (protoStr.split(',')[0]?.trim().toLowerCase() === 'https') {
+    return true;
+  }
+  return process.env.COOKIE_SECURE === 'true';
+}
+
+/**
+ * Builds an HttpOnly Set-Cookie header compatible with both local HTTP (`SameSite=Lax`)
+ * and cross-site HTTPS preview iframes (`SameSite=None; Secure; Partitioned`).
+ */
+export function buildAuthCookieHeader(
+  req: Request,
+  name: string,
+  value: string,
+  options?: { readonly maxAgeZero?: boolean },
+): string {
+  const parts = [`${name}=${value}`, 'Path=/', 'HttpOnly'];
+  if (options?.maxAgeZero) {
+    parts.push('Max-Age=0');
+  }
+  if (isSecureRequest(req)) {
+    parts.push('SameSite=None', 'Secure', 'Partitioned');
+  } else {
+    parts.push('SameSite=Lax');
+  }
+  return parts.join('; ');
+}
+
 function sendUnauthenticatedResponse(req: Request, res: Response, err: unknown): void {
   const rawTrace = req.headers['x-trace-id'];
   const traceId =
@@ -302,16 +356,19 @@ export const optionalAuth = async (
     }
   }
 
-  // Assign an isolated per-visitor guest identity via HttpOnly cookie so the app is usable without login
-  let guestId = extractGuestCookieId(req);
+  // Assign an isolated per-visitor guest identity via HttpOnly cookie (with X-Kartik-Guest-Id
+  // fallback for strict cross-site iframe cookie blocking) so the app works reliably without login.
+  const cookieGuestId = extractGuestCookieId(req);
+  const headerGuestId = extractGuestHeaderId(req);
+  let guestId = cookieGuestId ?? headerGuestId;
   if (!guestId) {
     guestId = `gst_${crypto.randomBytes(12).toString('hex')}`;
-    if (!res.headersSent) {
-      res.append(
-        'Set-Cookie',
-        `kartik_guest=${guestId}; Path=/; HttpOnly; SameSite=Lax`,
-      );
-    }
+  }
+  if (!cookieGuestId && !res.headersSent) {
+    res.append(
+      'Set-Cookie',
+      buildAuthCookieHeader(req, 'kartik_guest', guestId),
+    );
   }
   req.guestIdentity = Object.freeze({
     uid: guestId,

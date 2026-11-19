@@ -11,7 +11,7 @@
  *   and `AuthModal` (Google OAuth / HttpOnly Session Cookie).
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -40,6 +40,56 @@ import { StepFileDownloads } from './components/common/StepFileDownloads.js';
 
 function createClientIdempotencyKey(): string {
   return `idem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+const GUEST_ID_STORAGE_KEY = 'kartik_ai_guest_workspace_id';
+let fallbackMemoryGuestId: string | null = null;
+
+function getOrCreateClientGuestId(): string {
+  if (fallbackMemoryGuestId) {
+    return fallbackMemoryGuestId;
+  }
+  try {
+    const existing =
+      window.sessionStorage.getItem(GUEST_ID_STORAGE_KEY) ??
+      window.localStorage.getItem(GUEST_ID_STORAGE_KEY);
+    if (existing && /^gst_[A-Za-z0-9_-]{12,44}$/.test(existing)) {
+      fallbackMemoryGuestId = existing;
+      return existing;
+    }
+  } catch {
+    // Storage may be unavailable in restricted sandboxes
+  }
+
+  let randomHex = '';
+  try {
+    const bytes = new Uint8Array(12);
+    window.crypto.getRandomValues(bytes);
+    randomHex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    randomHex = `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 14)}`.slice(0, 24);
+  }
+  const created = `gst_${randomHex}`;
+  fallbackMemoryGuestId = created;
+  try {
+    window.sessionStorage.setItem(GUEST_ID_STORAGE_KEY, created);
+    window.localStorage.setItem(GUEST_ID_STORAGE_KEY, created);
+  } catch {
+    // Ignore storage quota / sandbox restrictions
+  }
+  return created;
+}
+
+function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers ?? undefined);
+  if (!headers.has('X-Kartik-Guest-Id')) {
+    headers.set('X-Kartik-Guest-Id', getOrCreateClientGuestId());
+  }
+  return fetch(input, {
+    ...init,
+    credentials: 'include',
+    headers,
+  });
 }
 
 export function App() {
@@ -85,12 +135,21 @@ export function App() {
     readonly attachmentFileIds?: string[];
   } | null>(null);
 
+  const activeConversationIdRef = useRef<string>(activeConversationId);
+  const messagesLoadSeqRef = useRef(0);
+  const hasBootstrappedRef = useRef(false);
+
+  const setActiveConversationIdSafe = useCallback((convId: string) => {
+    activeConversationIdRef.current = convId;
+    setActiveConversationId(convId);
+  }, []);
+
   const refreshBillingAndAuth = useCallback(async () => {
     try {
       const [authRes, billingRes, filesRes] = await Promise.all([
-        fetch('/api/v1/auth/me', { credentials: 'include' }),
-        fetch('/api/v1/billing/balance', { credentials: 'include' }),
-        fetch('/api/v1/files', { credentials: 'include' }),
+        apiFetch('/api/v1/auth/me'),
+        apiFetch('/api/v1/billing/balance'),
+        apiFetch('/api/v1/files'),
       ]);
 
       const authJson = (await authRes.json()) as ApiEnvelope<{
@@ -127,16 +186,19 @@ export function App() {
   }, []);
 
   const loadConversationMessages = useCallback(async (convId: string) => {
+    const seq = ++messagesLoadSeqRef.current;
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/v1/conversations/${encodeURIComponent(convId)}/messages`,
-        { credentials: 'include' },
       );
       const json = (await res.json()) as ApiEnvelope<{
         conversation: PlatformConversation;
         messages?: readonly PlatformMessage[];
         items?: readonly PlatformMessage[];
       }>;
+      if (seq !== messagesLoadSeqRef.current) {
+        return;
+      }
       if (json.ok) {
         const loadedMessages = json.data.messages ?? json.data.items ?? [];
         setMessages(loadedMessages);
@@ -144,9 +206,7 @@ export function App() {
           .reverse()
           .flatMap((m) => m.artifacts ?? [])
           .find((a) => a.artifactType === 'code_bundle');
-        if (latestCodeArt) {
-          setActiveCodeArtifact(latestCodeArt);
-        }
+        setActiveCodeArtifact(latestCodeArt ?? null);
       }
     } catch {
       // Non-fatal
@@ -154,11 +214,12 @@ export function App() {
   }, []);
 
   const refreshConversations = useCallback(
-    async (preferredConvId?: string) => {
+    async (
+      preferredConvId?: string,
+      options?: { readonly skipMessageReload?: boolean },
+    ) => {
       try {
-        const res = await fetch('/api/v1/conversations', {
-          credentials: 'include',
-        });
+        const res = await apiFetch('/api/v1/conversations');
         const json = (await res.json()) as ApiEnvelope<{
           conversations?: readonly PlatformConversation[];
           items?: readonly PlatformConversation[];
@@ -166,30 +227,40 @@ export function App() {
         if (json.ok) {
           const list = json.data.conversations ?? json.data.items ?? [];
           setConversations(list);
+          const currentActive = activeConversationIdRef.current;
           const targetId =
-            preferredConvId ??
-            (list.some((c) => c.conversationId === activeConversationId)
-              ? activeConversationId
+            (preferredConvId &&
+            list.some((c) => c.conversationId === preferredConvId)
+              ? preferredConvId
+              : undefined) ??
+            (list.some((c) => c.conversationId === currentActive)
+              ? currentActive
               : list[0]?.conversationId);
           if (targetId) {
-            setActiveConversationId(targetId);
-            await loadConversationMessages(targetId);
+            setActiveConversationIdSafe(targetId);
+            if (!options?.skipMessageReload) {
+              await loadConversationMessages(targetId);
+            }
           }
         }
       } catch {
         // Non-fatal
       }
     },
-    [activeConversationId, loadConversationMessages],
+    [loadConversationMessages, setActiveConversationIdSafe],
   );
 
   useEffect(() => {
+    if (hasBootstrappedRef.current) {
+      return;
+    }
+    hasBootstrappedRef.current = true;
     void refreshBillingAndAuth();
-    void refreshConversations('conv_welcome_01');
+    void refreshConversations();
   }, [refreshBillingAndAuth, refreshConversations]);
 
   const handleSelectConversation = async (conversationId: string) => {
-    setActiveConversationId(conversationId);
+    setActiveConversationIdSafe(conversationId);
     setErrorBanner(null);
     await loadConversationMessages(conversationId);
   };
@@ -197,9 +268,8 @@ export function App() {
   const handleCreateConversation = async () => {
     setErrorBanner(null);
     try {
-      const res = await fetch('/api/v1/conversations', {
+      const res = await apiFetch('/api/v1/conversations', {
         method: 'POST',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           'Idempotency-Key': createClientIdempotencyKey(),
@@ -211,8 +281,14 @@ export function App() {
         setErrorBanner(`${json.error.code}: ${json.error.message}`);
         return;
       }
-      await refreshConversations(json.data.conversationId);
+      messagesLoadSeqRef.current += 1;
+      setMessages([]);
       setActiveCodeArtifact(null);
+      setIsArtifactPanelOpen(false);
+      setActiveConversationIdSafe(json.data.conversationId);
+      await refreshConversations(json.data.conversationId, {
+        skipMessageReload: true,
+      });
     } catch (err) {
       setErrorBanner(
         err instanceof Error ? err.message : 'Failed to create conversation.',
@@ -223,11 +299,10 @@ export function App() {
   const handleDeleteConversation = async (conversationId: string) => {
     setErrorBanner(null);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/v1/conversations/${encodeURIComponent(conversationId)}`,
         {
           method: 'DELETE',
-          credentials: 'include',
           headers: {
             'Idempotency-Key': createClientIdempotencyKey(),
           },
@@ -270,11 +345,11 @@ export function App() {
     setStatusBanner(null);
 
     try {
-      const res = await fetch(
-        `/api/v1/conversations/${encodeURIComponent(input.conversationId)}/messages`,
+      const targetConvId = input.conversationId || 'conv_welcome_01';
+      const res = await apiFetch(
+        `/api/v1/conversations/${encodeURIComponent(targetConvId)}/messages`,
         {
           method: 'POST',
-          credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
             'Idempotency-Key': input.requestId,
@@ -303,7 +378,11 @@ export function App() {
         return;
       }
 
-      setLastTurnReplayPayload(input);
+      const resolvedConvId = json.data.conversationId || targetConvId;
+      setLastTurnReplayPayload({
+        ...input,
+        conversationId: resolvedConvId,
+      });
       setAvailableCredits(json.data.remainingCredits);
       setAttachedTurnFiles([]);
 
@@ -321,8 +400,9 @@ export function App() {
         setIsArtifactPanelOpen(true);
       }
 
-      const resolvedConvId = json.data.conversationId || input.conversationId;
-      setActiveConversationId(resolvedConvId);
+      // Bump load sequence so any stale in-flight GET /messages response cannot clobber this turn
+      messagesLoadSeqRef.current += 1;
+      setActiveConversationIdSafe(resolvedConvId);
       setMessages((prev) => {
         const exists = prev.some(
           (m) => m.messageId === json.data.assistantMessage.messageId,
@@ -333,9 +413,10 @@ export function App() {
         return [...prev, json.data.userMessage, json.data.assistantMessage];
       });
 
-      await loadConversationMessages(resolvedConvId);
-      await refreshConversations(resolvedConvId);
-      await refreshBillingAndAuth();
+      await Promise.all([
+        refreshConversations(resolvedConvId, { skipMessageReload: true }),
+        refreshBillingAndAuth(),
+      ]);
     } catch (err) {
       setErrorBanner(
         err instanceof Error ? err.message : 'Failed to execute agent turn.',
@@ -350,7 +431,7 @@ export function App() {
     preferredAgent?: SpecialistAgentName,
   ) => {
     await executeTurnRequest({
-      conversationId: activeConversationId,
+      conversationId: activeConversationIdRef.current || 'conv_welcome_01',
       requestId: createClientIdempotencyKey(),
       prompt,
       preferredAgent,
@@ -382,15 +463,14 @@ export function App() {
     setErrorBanner(null);
 
     try {
-      const res = await fetch('/api/v1/files/upload', {
+      const res = await apiFetch('/api/v1/files/upload', {
         method: 'POST',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           'Idempotency-Key': createClientIdempotencyKey(),
         },
         body: JSON.stringify({
-          conversationId: activeConversationId,
+          conversationId: activeConversationIdRef.current || 'conv_welcome_01',
           originalFilename: file.originalFilename,
           declaredMimeType: file.declaredMimeType,
           contentBase64: file.contentBase64,
@@ -426,9 +506,8 @@ export function App() {
   const handleToggleDemoReadOnly = async () => {
     setErrorBanner(null);
     try {
-      const res = await fetch('/api/v1/demo/toggle-read-only', {
+      const res = await apiFetch('/api/v1/demo/toggle-read-only', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: !demoReadOnly }),
       });
@@ -448,9 +527,8 @@ export function App() {
 
   // Billing Order & Razorpay Signature Verification
   const handleCreateOrder = async (planId: string) => {
-    const res = await fetch('/api/v1/billing/orders', {
+    const res = await apiFetch('/api/v1/billing/orders', {
       method: 'POST',
-      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         'Idempotency-Key': createClientIdempotencyKey(),
@@ -486,9 +564,8 @@ export function App() {
       readonly signature?: string;
     },
   ) => {
-    const res = await fetch('/api/v1/billing/verify', {
+    const res = await apiFetch('/api/v1/billing/verify', {
       method: 'POST',
-      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         'Idempotency-Key': createClientIdempotencyKey(),
@@ -571,9 +648,8 @@ export function App() {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${resolvedIdToken}`,
     };
-    const res = await fetch('/api/v1/auth/google', {
+    const res = await apiFetch('/api/v1/auth/google', {
       method: 'POST',
-      credentials: 'include',
       headers,
       body: JSON.stringify({
         idToken: resolvedIdToken,
@@ -628,9 +704,8 @@ export function App() {
   };
 
   const handleLogout = async () => {
-    const res = await fetch('/api/v1/auth/logout', {
+    const res = await apiFetch('/api/v1/auth/logout', {
       method: 'POST',
-      credentials: 'include',
     });
     const json = (await res.json()) as {
       readonly ok?: boolean;
@@ -688,7 +763,9 @@ export function App() {
               setIsArtifactPanelOpen((prev) => !prev)
             }
             onOpenBillingDrawer={() => setIsBillingDrawerOpen(true)}
-            onOpenFixDownloads={() => setIsFixDownloadsOpen(true)}
+            onOpenFixDownloads={
+              import.meta.env.DEV ? () => setIsFixDownloadsOpen(true) : undefined
+            }
           />
 
           {/* Status / Error Banner */}
@@ -777,8 +854,8 @@ export function App() {
         onGoogleSignIn={handleLoginWithGoogle}
       />
 
-      {/* Fix & Changed Files Download Modal */}
-      {isFixDownloadsOpen && (
+      {/* Fix & Changed Files Download Modal (Dev-only) */}
+      {import.meta.env.DEV && isFixDownloadsOpen && (
         <div
           className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={() => setIsFixDownloadsOpen(false)}

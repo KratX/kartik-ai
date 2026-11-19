@@ -2,7 +2,10 @@ import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { DecodedIdToken } from 'firebase-admin/auth';
-import { createKartikExpressApp } from '../../server.ts';
+import {
+  createKartikExpressApp,
+  isAllowedDevDownloadPath,
+} from '../../server.ts';
 import {
   assertRootRuntimeDemoOrLocalOnly,
   KartikPlatformRuntime,
@@ -1056,6 +1059,225 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it('Fix #9: issues SameSite=None; Secure; Partitioned cookies over HTTPS and preserves guest workspace via X-Kartik-Guest-Id when iframe cookies are blocked', async () => {
+    const validTokens: Record<string, DecodedIdToken> = {
+      'verified-firebase-jwt-https': buildDecodedFirebaseToken({
+        uid: 'fb_https_user_01',
+        email: 'https.user@example.com',
+        name: 'HTTPS User',
+      }),
+    };
+    setFirebaseTokenVerifierForTests(async (token: string) => {
+      const match = validTokens[token];
+      if (!match) {
+        throw new Error('FirebaseAuthError: Invalid ID token');
+      }
+      return match;
+    });
+
+    const runtime = new KartikPlatformRuntime();
+    const app = createKartikExpressApp(runtime);
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      // 1. HTTPS proxied request gets SameSite=None; Secure; Partitioned on kartik_guest & kartik_session
+      const httpsGuestRes = await fetch(`${baseUrl}/api/v1/conversations`, {
+        headers: { 'X-Forwarded-Proto': 'https' },
+      });
+      assert.equal(httpsGuestRes.status, 200);
+      const httpsGuestCookie = httpsGuestRes.headers.get('set-cookie') ?? '';
+      assert.match(httpsGuestCookie, /SameSite=None/);
+      assert.match(httpsGuestCookie, /Secure/);
+      assert.match(httpsGuestCookie, /Partitioned/);
+
+      const httpsLoginRes = await fetch(`${baseUrl}/api/v1/auth/google`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'X-Forwarded-Proto': 'https',
+        },
+        body: JSON.stringify({ idToken: 'verified-firebase-jwt-https' }),
+      });
+      assert.equal(httpsLoginRes.status, 200);
+      const httpsSessionCookie = httpsLoginRes.headers.get('set-cookie') ?? '';
+      assert.match(httpsSessionCookie, /kartik_session=/);
+      assert.match(httpsSessionCookie, /SameSite=None/);
+      assert.match(httpsSessionCookie, /Secure/);
+      assert.match(httpsSessionCookie, /Partitioned/);
+
+      // 2. When browser blocks cookies in a cross-site iframe, X-Kartik-Guest-Id keeps messages intact across requests
+      const iframeGuestId = 'gst_iframepreview1234567890ab';
+      const listRes1 = await fetch(`${baseUrl}/api/v1/conversations`, {
+        headers: { 'X-Kartik-Guest-Id': iframeGuestId },
+      });
+      assert.equal(listRes1.status, 200);
+      const listJson1 = (await listRes1.json()) as {
+        data: { items: Array<{ conversationId: string }> };
+      };
+      const convId = listJson1.data.items[0]!.conversationId;
+
+      const postTurnRes = await fetch(
+        `${baseUrl}/api/v1/conversations/${encodeURIComponent(convId)}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'X-Kartik-Guest-Id': iframeGuestId,
+            'Idempotency-Key': 'req_fix9_iframe_turn_01',
+          },
+          body: JSON.stringify({
+            prompt: 'Verify messages persist across requests without cookies',
+            preferredAgent: 'chat',
+          }),
+        },
+      );
+      assert.equal(postTurnRes.status, 201);
+
+      // Follow-up GET /messages with NO Cookie header (only X-Kartik-Guest-Id) still returns both messages
+      const getMsgsRes = await fetch(
+        `${baseUrl}/api/v1/conversations/${encodeURIComponent(convId)}/messages`,
+        {
+          headers: { 'X-Kartik-Guest-Id': iframeGuestId },
+        },
+      );
+      assert.equal(getMsgsRes.status, 200);
+      const getMsgsJson = (await getMsgsRes.json()) as {
+        data: { items: Array<{ role: string; content: string }> };
+      };
+      assert.equal(getMsgsJson.data.items.length, 3);
+      assert.equal(getMsgsJson.data.items[1]?.role, 'user');
+      assert.ok(
+        getMsgsJson.data.items[1]?.content.includes(
+          'Verify messages persist across requests without cookies',
+        ),
+      );
+      assert.equal(getMsgsJson.data.items[2]?.role, 'assistant');
+
+      // 3. Authenticated Firebase Bearer token still takes strict precedence over X-Kartik-Guest-Id
+      const authMeRes = await fetch(`${baseUrl}/api/v1/auth/me`, {
+        headers: {
+          Authorization: 'Bearer verified-firebase-jwt-https',
+          'X-Kartik-Guest-Id': iframeGuestId,
+        },
+      });
+      assert.equal(authMeRes.status, 200);
+      const authMeJson = (await authMeRes.json()) as {
+        data: { isAuthenticated: boolean; user: { userId: string } | null };
+      };
+      assert.equal(authMeJson.data.isAuthenticated, true);
+      assert.equal(authMeJson.data.user?.userId, 'fb_https_user_01');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('Fix #13: hardens /__downloads/file against secrets/dotfiles/keys and disables /__downloads in production', async () => {
+    // 1. Unit-level path validation checks
+    assert.equal(isAllowedDevDownloadPath('server.ts'), true);
+    assert.equal(isAllowedDevDownloadPath('.env.example'), true);
+    assert.equal(
+      isAllowedDevDownloadPath('infra/aws/ec2-compose/.env.prod.example'),
+      true,
+    );
+    assert.equal(
+      isAllowedDevDownloadPath('backend/shared/redis/index.ts'),
+      true,
+    );
+
+    const forbiddenPaths = [
+      '.env',
+      '.env.local',
+      'infra/aws/ec2-compose/.env.prod',
+      'infra/aws/ec2-compose/secrets/user_context_signing_key.pem',
+      'infra/aws/ec2-compose/secrets/user_context_public_key.pem',
+      'firebase-applet-config.json',
+      'src/firebase-applet-config.json',
+      'infra/service-account.json',
+      '../package.json',
+      '/etc/passwd',
+      'backend/shared/.secret',
+      'infra/tls/server.key',
+      'data/local.sqlite',
+    ];
+    for (const forbidden of forbiddenPaths) {
+      assert.equal(
+        isAllowedDevDownloadPath(forbidden),
+        false,
+        `Expected isAllowedDevDownloadPath to block "${forbidden}"`,
+      );
+    }
+
+    // 2. Live HTTP check in dev mode: blocks secret/key reads (400), allows allowlisted source file (200)
+    const devRuntime = new KartikPlatformRuntime();
+    const devApp = createKartikExpressApp(devRuntime, {
+      ...process.env,
+      NODE_ENV: 'development',
+    });
+    const devServer = http.createServer(devApp);
+    await new Promise<void>((resolve) =>
+      devServer.listen(0, '127.0.0.1', resolve),
+    );
+    const devAddr = devServer.address();
+    const devPort = typeof devAddr === 'object' && devAddr ? devAddr.port : 0;
+    const devBaseUrl = `http://127.0.0.1:${devPort}`;
+
+    try {
+      const secretPemRes = await fetch(
+        `${devBaseUrl}/__downloads/file?path=${encodeURIComponent(
+          'infra/aws/ec2-compose/secrets/user_context_signing_key.pem',
+        )}`,
+      );
+      assert.equal(secretPemRes.status, 400);
+
+      const dotEnvProdRes = await fetch(
+        `${devBaseUrl}/__downloads/file?path=${encodeURIComponent(
+          'infra/aws/ec2-compose/.env.prod',
+        )}`,
+      );
+      assert.equal(dotEnvProdRes.status, 400);
+
+      const allowedExampleRes = await fetch(
+        `${devBaseUrl}/__downloads/file?path=${encodeURIComponent(
+          'infra/aws/ec2-compose/.env.prod.example',
+        )}`,
+      );
+      assert.equal(allowedExampleRes.status, 200);
+    } finally {
+      await new Promise<void>((resolve) => devServer.close(() => resolve()));
+    }
+
+    // 3. Live HTTP check in production demo mode: /__downloads/file is completely unmounted (404)
+    const prodRuntime = new KartikPlatformRuntime();
+    const prodApp = createKartikExpressApp(prodRuntime, {
+      ...process.env,
+      NODE_ENV: 'production',
+      DEMO_MODE: 'true',
+      ALLOW_DEV_DOWNLOADS: 'false',
+    });
+    const prodServer = http.createServer(prodApp);
+    await new Promise<void>((resolve) =>
+      prodServer.listen(0, '127.0.0.1', resolve),
+    );
+    const prodAddr = prodServer.address();
+    const prodPort =
+      typeof prodAddr === 'object' && prodAddr ? prodAddr.port : 0;
+    const prodBaseUrl = `http://127.0.0.1:${prodPort}`;
+
+    try {
+      const prodDownloadRes = await fetch(
+        `${prodBaseUrl}/__downloads/file?path=server.ts`,
+      );
+      assert.equal(prodDownloadRes.status, 404);
+    } finally {
+      await new Promise<void>((resolve) => prodServer.close(() => resolve()));
+    }
+  });
 });
+
 
 

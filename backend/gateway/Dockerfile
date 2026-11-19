@@ -3,7 +3,7 @@
 # Build from repository root:
 #   docker build -f backend/gateway/Dockerfile -t kartik-ai/gateway:latest .
 
-FROM node:26-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /workspace
 
 RUN corepack enable && corepack prepare pnpm@12.18.0 --activate
@@ -19,7 +19,7 @@ COPY backend/gateway ./backend/gateway
 
 RUN pnpm --filter @kartik/shared run build && pnpm --filter @kartik/gateway run build
 
-FROM node:26-alpine AS runner
+FROM node:24-alpine AS runner
 WORKDIR /workspace
 
 ENV NODE_ENV=production
