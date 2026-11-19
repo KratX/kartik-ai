@@ -17,6 +17,49 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-4',
+    title: 'Fix #4 — Unify Chat & Billing Domain Logic (Idempotency Fingerprinting & Two-Phase Credit Reservations)',
+    subtitle:
+      '5 files · Enforces client-owned Idempotency-Key, SHA-256 payload fingerprint conflict detection (409) & two-phase credit reserve/release/settle/execution_unknown state machine',
+    zipFilename: 'fix-4-unify-chat-billing-domain-logic.zip',
+    zipHref: '/__downloads/fix-4-unify-chat-billing-domain-logic.zip',
+    commitMessage: `feat(chat,billing): unify chat and billing domain invariants in KartikPlatformRuntime
+
+- Enforce client-owned Idempotency-Key on POST /api/v1/conversations/:id/messages, POST /api/v1/billing/orders, and POST /api/v1/billing/verify (400 IDEMPOTENCY_KEY_REQUIRED when omitted)
+- Compute deterministic SHA-256 payload fingerprints via computePayloadFingerprint from @kartik/shared/contracts and reject reused Idempotency-Keys with mutated payloads (409 IDEMPOTENCY_CONFLICT)
+- Replace single-step post-execution credit deduction in KartikPlatformRuntime.sendMessageTurn with a two-phase credit reservation state machine (reserve -> execute -> settle | release | execution_unknown)
+- Automatically release reserved credits back to availableCredits on confirmed downstream execution errors, hold credits in reservedCredits on EXECUTION_UNKNOWN timeouts, and add reconcileUnknownTurn
+- Persist and hydrate reservedCredits across src/db/platform-repository.ts and KartikPlatformRuntime
+- Add unit tests in src/server/platform-multi-user-isolation.test.ts covering missing Idempotency-Key, payload fingerprint conflicts, automatic reservation release, and EXECUTION_UNKNOWN reconciliation`,
+    changedFiles: [
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'src/db/platform-repository.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/db/platform-repository.ts',
+      },
+      {
+        path: 'server.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=server.ts',
+      },
+      {
+        path: 'src/server/platform-multi-user-isolation.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-multi-user-isolation.test.ts',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
     id: 'fix-3',
     title: 'Fix #3 — Harden PostgreSQL TLS Certificate Verification (sslmode=verify-full / verify-ca / require)',
     subtitle:

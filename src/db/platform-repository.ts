@@ -52,6 +52,7 @@ export interface PersistedUserProfileRecord {
   readonly avatarUrl: string | null;
   readonly planId: 'plan_free' | 'plan_starter_199' | 'plan_pro_499';
   readonly availableCredits: number;
+  readonly reservedCredits?: number;
 }
 
 export interface PersistedConversationRecord {
@@ -147,6 +148,7 @@ export interface SyncBillingLedgerInput {
   readonly displayName: string;
   readonly planId: string;
   readonly availableCredits: number;
+  readonly reservedCredits?: number;
   readonly entryId: string;
   readonly requestId: string;
   readonly description: string;
@@ -661,6 +663,7 @@ export async function loadPlatformUserSnapshotFromCloudSql(
           avatarUrl: userRow.avatarUrl,
           planId: normalizePlanId(userRow.planId),
           availableCredits: userRow.availableCredits,
+          reservedCredits: userRow.reservedCredits,
         })
       : null;
 
@@ -869,6 +872,9 @@ export async function syncPlatformBillingLedgerToCloudSql(
       .set({
         planId: input.planId,
         availableCredits: input.availableCredits,
+        ...(input.reservedCredits !== undefined
+          ? { reservedCredits: input.reservedCredits }
+          : {}),
         updatedAt: new Date(),
       })
       .where(eq(users.uid, input.userId));
@@ -998,6 +1004,7 @@ export class InMemoryPlatformPersistenceAdapter
           : (existing?.avatarUrl ?? null),
       planId: existing?.planId ?? 'plan_free',
       availableCredits: existing?.availableCredits ?? 250,
+      reservedCredits: existing?.reservedCredits ?? 0,
     };
     this.usersById.set(input.userId, next);
     return next;
@@ -1113,6 +1120,8 @@ export class InMemoryPlatformPersistenceAdapter
       ...existingUser,
       planId: normalizePlanId(input.planId),
       availableCredits: input.availableCredits,
+      reservedCredits:
+        input.reservedCredits ?? existingUser.reservedCredits ?? 0,
     });
     if (!this.ledgerById.has(input.entryId)) {
       this.ledgerById.set(input.entryId, {

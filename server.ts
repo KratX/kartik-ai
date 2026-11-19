@@ -311,7 +311,7 @@ export function createKartikExpressApp(
         const requestId =
           readHeaderString(req, 'idempotency-key') ??
           readHeaderString(req, 'x-request-id') ??
-          `req_${crypto.randomBytes(8).toString('hex')}`;
+          '';
         const traceId =
           readHeaderString(req, 'x-trace-id') ??
           `trc_${crypto.randomBytes(8).toString('hex')}`;
@@ -482,13 +482,20 @@ export function createKartikExpressApp(
       const actor = resolveWorkspaceIdentity(req);
       const requestId =
         readHeaderString(req, 'idempotency-key') ??
-        `req_ord_${crypto.randomBytes(8).toString('hex')}`;
+        readHeaderString(req, 'x-request-id') ??
+        '';
       const body = (req.body ?? {}) as { planId?: string };
       const order = await runtime.createBillingOrder(actor, {
         planId: String(body.planId ?? ''),
         requestId,
       });
-      sendEnvelope(req, res, 201, order, requestId);
+      sendEnvelope(
+        req,
+        res,
+        order.idempotentReplay ? 200 : 201,
+        order,
+        requestId,
+      );
     } catch (err) {
       sendError(req, res, err);
     }
@@ -502,7 +509,8 @@ export function createKartikExpressApp(
         await runtime.hydrateUserFromPersistence(actor);
         const requestId =
           readHeaderString(req, 'idempotency-key') ??
-          `req_chk_${crypto.randomBytes(8).toString('hex')}`;
+          readHeaderString(req, 'x-request-id') ??
+          '';
         const body = (req.body ?? {}) as {
           orderId?: string;
           paymentId?: string;

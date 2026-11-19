@@ -48,7 +48,10 @@ import {
   type SearchImageGalleryItem,
   type UploadedFileRecord,
 } from '../../backend/services/agent/src/index.js';
-import type { SpecialistAgentName } from '../../backend/shared/contracts/index.js';
+import {
+  computePayloadFingerprint,
+  type SpecialistAgentName,
+} from '../../backend/shared/contracts/index.js';
 import {
   cloudSqlPlatformPersistenceAdapter,
   DrizzleCloudSqlAgentRepository,
@@ -147,6 +150,22 @@ export interface PlatformLedgerEntry {
   readonly deltaCredits: number;
   readonly balanceAfter: number;
   readonly requestId: string;
+  readonly reservationId?: string;
+}
+
+export interface PlatformCreditReservation {
+  readonly reservationId: string;
+  readonly requestId: string;
+  readonly userId: string;
+  readonly conversationId: string;
+  readonly agent: SpecialistAgentName;
+  readonly operation: string;
+  readonly reservedCredits: number;
+  settledCredits: number | null;
+  status: 'reserved' | 'settled' | 'released' | 'execution_unknown';
+  readonly payloadFingerprint: string;
+  readonly createdAt: string;
+  updatedAt: string;
 }
 
 const INITIAL_FREE_CREDITS = 250;
@@ -223,16 +242,23 @@ export class KartikPlatformRuntime {
   private readonly usersById = new Map<string, PlatformUser>();
   private readonly sessionsById = new Map<string, PlatformSessionRecord>();
   private readonly creditsByUserId = new Map<string, number>();
+  private readonly reservedCreditsByUserId = new Map<string, number>();
   private readonly ledgerByUserId = new Map<string, PlatformLedgerEntry[]>();
   private readonly seededWelcomeUsers = new Set<string>();
   private readonly conversations = new Map<string, PlatformConversation>();
   private readonly messagesByConversation = new Map<string, PlatformMessage[]>();
+  private readonly reservationsByUserAndRequestId = new Map<
+    string,
+    PlatformCreditReservation
+  >();
   private readonly processedTurnsByUserAndRequestId = new Map<
     string,
     {
       readonly conversationId: string;
       readonly requestId: string;
       readonly traceId: string;
+      readonly reservationId: string;
+      readonly payloadFingerprint: string;
       readonly remainingCredits: number;
       readonly creditsCharged: number;
       readonly idempotentReplay: boolean;
@@ -246,7 +272,25 @@ export class KartikPlatformRuntime {
       readonly orderId: string;
       readonly plan: PlatformCreditPlan;
       readonly userId: string;
+      readonly requestId?: string;
       settled: boolean;
+    }
+  >();
+  private readonly ordersByUserAndRequestId = new Map<
+    string,
+    {
+      readonly payloadFingerprint: string;
+      readonly orderId: string;
+    }
+  >();
+  private readonly verifiedCheckoutsByUserAndRequestId = new Map<
+    string,
+    {
+      readonly payloadFingerprint: string;
+      readonly orderId: string;
+      readonly paymentId: string;
+      readonly signature: string;
+      readonly planId: 'plan_starter_199' | 'plan_pro_499';
     }
   >();
 
@@ -345,6 +389,12 @@ export class KartikPlatformRuntime {
         planId: snapshot.user.planId,
       });
       this.creditsByUserId.set(safeUserId, snapshot.user.availableCredits);
+      if (snapshot.user.reservedCredits !== undefined) {
+        this.reservedCreditsByUserId.set(
+          safeUserId,
+          snapshot.user.reservedCredits,
+        );
+      }
     }
 
     if (snapshot.ledgerEntries.length > 0) {
@@ -393,6 +443,7 @@ export class KartikPlatformRuntime {
     if (snapshot.messages.length > 0) {
       const grouped = new Map<string, PlatformMessage[]>();
       const userMsgByReqId = new Map<string, PlatformMessage>();
+      const userAttachedIdsByReqId = new Map<string, readonly string[]>();
       const assistantMsgByReqId = new Map<string, PlatformMessage>();
 
       for (const msg of snapshot.messages) {
@@ -435,6 +486,7 @@ export class KartikPlatformRuntime {
         if (msg.requestId) {
           if (msg.role === 'user') {
             userMsgByReqId.set(msg.requestId, platformMsg);
+            userAttachedIdsByReqId.set(msg.requestId, msg.attachedFileIds);
           } else {
             assistantMsgByReqId.set(msg.requestId, platformMsg);
           }
@@ -450,10 +502,36 @@ export class KartikPlatformRuntime {
       for (const [reqId, assistantMsg] of assistantMsgByReqId.entries()) {
         const userMsg = userMsgByReqId.get(reqId);
         if (userMsg) {
+          const attachedIds = userAttachedIdsByReqId.get(reqId) ?? [];
+          const agent = (assistantMsg.agentUsed ?? 'chat') as SpecialistAgentName;
+          const payloadFingerprint = computePayloadFingerprint({
+            userId: safeUserId,
+            conversationId: assistantMsg.conversationId,
+            prompt: userMsg.content,
+            targetAgent: agent,
+            attachmentFileIds: [...attachedIds],
+          });
+          const reservationId = `rsv_hydrated_${reqId}`;
+          this.reservationsByUserAndRequestId.set(`${safeUserId}:${reqId}`, {
+            reservationId,
+            requestId: reqId,
+            userId: safeUserId,
+            conversationId: assistantMsg.conversationId,
+            agent,
+            operation: AGENT_TO_BILLING_OPERATION[agent],
+            reservedCredits: assistantMsg.creditsCharged ?? 0,
+            settledCredits: assistantMsg.creditsCharged ?? 0,
+            status: 'settled',
+            payloadFingerprint,
+            createdAt: userMsg.createdAt,
+            updatedAt: assistantMsg.createdAt,
+          });
           this.processedTurnsByUserAndRequestId.set(`${safeUserId}:${reqId}`, {
             conversationId: assistantMsg.conversationId,
             requestId: reqId,
             traceId: `trc_hydrated_${reqId}`,
+            reservationId,
+            payloadFingerprint,
             remainingCredits: currentCredits,
             creditsCharged: assistantMsg.creditsCharged ?? 0,
             idempotentReplay: true,
@@ -471,8 +549,22 @@ export class KartikPlatformRuntime {
           orderId: order.orderId,
           plan,
           userId: safeUserId,
+          requestId: order.requestId,
           settled: order.settled,
         });
+        if (order.requestId) {
+          this.ordersByUserAndRequestId.set(
+            `${safeUserId}:${order.requestId}`,
+            {
+              payloadFingerprint: computePayloadFingerprint({
+                userId: safeUserId,
+                operation: 'create_billing_order',
+                planId: plan.planId,
+              }),
+              orderId: order.orderId,
+            },
+          );
+        }
       }
     }
   }
@@ -1004,20 +1096,20 @@ export class KartikPlatformRuntime {
     this.assertWritable();
     const user = await this.hydrateUserFromPersistence(actor);
 
-    if (!input.requestId || input.requestId.trim().length === 0) {
+    const requestId = (input.requestId ?? '').trim();
+    if (!requestId) {
       throw new AppError(
         'IDEMPOTENCY_KEY_REQUIRED',
         'Mutating requests require an Idempotency-Key header',
       );
     }
 
-    const scopedRequestIdKey = `${user.userId}:${input.requestId.trim()}`;
-    const existingReplay = this.processedTurnsByUserAndRequestId.get(scopedRequestIdKey);
-    if (existingReplay) {
-      return {
-        ...existingReplay,
-        idempotentReplay: true,
-      };
+    const trimmedPrompt = input.prompt.trim();
+    if (!trimmedPrompt) {
+      throw new AppError(
+        'VALIDATION_FAILED',
+        'Message prompt must not be empty',
+      );
     }
 
     const resolvedConvId =
@@ -1025,16 +1117,15 @@ export class KartikPlatformRuntime {
         ? `conv_welcome_${user.userId}`
         : input.conversationId;
 
-    let conv = this.conversations.get(resolvedConvId);
-    if (conv && conv.userId !== user.userId) {
+    // 1. Enforce conversation ownership before idempotency lookup (Invariant #20: 404 NOT_FOUND on foreign resource)
+    const existingConv = this.conversations.get(resolvedConvId);
+    if (existingConv && existingConv.userId !== user.userId) {
       throw new AppError('NOT_FOUND', 'Conversation not found');
     }
-    if (!conv || conv.deletionState === 'deleted') {
-      conv = this.createConversation(actor, input.prompt.slice(0, 56));
-    }
 
+    const attachmentFileIds = [...(input.attachmentFileIds ?? [])];
     const attachedFiles: UploadedFileRecord[] = [];
-    for (const fileId of input.attachmentFileIds ?? []) {
+    for (const fileId of attachmentFileIds) {
       const f = await this.repository.getFileById(user.userId, fileId);
       if (!f) {
         throw new AppError('NOT_FOUND', `Attached file "${fileId}" not found`);
@@ -1043,11 +1134,74 @@ export class KartikPlatformRuntime {
     }
 
     const targetAgent = resolveTargetSpecialist({
-      prompt: input.prompt,
+      prompt: trimmedPrompt,
       requestedAgent: input.preferredAgent,
-      attachmentFileIds: input.attachmentFileIds,
+      attachmentFileIds,
       hasImageBytes: attachedFiles.some((f) => f.mimeType.startsWith('image/')),
     });
+
+    const targetConvIdForFingerprint =
+      existingConv && existingConv.deletionState !== 'deleted'
+        ? existingConv.conversationId
+        : resolvedConvId;
+
+    const payloadFingerprint = computePayloadFingerprint({
+      userId: user.userId,
+      conversationId: targetConvIdForFingerprint,
+      prompt: trimmedPrompt,
+      targetAgent,
+      attachmentFileIds,
+    });
+
+    const scopedRequestIdKey = `${user.userId}:${requestId}`;
+
+    // 2. Check idempotent turn cache and verify SHA-256 payload fingerprint (§5.4, Invariant #15)
+    const existingReplay =
+      this.processedTurnsByUserAndRequestId.get(scopedRequestIdKey);
+    if (existingReplay) {
+      if (existingReplay.payloadFingerprint !== payloadFingerprint) {
+        throw new AppError(
+          'IDEMPOTENCY_CONFLICT',
+          'Idempotency-Key was already used with a different message payload',
+        );
+      }
+      return {
+        ...existingReplay,
+        remainingCredits:
+          this.creditsByUserId.get(user.userId) ??
+          existingReplay.remainingCredits,
+        idempotentReplay: true,
+      };
+    }
+
+    // 3. Check in-flight or execution_unknown credit reservation for this requestId (§10 & §11)
+    const existingReservation =
+      this.reservationsByUserAndRequestId.get(scopedRequestIdKey);
+    if (existingReservation) {
+      if (existingReservation.payloadFingerprint !== payloadFingerprint) {
+        throw new AppError(
+          'IDEMPOTENCY_CONFLICT',
+          'Idempotency-Key was already used with a different message payload',
+        );
+      }
+      if (existingReservation.status === 'execution_unknown') {
+        throw new AppError(
+          'IDEMPOTENCY_CONFLICT',
+          `Run "${requestId}" is in execution_unknown state awaiting reconciliation; do not retry blindly`,
+        );
+      }
+      if (existingReservation.status === 'reserved') {
+        throw new AppError(
+          'IDEMPOTENCY_CONFLICT',
+          `Run "${requestId}" is already in progress`,
+        );
+      }
+    }
+
+    let conv = existingConv;
+    if (!conv || conv.deletionState === 'deleted') {
+      conv = this.createConversation(actor, trimmedPrompt.slice(0, 56));
+    }
 
     const billingOp = AGENT_TO_BILLING_OPERATION[targetAgent];
     const agentCreditCosts: Record<SpecialistAgentName, number> = {
@@ -1063,47 +1217,122 @@ export class KartikPlatformRuntime {
     const creditCost =
       agentCreditCosts[targetAgent] ?? OPERATION_CREDIT_COSTS[billingOp] ?? 1;
 
-    const currentBalance =
+    // 4. Phase 1 — Reserve credits before expensive Agent execution (Invariants #6 & #17, §11)
+    const currentAvailable =
       this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS;
-    if (currentBalance < creditCost) {
+    if (currentAvailable < creditCost) {
       throw new AppError(
         'QUOTA_EXHAUSTED',
-        `Operation "${billingOp}" requires ${creditCost} credits, but your available balance is ${currentBalance}. Please top up in the Billing Drawer.`,
+        `Operation "${billingOp}" requires ${creditCost} credits, but your available balance is ${currentAvailable}. Please top up in the Billing Drawer.`,
       );
     }
 
+    const currentReserved = this.reservedCreditsByUserId.get(user.userId) ?? 0;
+    const availableAfterReserve = currentAvailable - creditCost;
+    const reservedAfterReserve = currentReserved + creditCost;
+    this.creditsByUserId.set(user.userId, availableAfterReserve);
+    this.reservedCreditsByUserId.set(user.userId, reservedAfterReserve);
+
     const nowIso = new Date().toISOString();
+    const reservation: PlatformCreditReservation = {
+      reservationId: `rsv_${crypto.randomBytes(6).toString('hex')}`,
+      requestId,
+      userId: user.userId,
+      conversationId: conv.conversationId,
+      agent: targetAgent,
+      operation: billingOp,
+      reservedCredits: creditCost,
+      settledCredits: null,
+      status: 'reserved',
+      payloadFingerprint,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    this.reservationsByUserAndRequestId.set(scopedRequestIdKey, reservation);
+
     const userMessage: PlatformMessage = {
       messageId: `msg_usr_${crypto.randomBytes(6).toString('hex')}`,
       conversationId: conv.conversationId,
       role: 'user',
-      content: input.prompt.trim(),
-      requestId: input.requestId,
+      content: trimmedPrompt,
+      requestId,
       attachedFiles,
       createdAt: nowIso,
     };
 
-    const execResult = await this.graphExecutor.execute({
-      requestId: input.requestId,
-      traceId: input.traceId,
-      userId: user.userId,
-      conversationId: conv.conversationId,
-      messageId: userMessage.messageId,
-      prompt: input.prompt,
-      preferredAgent: input.preferredAgent,
-      attachmentFileIds: input.attachmentFileIds,
-    });
+    // 5. Phase 2 — Execute Specialist Agent via LangGraph Router
+    let execResult: Awaited<ReturnType<AgentGraphExecutor['execute']>>;
+    try {
+      execResult = await this.graphExecutor.execute({
+        requestId,
+        traceId: input.traceId,
+        userId: user.userId,
+        conversationId: conv.conversationId,
+        messageId: userMessage.messageId,
+        prompt: trimmedPrompt,
+        preferredAgent: input.preferredAgent,
+        attachmentFileIds,
+      });
+    } catch (err) {
+      const failNowIso = new Date().toISOString();
+      const errCode =
+        err instanceof AppError
+          ? err.code
+          : (err as { code?: string } | null)?.code;
+      // Blueprint §10 & §11: On ambiguous timeout (EXECUTION_UNKNOWN), keep reservation held in
+      // `execution_unknown` awaiting reconciliation rather than blindly releasing or retrying.
+      if (errCode === 'EXECUTION_UNKNOWN') {
+        reservation.status = 'execution_unknown';
+        reservation.updatedAt = failNowIso;
+        if (err instanceof AppError) {
+          throw err;
+        }
+        throw new AppError(
+          'EXECUTION_UNKNOWN',
+          err instanceof Error
+            ? err.message
+            : 'Execution outcome unknown after upstream timeout',
+        );
+      }
 
-    // Deduct credits atomically for this specific user after durable execution
-    const updatedBalance = currentBalance - creditCost;
-    this.creditsByUserId.set(user.userId, updatedBalance);
+      // Confirmed failure before completion -> Phase 3b: Release reservation immediately
+      const restoredAvailable =
+        (this.creditsByUserId.get(user.userId) ?? availableAfterReserve) +
+        reservation.reservedCredits;
+      const releasedReserved = Math.max(
+        0,
+        (this.reservedCreditsByUserId.get(user.userId) ?? reservedAfterReserve) -
+          reservation.reservedCredits,
+      );
+      this.creditsByUserId.set(user.userId, restoredAvailable);
+      this.reservedCreditsByUserId.set(user.userId, releasedReserved);
+      reservation.status = 'released';
+      reservation.settledCredits = 0;
+      reservation.updatedAt = failNowIso;
+      throw err;
+    }
+
+    // 6. Phase 3a — Settle credit reservation after durable execution (§11)
+    const settledReserved = Math.max(
+      0,
+      (this.reservedCreditsByUserId.get(user.userId) ?? reservedAfterReserve) -
+        reservation.reservedCredits,
+    );
+    this.reservedCreditsByUserId.set(user.userId, settledReserved);
+    const updatedBalance =
+      this.creditsByUserId.get(user.userId) ?? availableAfterReserve;
+    reservation.status = 'settled';
+    reservation.settledCredits = creditCost;
+    reservation.updatedAt = new Date().toISOString();
+
     const ledgerEntry: PlatformLedgerEntry = {
       entryId: `led_${crypto.randomBytes(6).toString('hex')}`,
-      timestamp: new Date().toISOString(),
+      timestamp: reservation.updatedAt,
       description: `${execResult.agent.toUpperCase()} Agent (${billingOp})`,
       deltaCredits: -creditCost,
       balanceAfter: updatedBalance,
-      requestId: input.requestId,
+      requestId,
+      reservationId: reservation.reservationId,
     };
     const userLedger = this.ledgerByUserId.get(user.userId) ?? [];
     userLedger.unshift(ledgerEntry);
@@ -1123,7 +1352,7 @@ export class KartikPlatformRuntime {
       role: 'assistant',
       content: execResult.replyContent,
       agentUsed: execResult.agent,
-      requestId: input.requestId,
+      requestId,
       creditsCharged: creditCost,
       idempotentReplay: false,
       citations: execResult.citations ?? [],
@@ -1142,7 +1371,7 @@ export class KartikPlatformRuntime {
       conv.title === 'New Conversation' ||
       conv.title.startsWith('Kartik.ai Multi-Agent')
     ) {
-      conv.title = input.prompt.trim().slice(0, 56) || conv.title;
+      conv.title = trimmedPrompt.slice(0, 56) || conv.title;
     }
     conv.updatedAt = assistantMessage.createdAt;
 
@@ -1164,8 +1393,8 @@ export class KartikPlatformRuntime {
         userId: user.userId,
         role: 'user',
         content: userMessage.content,
-        requestId: input.requestId,
-        attachedFileIdsJson: input.attachmentFileIds ?? [],
+        requestId,
+        attachedFileIdsJson: attachmentFileIds,
         createdAt: userMessage.createdAt,
       });
       await this.persistence.syncMessage({
@@ -1175,7 +1404,7 @@ export class KartikPlatformRuntime {
         role: 'assistant',
         content: assistantMessage.content,
         agentUsed: assistantMessage.agentUsed,
-        requestId: input.requestId,
+        requestId,
         creditsCharged: creditCost,
         idempotentReplay: false,
         citationsJson: assistantMessage.citations ?? [],
@@ -1189,6 +1418,7 @@ export class KartikPlatformRuntime {
         displayName: user.displayName,
         planId: user.planId,
         availableCredits: updatedBalance,
+        reservedCredits: settledReserved,
         entryId: ledgerEntry.entryId,
         requestId: ledgerEntry.requestId,
         description: ledgerEntry.description,
@@ -1200,8 +1430,10 @@ export class KartikPlatformRuntime {
 
     const turnResult = {
       conversationId: conv.conversationId,
-      requestId: input.requestId,
+      requestId,
       traceId: input.traceId,
+      reservationId: reservation.reservationId,
+      payloadFingerprint,
       remainingCredits: updatedBalance,
       creditsCharged: creditCost,
       idempotentReplay: false,
@@ -1213,16 +1445,104 @@ export class KartikPlatformRuntime {
     return turnResult;
   }
 
+  /**
+   * Reconciles a turn reservation in `execution_unknown` state (Blueprint §10 & §11),
+   * either settling the held credits (`outcome === 'completed'`) or releasing them back
+   * to the user's `availableCredits` (`outcome === 'failed'`).
+   */
+  public async reconcileUnknownTurn(
+    actor: VerifiedRequestIdentity | string,
+    input: {
+      readonly requestId: string;
+      readonly outcome: 'completed' | 'failed';
+    },
+  ): Promise<
+    PlatformCreditReservation & {
+      readonly availableCredits: number;
+      readonly reservedCredits: number;
+    }
+  > {
+    this.assertWritable();
+    const user = await this.hydrateUserFromPersistence(actor);
+    const requestId = (input.requestId ?? '').trim();
+    const scopedKey = `${user.userId}:${requestId}`;
+    const reservation = this.reservationsByUserAndRequestId.get(scopedKey);
+    if (!reservation) {
+      throw new AppError('NOT_FOUND', `Reservation for "${requestId}" not found`);
+    }
+    if (reservation.status !== 'execution_unknown') {
+      throw new AppError(
+        'IDEMPOTENCY_CONFLICT',
+        `Reservation for "${requestId}" is in status "${reservation.status}" and does not require reconciliation`,
+      );
+    }
+
+    const currentReserved = this.reservedCreditsByUserId.get(user.userId) ?? 0;
+    const nextReserved = Math.max(0, currentReserved - reservation.reservedCredits);
+    this.reservedCreditsByUserId.set(user.userId, nextReserved);
+    const nowIso = new Date().toISOString();
+
+    if (input.outcome === 'completed') {
+      reservation.status = 'settled';
+      reservation.settledCredits = reservation.reservedCredits;
+      reservation.updatedAt = nowIso;
+      const currentAvailable =
+        this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS;
+      const ledgerEntry: PlatformLedgerEntry = {
+        entryId: `led_${crypto.randomBytes(6).toString('hex')}`,
+        timestamp: nowIso,
+        description: `Reconciled ${reservation.agent.toUpperCase()} Agent (${reservation.operation})`,
+        deltaCredits: -reservation.reservedCredits,
+        balanceAfter: currentAvailable,
+        requestId,
+        reservationId: reservation.reservationId,
+      };
+      const userLedger = this.ledgerByUserId.get(user.userId) ?? [];
+      userLedger.unshift(ledgerEntry);
+      this.ledgerByUserId.set(user.userId, userLedger);
+      return {
+        ...reservation,
+        availableCredits: currentAvailable,
+        reservedCredits: nextReserved,
+      };
+    }
+
+    const restoredAvailable =
+      (this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS) +
+      reservation.reservedCredits;
+    this.creditsByUserId.set(user.userId, restoredAvailable);
+    reservation.status = 'released';
+    reservation.settledCredits = 0;
+    reservation.updatedAt = nowIso;
+    return {
+      ...reservation,
+      availableCredits: restoredAvailable,
+      reservedCredits: nextReserved,
+    };
+  }
+
+  public getReservationByRequestId(
+    actor: VerifiedRequestIdentity | string,
+    requestId: string,
+  ): PlatformCreditReservation | null {
+    const user = this.requireUser(actor);
+    const found = this.reservationsByUserAndRequestId.get(
+      `${user.userId}:${requestId.trim()}`,
+    );
+    return found ? { ...found } : null;
+  }
+
   public getBillingSummary(actor: VerifiedRequestIdentity | string) {
     const user = this.requireUser(actor);
     const availableCredits =
       this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS;
+    const reservedCredits = this.reservedCreditsByUserId.get(user.userId) ?? 0;
     const ledger = this.ledgerByUserId.get(user.userId) ?? [];
     return {
       userId: user.userId,
       planId: user.planId,
       availableCredits,
-      reservedCredits: 0,
+      reservedCredits,
       billingMode: 'mock' as const,
       plans: PLATFORM_CREDIT_PLANS,
       operationCosts: OPERATION_CREDIT_COSTS,
@@ -1239,6 +1559,14 @@ export class KartikPlatformRuntime {
   ) {
     this.assertWritable();
     const user = await this.hydrateUserFromPersistence(actor);
+    const requestId = (input.requestId ?? '').trim();
+    if (!requestId) {
+      throw new AppError(
+        'IDEMPOTENCY_KEY_REQUIRED',
+        'Mutating requests require an Idempotency-Key header',
+      );
+    }
+
     const plan = PLATFORM_CREDIT_PLANS.find((p) => p.planId === input.planId);
     if (!plan) {
       throw new AppError(
@@ -1247,9 +1575,42 @@ export class KartikPlatformRuntime {
       );
     }
 
+    const payloadFingerprint = computePayloadFingerprint({
+      userId: user.userId,
+      operation: 'create_billing_order',
+      planId: plan.planId,
+    });
+    const scopedRequestIdKey = `${user.userId}:${requestId}`;
+    const existingOrderForReq =
+      this.ordersByUserAndRequestId.get(scopedRequestIdKey);
+
     const stripQuotes = (v?: string) => (v ?? '').trim().replace(/^["']|["']$/g, '');
     const keyId = stripQuotes(process.env.RAZORPAY_KEY_ID);
     const keySecret = stripQuotes(process.env.RAZORPAY_KEY_SECRET);
+
+    if (existingOrderForReq) {
+      if (existingOrderForReq.payloadFingerprint !== payloadFingerprint) {
+        throw new AppError(
+          'IDEMPOTENCY_CONFLICT',
+          'Idempotency-Key was already used with a different billing order payload',
+        );
+      }
+      return {
+        orderId: existingOrderForReq.orderId,
+        razorpayOrderId: existingOrderForReq.orderId,
+        razorpayKeyId: keyId || 'rzp_test_kartik_ai_demo',
+        liveRazorpayOrder: false,
+        plan,
+        planId: plan.planId,
+        planName: plan.name,
+        amountPaise: plan.amountPaise,
+        amountInrLabel: plan.amountInrLabel,
+        creditsGranted: plan.creditsGranted,
+        currency: 'INR' as const,
+        status: 'created' as const,
+        idempotentReplay: true,
+      };
+    }
 
     let orderId = `order_rzp_${crypto.randomBytes(8).toString('hex')}`;
     let liveRazorpayOrder = false;
@@ -1272,7 +1633,7 @@ export class KartikPlatformRuntime {
           body: JSON.stringify({
             amount: plan.amountPaise,
             currency: 'INR',
-            receipt: input.requestId.slice(0, 40),
+            receipt: requestId.slice(0, 40),
             notes: {
               planId: plan.planId,
               userId: user.userId,
@@ -1296,7 +1657,12 @@ export class KartikPlatformRuntime {
       orderId,
       plan,
       userId: user.userId,
+      requestId,
       settled: false,
+    });
+    this.ordersByUserAndRequestId.set(scopedRequestIdKey, {
+      payloadFingerprint,
+      orderId,
     });
 
     this.trackPersistence(() =>
@@ -1306,7 +1672,7 @@ export class KartikPlatformRuntime {
         email: user.email,
         displayName: user.displayName,
         planId: plan.planId,
-        requestId: input.requestId,
+        requestId,
         amountPaise: plan.amountPaise,
         creditsGranted: plan.creditsGranted,
         settled: false,
@@ -1326,6 +1692,7 @@ export class KartikPlatformRuntime {
       creditsGranted: plan.creditsGranted,
       currency: 'INR' as const,
       status: 'created' as const,
+      idempotentReplay: false,
     };
   }
 
@@ -1340,6 +1707,43 @@ export class KartikPlatformRuntime {
   ) {
     this.assertWritable();
     const user = this.requireUser(actor);
+    const requestId = (input.requestId ?? '').trim();
+    if (!requestId) {
+      throw new AppError(
+        'IDEMPOTENCY_KEY_REQUIRED',
+        'Mutating requests require an Idempotency-Key header',
+      );
+    }
+
+    const payloadFingerprint = computePayloadFingerprint({
+      userId: user.userId,
+      operation: 'verify_checkout',
+      orderId: (input.orderId ?? '').trim(),
+    });
+    const scopedRequestIdKey = `${user.userId}:${requestId}`;
+    const existingVerifyForReq =
+      this.verifiedCheckoutsByUserAndRequestId.get(scopedRequestIdKey);
+    if (existingVerifyForReq) {
+      if (existingVerifyForReq.payloadFingerprint !== payloadFingerprint) {
+        throw new AppError(
+          'IDEMPOTENCY_CONFLICT',
+          'Idempotency-Key was already used to verify a different payment order',
+        );
+      }
+      const currentBalance =
+        this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS;
+      return {
+        verified: true,
+        orderId: existingVerifyForReq.orderId,
+        paymentId: existingVerifyForReq.paymentId,
+        signature: existingVerifyForReq.signature,
+        planId: existingVerifyForReq.planId,
+        creditsAdded: 0,
+        availableCredits: currentBalance,
+        idempotentReplay: true,
+      };
+    }
+
     const order = this.pendingOrders.get(input.orderId);
     if (!order || order.userId !== user.userId) {
       throw new AppError('NOT_FOUND', `Order "${input.orderId}" was not found`);
@@ -1374,6 +1778,13 @@ export class KartikPlatformRuntime {
       this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS;
 
     if (order.settled) {
+      this.verifiedCheckoutsByUserAndRequestId.set(scopedRequestIdKey, {
+        payloadFingerprint,
+        orderId: order.orderId,
+        paymentId,
+        signature,
+        planId: order.plan.planId,
+      });
       return {
         verified: true,
         orderId: order.orderId,
@@ -1402,11 +1813,19 @@ export class KartikPlatformRuntime {
       description: `Razorpay Purchase — ${order.plan.name} (${order.plan.amountInrLabel}, ${paymentId})`,
       deltaCredits: order.plan.creditsGranted,
       balanceAfter: updatedBalance,
-      requestId: input.requestId,
+      requestId,
     };
     const userLedger = this.ledgerByUserId.get(user.userId) ?? [];
     userLedger.unshift(ledgerEntry);
     this.ledgerByUserId.set(user.userId, userLedger);
+
+    this.verifiedCheckoutsByUserAndRequestId.set(scopedRequestIdKey, {
+      payloadFingerprint,
+      orderId: order.orderId,
+      paymentId,
+      signature,
+      planId: order.plan.planId,
+    });
 
     this.trackPersistence(async () => {
       await this.persistence.syncPaymentOrder({
@@ -1415,7 +1834,7 @@ export class KartikPlatformRuntime {
         email: updatedUser.email,
         displayName: updatedUser.displayName,
         planId: order.plan.planId,
-        requestId: input.requestId,
+        requestId,
         amountPaise: order.plan.amountPaise,
         creditsGranted: order.plan.creditsGranted,
         paymentId,
@@ -1427,6 +1846,7 @@ export class KartikPlatformRuntime {
         displayName: updatedUser.displayName,
         planId: updatedUser.planId,
         availableCredits: updatedBalance,
+        reservedCredits: this.reservedCreditsByUserId.get(updatedUser.userId) ?? 0,
         entryId: ledgerEntry.entryId,
         requestId: ledgerEntry.requestId,
         description: ledgerEntry.description,

@@ -603,4 +603,303 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
       }
     }
   });
+
+  it('enforces client-owned Idempotency-Key, SHA-256 payload fingerprint conflict detection (409), and two-phase credit reservation/release/reconciliation (Fix #4)', async () => {
+    const validTokens: Record<string, DecodedIdToken> = {
+      'verified-firebase-jwt-alice': buildDecodedFirebaseToken({
+        uid: 'fb_alice_fix4_01',
+        email: 'alice.fix4@example.com',
+        name: 'Alice Fix4',
+      }),
+    };
+
+    setFirebaseTokenVerifierForTests(async (token: string) => {
+      const match = validTokens[token];
+      if (!match) {
+        throw new Error('FirebaseAuthError: Invalid ID token');
+      }
+      return match;
+    });
+
+    const runtime = new KartikPlatformRuntime({
+      persistence: new InMemoryPlatformPersistenceAdapter(),
+    });
+    const app = createKartikExpressApp(runtime);
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const aliceAuthHeader = {
+      Authorization: 'Bearer verified-firebase-jwt-alice',
+      'content-type': 'application/json',
+    };
+
+    try {
+      // Alice creates a conversation
+      const convRes = await fetch(`${baseUrl}/api/v1/conversations`, {
+        method: 'POST',
+        headers: aliceAuthHeader,
+        body: JSON.stringify({ title: 'Fix #4 Domain Invariants Thread' }),
+      });
+      assert.equal(convRes.status, 201);
+      const convJson = (await convRes.json()) as {
+        data: { conversationId: string };
+      };
+      const convId = convJson.data.conversationId;
+
+      // 1. Missing Idempotency-Key on mutating endpoints is rejected with 400 IDEMPOTENCY_KEY_REQUIRED
+      const missingKeyMsgRes = await fetch(
+        `${baseUrl}/api/v1/conversations/${convId}/messages`,
+        {
+          method: 'POST',
+          headers: aliceAuthHeader,
+          body: JSON.stringify({
+            prompt: 'Missing idempotency header test',
+            preferredAgent: 'chat',
+          }),
+        },
+      );
+      assert.equal(missingKeyMsgRes.status, 400);
+      const missingKeyMsgJson = (await missingKeyMsgRes.json()) as {
+        ok: boolean;
+        error: { code: string };
+      };
+      assert.equal(missingKeyMsgJson.error.code, 'IDEMPOTENCY_KEY_REQUIRED');
+
+      const missingKeyOrderRes = await fetch(
+        `${baseUrl}/api/v1/billing/orders`,
+        {
+          method: 'POST',
+          headers: aliceAuthHeader,
+          body: JSON.stringify({ planId: 'plan_starter_199' }),
+        },
+      );
+      assert.equal(missingKeyOrderRes.status, 400);
+      const missingKeyOrderJson = (await missingKeyOrderRes.json()) as {
+        error: { code: string };
+      };
+      assert.equal(missingKeyOrderJson.error.code, 'IDEMPOTENCY_KEY_REQUIRED');
+
+      // 2. Chat Turn Idempotency Replay vs Payload Fingerprint Conflict (409 IDEMPOTENCY_CONFLICT)
+      const turn1Res = await fetch(
+        `${baseUrl}/api/v1/conversations/${convId}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            ...aliceAuthHeader,
+            'Idempotency-Key': 'req_fix4_turn_01',
+          },
+          body: JSON.stringify({
+            prompt: 'Explain two-phase credit reservation',
+            preferredAgent: 'chat',
+          }),
+        },
+      );
+      assert.equal(turn1Res.status, 201);
+
+      // Identical payload replay returns 200 OK with idempotentReplay: true and 0 extra credits charged
+      const turn1ReplayRes = await fetch(
+        `${baseUrl}/api/v1/conversations/${convId}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            ...aliceAuthHeader,
+            'Idempotency-Key': 'req_fix4_turn_01',
+          },
+          body: JSON.stringify({
+            prompt: 'Explain two-phase credit reservation',
+            preferredAgent: 'chat',
+          }),
+        },
+      );
+      assert.equal(turn1ReplayRes.status, 200);
+      const turn1ReplayJson = (await turn1ReplayRes.json()) as {
+        data: { idempotentReplay: boolean; remainingCredits: number };
+      };
+      assert.equal(turn1ReplayJson.data.idempotentReplay, true);
+      assert.equal(turn1ReplayJson.data.remainingCredits, 249);
+
+      // Reusing the same Idempotency-Key with a DIFFERENT prompt or agent returns 409 IDEMPOTENCY_CONFLICT
+      const turn1ConflictRes = await fetch(
+        `${baseUrl}/api/v1/conversations/${convId}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            ...aliceAuthHeader,
+            'Idempotency-Key': 'req_fix4_turn_01',
+          },
+          body: JSON.stringify({
+            prompt: 'Mutated prompt reusing the same Idempotency-Key',
+            preferredAgent: 'chat',
+          }),
+        },
+      );
+      assert.equal(turn1ConflictRes.status, 409);
+      const turn1ConflictJson = (await turn1ConflictRes.json()) as {
+        error: { code: string };
+      };
+      assert.equal(turn1ConflictJson.error.code, 'IDEMPOTENCY_CONFLICT');
+
+      // 3. Billing Order & Checkout Verification Idempotency Replay vs Conflict (409 IDEMPOTENCY_CONFLICT)
+      const orderRes = await fetch(`${baseUrl}/api/v1/billing/orders`, {
+        method: 'POST',
+        headers: {
+          ...aliceAuthHeader,
+          'Idempotency-Key': 'req_fix4_order_01',
+        },
+        body: JSON.stringify({ planId: 'plan_starter_199' }),
+      });
+      assert.equal(orderRes.status, 201);
+      const orderJson = (await orderRes.json()) as {
+        data: { orderId: string; idempotentReplay?: boolean };
+      };
+
+      // Replaying order creation with identical planId returns 200 with the same orderId
+      const orderReplayRes = await fetch(`${baseUrl}/api/v1/billing/orders`, {
+        method: 'POST',
+        headers: {
+          ...aliceAuthHeader,
+          'Idempotency-Key': 'req_fix4_order_01',
+        },
+        body: JSON.stringify({ planId: 'plan_starter_199' }),
+      });
+      assert.equal(orderReplayRes.status, 200);
+      const orderReplayJson = (await orderReplayRes.json()) as {
+        data: { orderId: string; idempotentReplay?: boolean };
+      };
+      assert.equal(orderReplayJson.data.orderId, orderJson.data.orderId);
+      assert.equal(orderReplayJson.data.idempotentReplay, true);
+
+      // Reusing req_fix4_order_01 with a different planId returns 409 IDEMPOTENCY_CONFLICT
+      const orderConflictRes = await fetch(`${baseUrl}/api/v1/billing/orders`, {
+        method: 'POST',
+        headers: {
+          ...aliceAuthHeader,
+          'Idempotency-Key': 'req_fix4_order_01',
+        },
+        body: JSON.stringify({ planId: 'plan_pro_499' }),
+      });
+      assert.equal(orderConflictRes.status, 409);
+
+      // 4. Two-Phase Credit Reservation State Machine:
+      //    4a. Confirmed downstream execution failure automatically RELEASES reserved credits back to availableCredits
+      const aliceActor = {
+        uid: 'fb_alice_fix4_01',
+        email: 'alice.fix4@example.com',
+        displayName: 'Alice Fix4',
+        avatarUrl: null,
+        emailVerified: true,
+      };
+      const graphExec = (
+        runtime as unknown as {
+          graphExecutor: {
+            execute: (...args: unknown[]) => Promise<unknown>;
+          };
+        }
+      ).graphExecutor;
+      const originalGraphExecute = graphExec.execute.bind(graphExec);
+
+      graphExec.execute = async () => {
+        throw new Error('Upstream provider failed before generation');
+      };
+
+      const failedTurnRes = await fetch(
+        `${baseUrl}/api/v1/conversations/${convId}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            ...aliceAuthHeader,
+            'Idempotency-Key': 'req_fix4_fail_release_01',
+          },
+          body: JSON.stringify({
+            prompt: 'Generate a PDF report that fails upstream',
+            preferredAgent: 'pdf',
+          }),
+        },
+      );
+      assert.equal(failedTurnRes.status, 500);
+
+      // Credits were reserved (5 credits for pdf) and then released on failure: availableCredits stays 249, reservedCredits is 0
+      const releasedReservation = runtime.getReservationByRequestId(
+        aliceActor,
+        'req_fix4_fail_release_01',
+      );
+      assert.equal(releasedReservation?.status, 'released');
+      const summaryAfterRelease = runtime.getBillingSummary(aliceActor);
+      assert.equal(summaryAfterRelease.availableCredits, 249);
+      assert.equal(summaryAfterRelease.reservedCredits, 0);
+
+      //    4b. Ambiguous EXECUTION_UNKNOWN timeout holds credits in reservedCredits until reconciled
+      graphExec.execute = async () => {
+        const unknownErr = new Error(
+          'Upstream provider timed out after dispatch',
+        ) as Error & { code?: string };
+        unknownErr.code = 'EXECUTION_UNKNOWN';
+        throw unknownErr;
+      };
+
+      const unknownTurnRes = await fetch(
+        `${baseUrl}/api/v1/conversations/${convId}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            ...aliceAuthHeader,
+            'Idempotency-Key': 'req_fix4_unknown_hold_01',
+          },
+          body: JSON.stringify({
+            prompt: 'Generate a PPT deck with ambiguous timeout',
+            preferredAgent: 'ppt',
+          }),
+        },
+      );
+      assert.equal(unknownTurnRes.status, 409);
+      const unknownTurnJson = (await unknownTurnRes.json()) as {
+        error: { code: string };
+      };
+      assert.equal(unknownTurnJson.error.code, 'EXECUTION_UNKNOWN');
+
+      // 8 credits for PPT are held in reservedCredits (availableCredits: 241, reservedCredits: 8)
+      const heldReservation = runtime.getReservationByRequestId(
+        aliceActor,
+        'req_fix4_unknown_hold_01',
+      );
+      assert.equal(heldReservation?.status, 'execution_unknown');
+      const summaryWhileHeld = runtime.getBillingSummary(aliceActor);
+      assert.equal(summaryWhileHeld.availableCredits, 241);
+      assert.equal(summaryWhileHeld.reservedCredits, 8);
+
+      // Blind retry with the same Idempotency-Key while execution_unknown is held returns 409 IDEMPOTENCY_CONFLICT
+      const blindRetryRes = await fetch(
+        `${baseUrl}/api/v1/conversations/${convId}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            ...aliceAuthHeader,
+            'Idempotency-Key': 'req_fix4_unknown_hold_01',
+          },
+          body: JSON.stringify({
+            prompt: 'Generate a PPT deck with ambiguous timeout',
+            preferredAgent: 'ppt',
+          }),
+        },
+      );
+      assert.equal(blindRetryRes.status, 409);
+
+      // Reconciling the unknown turn as 'failed' releases the 8 held credits back to availableCredits (249)
+      const reconciled = await runtime.reconcileUnknownTurn(aliceActor, {
+        requestId: 'req_fix4_unknown_hold_01',
+        outcome: 'failed',
+      });
+      assert.equal(reconciled.status, 'released');
+      assert.equal(reconciled.availableCredits, 249);
+      assert.equal(reconciled.reservedCredits, 0);
+
+      // Restore original graphExecutor.execute
+      graphExec.execute = originalGraphExecute;
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
+
