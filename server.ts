@@ -108,6 +108,17 @@ export function createKartikExpressApp(
       `trc_${crypto.randomBytes(8).toString('hex')}`;
     const requestId = readHeaderString(req, 'idempotency-key');
     const mapped = mapErrorToHttpResponse(err, { traceId, requestId });
+    if (mapped.httpStatus >= 500 && process.env.NODE_ENV !== 'test') {
+      const rootCause =
+        err && typeof err === 'object' && 'cause' in err
+          ? (err as { cause?: unknown }).cause
+          : undefined;
+      console.error(
+        `[kartik-api] ${mapped.httpStatus} ${req.method} ${req.originalUrl} traceId=${traceId}`,
+        err instanceof Error ? err.message : err,
+        rootCause ? `| cause: ${rootCause instanceof Error ? rootCause.message : String(rootCause)}` : '',
+      );
+    }
     for (const [k, v] of Object.entries(mapped.headers)) {
       res.setHeader(k, v);
     }

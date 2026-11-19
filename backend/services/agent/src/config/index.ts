@@ -54,12 +54,6 @@ export const AGENT_CONFIG_SCHEMA: ConfigSchema = {
     secret: true,
     default: '',
   },
-  TAVILY_API_KEY: {
-    type: 'string',
-    required: false,
-    secret: true,
-    default: '',
-  },
   QDRANT_URL: {
     type: 'url',
     default: 'http://localhost:6333',
@@ -70,19 +64,19 @@ export const AGENT_CONFIG_SCHEMA: ConfigSchema = {
   },
   ROUTER_MODEL_ID: {
     type: 'string',
-    default: 'gemini-2.5-flash',
+    default: 'gemini-4-hydrogen',
   },
   CHAT_MODEL_ID: {
     type: 'string',
-    default: 'gemini-2.5-flash',
+    default: 'gemini-4-hydrogen',
   },
   CODING_MODEL_ID: {
     type: 'string',
-    default: 'gemini-2.5-pro',
+    default: 'gemini-4-hydrogen',
   },
   EMBEDDING_MODEL_ID: {
     type: 'string',
-    default: 'text-embedding-004',
+    default: 'gemini-embedding-2',
   },
   MAX_PROMPT_CHARS: {
     type: 'int',
@@ -138,7 +132,6 @@ export interface AgentConfig {
   readonly mockAi: boolean;
   readonly imageProvider: 'mock' | 'live';
   readonly geminiApiKey?: string;
-  readonly tavilyApiKey?: string;
   readonly qdrantUrl: string;
   readonly qdrantCollection: string;
   readonly routerModelId: string;
@@ -175,7 +168,7 @@ function normalizeEd25519PublicKeyPem(rawKey: string): string {
  *
  * Enforces Blueprint §6.2, §10, §12 & Invariant #19:
  * - MOCK_AI defaults to true and IMAGE_PROVIDER defaults to 'mock'.
- * - Live provider keys (GEMINI_API_KEY, TAVILY_API_KEY) are required only when MOCK_AI=false.
+ * - Live provider key (`GEMINI_API_KEY`) is required only when MOCK_AI=false.
  */
 export function loadAgentConfig(
   env: Record<string, string | undefined> = process.env,
@@ -211,7 +204,6 @@ export function loadAgentConfig(
     MOCK_AI: boolean;
     IMAGE_PROVIDER: 'mock' | 'live';
     GEMINI_API_KEY: string;
-    TAVILY_API_KEY: string;
     QDRANT_URL: string;
     QDRANT_COLLECTION: string;
     ROUTER_MODEL_ID: string;
@@ -258,9 +250,6 @@ export function loadAgentConfig(
     if (!raw.GEMINI_API_KEY || raw.GEMINI_API_KEY.trim().length < 10) {
       crossFieldErrors.GEMINI_API_KEY = 'required when MOCK_AI=false';
     }
-    if (!raw.TAVILY_API_KEY || raw.TAVILY_API_KEY.trim().length < 8) {
-      crossFieldErrors.TAVILY_API_KEY = 'required when MOCK_AI=false';
-    }
   }
 
   if (Object.keys(crossFieldErrors).length > 0) {
@@ -277,7 +266,6 @@ export function loadAgentConfig(
     mockAi: raw.MOCK_AI,
     imageProvider: raw.IMAGE_PROVIDER,
     geminiApiKey: raw.GEMINI_API_KEY || undefined,
-    tavilyApiKey: raw.TAVILY_API_KEY || undefined,
     qdrantUrl: raw.QDRANT_URL,
     qdrantCollection: raw.QDRANT_COLLECTION,
     routerModelId: raw.ROUTER_MODEL_ID,

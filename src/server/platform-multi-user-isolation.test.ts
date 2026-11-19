@@ -7,7 +7,11 @@ import {
   assertRootRuntimeDemoOrLocalOnly,
   KartikPlatformRuntime,
 } from './platform-api-runtime.ts';
-import { InMemoryPlatformPersistenceAdapter } from '../db/platform-repository.ts';
+import {
+  InMemoryPlatformPersistenceAdapter,
+  resetDatabaseDegradedStateForTest,
+} from '../db/platform-repository.ts';
+import { pool } from '../db/index.ts';
 import { setFirebaseTokenVerifierForTests } from '../middleware/auth.ts';
 
 function buildDecodedFirebaseToken(input: {
@@ -901,5 +905,157 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it('Fix #8: degrades cleanly to local fallback without 500 INTERNAL_ERROR across all 8 specialist agents when PostgreSQL fails or lacks tables', async () => {
+    const validTokens: Record<string, DecodedIdToken> = {
+      'verified-firebase-jwt-alice': buildDecodedFirebaseToken({
+        uid: 'fb_alice_fix8_01',
+        email: 'alice.fix8@example.com',
+        name: 'Alice Fix8',
+      }),
+      'verified-firebase-jwt-bob': buildDecodedFirebaseToken({
+        uid: 'fb_bob_fix8_02',
+        email: 'bob.fix8@example.com',
+        name: 'Bob Fix8',
+      }),
+    };
+
+    setFirebaseTokenVerifierForTests(async (token: string) => {
+      const match = validTokens[token];
+      if (!match) {
+        throw new Error('FirebaseAuthError: Invalid ID token');
+      }
+      return match;
+    });
+
+    const prevForceCloudSql = process.env.FORCE_CLOUDSQL_IN_TEST;
+    const prevDatabaseUrl = process.env.DATABASE_URL;
+    const originalPoolQuery = pool.query.bind(pool);
+
+    process.env.FORCE_CLOUDSQL_IN_TEST = 'true';
+    process.env.DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/kartik';
+    resetDatabaseDegradedStateForTest();
+
+    // Simulate a missing-table / unreachable PostgreSQL error on every pool query
+    (pool as unknown as { query: (...args: unknown[]) => Promise<never> }).query =
+      async () => {
+        throw new Error('relation "artifacts" does not exist');
+      };
+
+    const runtime = new KartikPlatformRuntime();
+    const app = createKartikExpressApp(runtime);
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const aliceAuthHeader = {
+      Authorization: 'Bearer verified-firebase-jwt-alice',
+      'content-type': 'application/json',
+    };
+    const bobAuthHeader = {
+      Authorization: 'Bearer verified-firebase-jwt-bob',
+      'content-type': 'application/json',
+    };
+
+    try {
+      const convRes = await fetch(`${baseUrl}/api/v1/conversations`, {
+        method: 'POST',
+        headers: aliceAuthHeader,
+        body: JSON.stringify({ title: 'Fix #8 Specialist Resilience' }),
+      });
+      assert.equal(convRes.status, 201);
+      const convJson = (await convRes.json()) as {
+        data: { conversationId: string };
+      };
+      const convId = convJson.data.conversationId;
+
+      const specialistPrompts: ReadonlyArray<{
+        agent: 'chat' | 'search' | 'coding' | 'pdf' | 'ppt' | 'image';
+        prompt: string;
+        expectsArtifact: boolean;
+      }> = [
+        { agent: 'chat', prompt: 'Explain event sourcing briefly', expectsArtifact: false },
+        { agent: 'search', prompt: 'Latest benchmarks for PostgreSQL 17', expectsArtifact: false },
+        { agent: 'coding', prompt: 'Build a sleek timer web app', expectsArtifact: true },
+        { agent: 'pdf', prompt: 'Generate a PDF brief on zero-trust networking', expectsArtifact: true },
+        { agent: 'ppt', prompt: 'Create a 6-slide presentation on microservices', expectsArtifact: true },
+        { agent: 'image', prompt: 'Generate an isometric illustration of a cloud datacenter', expectsArtifact: true },
+      ];
+
+      let lastArtifactId = '';
+      for (let i = 0; i < specialistPrompts.length; i++) {
+        const spec = specialistPrompts[i]!;
+        const res = await fetch(
+          `${baseUrl}/api/v1/conversations/${convId}/messages`,
+          {
+            method: 'POST',
+            headers: {
+              ...aliceAuthHeader,
+              'Idempotency-Key': `req_fix8_${spec.agent}_${i}`,
+            },
+            body: JSON.stringify({
+              prompt: spec.prompt,
+              preferredAgent: spec.agent,
+            }),
+          },
+        );
+        assert.equal(
+          res.status,
+          201,
+          `Expected 201 for ${spec.agent} even when Postgres fails, got ${res.status}`,
+        );
+        const body = (await res.json()) as {
+          ok: boolean;
+          data: {
+            assistantMessage: {
+              agentUsed: string;
+              artifactIds?: string[];
+            };
+          };
+        };
+        assert.equal(body.ok, true);
+        assert.equal(body.data.assistantMessage.agentUsed, spec.agent);
+        if (spec.expectsArtifact) {
+          assert.ok(
+            (body.data.assistantMessage.artifactIds?.length ?? 0) >= 1,
+            `Expected artifact for ${spec.agent}`,
+          );
+          lastArtifactId = body.data.assistantMessage.artifactIds![0]!;
+        }
+      }
+
+      // Alice can fetch her generated image artifact raw bytes inline
+      assert.ok(lastArtifactId.length > 0);
+      const aliceRawRes = await fetch(
+        `${baseUrl}/api/v1/artifacts/${lastArtifactId}/raw?inline=1`,
+        { headers: { Authorization: 'Bearer verified-firebase-jwt-alice' } },
+      );
+      assert.equal(aliceRawRes.status, 200);
+
+      // Bob still gets 404 NOT_FOUND on Alice's artifact even during DB fallback
+      const bobRawRes = await fetch(
+        `${baseUrl}/api/v1/artifacts/${lastArtifactId}/raw?inline=1`,
+        { headers: { Authorization: 'Bearer verified-firebase-jwt-bob' } },
+      );
+      assert.equal(bobRawRes.status, 404);
+    } finally {
+      (pool as unknown as { query: typeof originalPoolQuery }).query =
+        originalPoolQuery;
+      if (prevForceCloudSql === undefined) {
+        delete process.env.FORCE_CLOUDSQL_IN_TEST;
+      } else {
+        process.env.FORCE_CLOUDSQL_IN_TEST = prevForceCloudSql;
+      }
+      if (prevDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = prevDatabaseUrl;
+      }
+      resetDatabaseDegradedStateForTest();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
+
 

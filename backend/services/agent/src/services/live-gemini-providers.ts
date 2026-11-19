@@ -1,17 +1,14 @@
 /**
- * @kartik/agent/services/live-gemini-providers — Live Server-Side Multi-Provider AI Adapters
- * (Blueprint §2.4, §10, ADR 0005 & Gemini API Skill Guidelines).
+ * @kartik/agent/services/live-gemini-providers — Pure Google Gemini Server-Side AI Adapters
+ * (Blueprint §2.4, §10, ADR 0005 & Gemini API Guidelines).
  *
- * Implements live server-side AI adapters for all 8 specialist agents (Chat, Search, Coding,
- * PDF, PPT, RAG Embeddings, Vision, and Image Generation):
- * - Primary: Google Gemini API (`gemini-4-hydrogen` with resilient `gemini-2.5-flash` fallback,
- *   `googleSearch` grounding, `gemini-embedding-2`, multimodal Vision, and `gemini-3.1-flash-lite-image`
- *   real image generation) using `'User-Agent': 'aistudio-build'`.
- * - Secondary / Tertiary: Groq (`GROQ_API_KEY` honoring `MODEL_CHAT` / `MODEL_CODING` / `MODEL_VISION`),
- *   OpenRouter (`OPENROUTER_API_KEY`), Tavily (`TAVILY_API_KEY`), and Cloudflare Workers AI Flux
- *   (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`) for image generation.
- * - Uses configurable `PROVIDER_TIMEOUT_MS` (default 45s) so complex Coding/PDF/PPT/Image turns
- *   never abort prematurely at 8s.
+ * Implements Gemini-only server-side AI adapters for all 8 specialist agents:
+ * - Chat, Search Synthesis, Coding, PDF, PPT & Vision: `gemini-4-hydrogen`
+ *   (with resilient `gemini-2.5-flash` / `gemini-3-flash-preview` fallback & optional `GEMINI_MODEL` override)
+ * - Web Search: Gemini `googleSearch` grounding (`tools: [{ googleSearch: {} }]`)
+ * - RAG Embeddings: `gemini-embedding-2` (with `gemini-embedding-001` / `text-embedding-004` fallback)
+ * - Image Generation: `gemini-3.1-flash-lite-image` / `gemini-2.5-flash-image` / `imagen-3.0-generate-002`
+ * - Always sends `'User-Agent': 'aistudio-build'` and respects `PROVIDER_TIMEOUT_MS` (default 45s).
  */
 
 import crypto from 'node:crypto';
@@ -53,7 +50,7 @@ export interface SearchImageGalleryItem {
   readonly sourceUrl: string;
 }
 
-const SchemaType = {
+const SchemaValueType = {
   OBJECT: 'OBJECT',
   STRING: 'STRING',
   ARRAY: 'ARRAY',
@@ -179,147 +176,6 @@ function uniqueNonEmpty(items: ReadonlyArray<string | undefined>): string[] {
   return out;
 }
 
-/**
- * Calls Groq (`GROQ_API_KEY`) or OpenRouter (`OPENROUTER_API_KEY`) as secondary/tertiary
- * OpenAI-compatible text, JSON, or multimodal vision providers across all specialist agents.
- */
-async function callOpenAiCompatibleFallback(params: {
-  readonly prompt: string;
-  readonly systemInstruction?: string;
-  readonly jsonMode?: boolean;
-  readonly role?: 'chat' | 'coding' | 'vision' | 'search';
-  readonly imageDataUrl?: string;
-  readonly maxTokens?: number;
-}): Promise<string | null> {
-  const timeoutMs = resolveProviderTimeoutMs(45_000);
-  const maxTokens = params.maxTokens ?? 4096;
-
-  const userContent: unknown = params.imageDataUrl
-    ? [
-        { type: 'text', text: params.prompt },
-        { type: 'image_url', image_url: { url: params.imageDataUrl } },
-      ]
-    : params.prompt;
-
-  const messages: Array<{ role: 'system' | 'user'; content: unknown }> = [];
-  if (params.systemInstruction) {
-    messages.push({ role: 'system', content: params.systemInstruction });
-  }
-  messages.push({ role: 'user', content: userContent });
-
-  const groqKey = stripEnvQuotes(process.env.GROQ_API_KEY);
-  if (isUsableSecretKey(groqKey)) {
-    const groqModels =
-      params.role === 'vision'
-        ? uniqueNonEmpty([
-            process.env.MODEL_VISION,
-            'meta-llama/llama-4-scout-17b-16e-instruct',
-            'llama-3.2-11b-vision-preview',
-          ])
-        : params.role === 'coding'
-          ? uniqueNonEmpty([
-              process.env.MODEL_CHAT,
-              'llama-3.3-70b-versatile',
-              'openai/gpt-oss-120b',
-              'llama-3.1-8b-instant',
-            ])
-          : uniqueNonEmpty([
-              params.role === 'search' ? process.env.MODEL_SEARCH_SYNTHESIS : process.env.MODEL_CHAT,
-              'llama-3.3-70b-versatile',
-              'openai/gpt-oss-120b',
-              'llama-3.1-8b-instant',
-            ]);
-
-    for (const model of groqModels) {
-      try {
-        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${groqKey}`,
-          },
-          body: JSON.stringify({
-            model,
-            messages,
-            max_tokens: maxTokens,
-            ...(params.jsonMode ? { response_format: { type: 'json_object' } } : {}),
-          }),
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        if (!res.ok) {
-          continue;
-        }
-        const data = (await res.json()) as {
-          choices?: Array<{ message?: { content?: string } }>;
-        };
-        const text = data.choices?.[0]?.message?.content?.trim();
-        if (text && text.length > 0) {
-          return text;
-        }
-      } catch {
-        // Try next Groq model
-      }
-    }
-  }
-
-  const openRouterKey = stripEnvQuotes(process.env.OPENROUTER_API_KEY);
-  if (isUsableSecretKey(openRouterKey)) {
-    const openRouterModels =
-      params.role === 'vision'
-        ? uniqueNonEmpty([
-            process.env.MODEL_VISION,
-            'google/gemini-2.5-flash',
-            'meta-llama/llama-4-scout',
-          ])
-        : params.role === 'coding'
-          ? uniqueNonEmpty([
-              process.env.MODEL_CODING,
-              'qwen/qwen-2.5-coder-32b-instruct',
-              'google/gemini-2.5-flash',
-            ])
-          : uniqueNonEmpty([
-              'google/gemini-2.5-flash',
-              process.env.MODEL_CODING,
-              'meta-llama/llama-3.3-70b-instruct',
-            ]);
-
-    for (const model of openRouterModels) {
-      try {
-        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${openRouterKey}`,
-            'HTTP-Referer': stripEnvQuotes(process.env.PUBLIC_APP_ORIGIN) || 'http://localhost:3000',
-            'X-Title': 'Kartik.ai',
-          },
-          body: JSON.stringify({
-            model,
-            messages,
-            max_tokens: maxTokens,
-            ...(params.jsonMode ? { response_format: { type: 'json_object' } } : {}),
-          }),
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        if (!res.ok) {
-          continue;
-        }
-        const data = (await res.json()) as {
-          choices?: Array<{ message?: { content?: string } }>;
-        };
-        const text = data.choices?.[0]?.message?.content?.trim();
-        if (text && text.length > 0) {
-          return text;
-        }
-      } catch {
-        // Try next OpenRouter model
-      }
-    }
-  }
-
-  return null;
-}
-
 async function createServerGeminiClient(
   explicitApiKey?: string,
 ): Promise<GeminiClientAdapter | null> {
@@ -392,9 +248,24 @@ async function createServerGeminiClient(
           signal: AbortSignal.timeout(params.timeoutMs ?? defaultTimeout),
         });
         if (!res.ok) {
-          lastErr = new Error(`Gemini HTTP ${res.status} (${targetModel})`);
-          // Retry next model candidate on 404 (model unavailable on tier) or 429/5xx
-          if (res.status === 404 || res.status === 429 || res.status >= 500) {
+          let errSnippet = '';
+          try {
+            errSnippet = (await res.text()).slice(0, 200);
+          } catch {
+            // ignore
+          }
+          lastErr = new Error(`Gemini HTTP ${res.status} (${targetModel}): ${errSnippet}`);
+          if (process.env.NODE_ENV !== 'test') {
+            console.warn(`[kartik-gemini] ${targetModel} HTTP ${res.status} — trying next candidate`);
+          }
+          // Retry next model candidate on 400/403/404 (tier/feature mismatch) or 429/5xx
+          if (
+            res.status === 400 ||
+            res.status === 403 ||
+            res.status === 404 ||
+            res.status === 429 ||
+            res.status >= 500
+          ) {
             continue;
           }
           throw lastErr;
@@ -447,7 +318,13 @@ async function createServerGeminiClient(
         });
         if (!res.ok) {
           lastErr = new Error(`Gemini Embed HTTP ${res.status} (${targetModel})`);
-          if (res.status === 404 || res.status === 429 || res.status >= 500) {
+          if (
+            res.status === 400 ||
+            res.status === 403 ||
+            res.status === 404 ||
+            res.status === 429 ||
+            res.status >= 500
+          ) {
             continue;
           }
           throw lastErr;
@@ -502,57 +379,6 @@ async function createServerGeminiClient(
   };
 }
 
-async function callCloudflareFluxImage(prompt: string): Promise<{
-  readonly mimeType: 'image/png' | 'image/jpeg';
-  readonly data: Uint8Array;
-} | null> {
-  const accountId = stripEnvQuotes(process.env.CLOUDFLARE_ACCOUNT_ID);
-  const apiToken = stripEnvQuotes(process.env.CLOUDFLARE_API_TOKEN);
-  if (!isUsableSecretKey(accountId) || !isUsableSecretKey(apiToken)) {
-    return null;
-  }
-
-  try {
-    const res = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/@cf/black-forest-labs/flux-1-schnell`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiToken}`,
-        },
-        body: JSON.stringify({ prompt, num_steps: 4 }),
-        signal: AbortSignal.timeout(resolveProviderTimeoutMs(45_000)),
-      },
-    );
-    if (!res.ok) {
-      return null;
-    }
-    const contentType = res.headers.get('content-type') ?? '';
-    if (contentType.includes('application/json')) {
-      const json = (await res.json()) as { result?: { image?: string } };
-      const b64 = json.result?.image;
-      if (!b64) {
-        return null;
-      }
-      return {
-        mimeType: 'image/jpeg',
-        data: new Uint8Array(Buffer.from(b64, 'base64')),
-      };
-    }
-    const buf = new Uint8Array(await res.arrayBuffer());
-    if (buf.byteLength < 64) {
-      return null;
-    }
-    return {
-      mimeType: contentType.includes('jpeg') ? 'image/jpeg' : 'image/png',
-      data: buf,
-    };
-  } catch {
-    return null;
-  }
-}
-
 export class LiveGeminiChatModelProvider implements ChatModelProvider {
   public readonly providerName = 'gemini-live-chat';
   private readonly apiKey?: string;
@@ -588,21 +414,8 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
           };
         }
       } catch {
-        // Fall through to Groq / OpenRouter fallback
+        // Fall back to deterministic offline reply when Gemini is unreachable
       }
-    }
-
-    const fallbackReply = await callOpenAiCompatibleFallback({
-      prompt: input.prompt,
-      systemInstruction: sysInstruction,
-      role: 'chat',
-      maxTokens: input.maxOutputTokens,
-    });
-    if (fallbackReply) {
-      return {
-        content: fallbackReply,
-        tokensUsed: Math.max(16, Math.ceil(fallbackReply.length / 4)),
-      };
     }
 
     const cleanTopic = input.prompt.trim();
@@ -651,7 +464,18 @@ export class LiveGeminiCodingModelProvider implements CodingModelProvider {
         js?: string;
       };
 
-      if (parsed.title && parsed.html && parsed.css && parsed.js) {
+      const title = typeof parsed.title === 'string' ? parsed.title.trim() : '';
+      const html = typeof parsed.html === 'string' ? parsed.html.trim() : '';
+      const css =
+        typeof parsed.css === 'string' && parsed.css.trim().length > 0
+          ? parsed.css
+          : 'body { margin: 0; font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; }\n';
+      const js =
+        typeof parsed.js === 'string' && parsed.js.trim().length > 0
+          ? parsed.js
+          : 'console.info("Kartik.ai sandbox app initialized");\n';
+
+      if (title && html) {
         const mkFile = (path: string, mimeType: string, content: string) => ({
           path,
           mimeType,
@@ -660,19 +484,19 @@ export class LiveGeminiCodingModelProvider implements CodingModelProvider {
           content,
         });
         const files = [
-          mkFile('index.html', 'text/html', parsed.html),
-          mkFile('styles.css', 'text/css', parsed.css),
-          mkFile('app.js', 'text/javascript', parsed.js),
+          mkFile('index.html', 'text/html', html),
+          mkFile('styles.css', 'text/css', css),
+          mkFile('app.js', 'text/javascript', js),
         ];
         const rawManifestJson = JSON.stringify({
-          title: parsed.title.slice(0, 80),
+          title: title.slice(0, 80),
           entryFile: 'index.html',
           files,
         });
         return {
           summary:
-            parsed.summary ||
-            `Generated interactive **${parsed.title}** project (\`index.html\`, \`styles.css\`, \`app.js\`).`,
+            (typeof parsed.summary === 'string' && parsed.summary.trim()) ||
+            `Generated interactive **${title}** project (\`index.html\`, \`styles.css\`, \`app.js\`).`,
           rawManifestJson,
           tokensUsed: Math.max(120, Math.ceil(rawManifestJson.length / 4)),
         };
@@ -708,13 +532,13 @@ Return ONLY a valid JSON object with exact keys:
           config: {
             responseMimeType: 'application/json',
             responseSchema: {
-              type: SchemaType.OBJECT,
+              type: SchemaValueType.OBJECT,
               properties: {
-                title: { type: SchemaType.STRING },
-                summary: { type: SchemaType.STRING },
-                html: { type: SchemaType.STRING },
-                css: { type: SchemaType.STRING },
-                js: { type: SchemaType.STRING },
+                title: { type: SchemaValueType.STRING },
+                summary: { type: SchemaValueType.STRING },
+                html: { type: SchemaValueType.STRING },
+                css: { type: SchemaValueType.STRING },
+                js: { type: SchemaValueType.STRING },
               },
               required: ['title', 'summary', 'html', 'css', 'js'],
             },
@@ -725,22 +549,7 @@ Return ONLY a valid JSON object with exact keys:
           return built;
         }
       } catch {
-        // Fall through to Groq / OpenRouter JSON generation
-      }
-    }
-
-    const fallbackJson = await callOpenAiCompatibleFallback({
-      prompt: codingPrompt,
-      systemInstruction:
-        'You are a senior frontend engineer. Respond strictly with a valid JSON object containing title, summary, html, css, and js.',
-      jsonMode: true,
-      role: 'coding',
-      maxTokens: Math.max(4096, input.maxOutputTokens),
-    });
-    if (fallbackJson) {
-      const built = this.buildValidatedBundleFromJson(fallbackJson);
-      if (built) {
-        return built;
+        // Fall back to structured offline coding bundle when Gemini is unavailable
       }
     }
 
@@ -807,68 +616,6 @@ export class LiveGeminiSearchProvider implements SearchProvider {
     this.lastSynthesizedAnswer = null;
     this.lastSearchImages = LiveGeminiSearchProvider.buildTopicImages(input.query);
     const maxItems = input.maxResults ?? 4;
-
-    const tavilyKey = stripEnvQuotes(process.env.TAVILY_API_KEY);
-    if (isUsableSecretKey(tavilyKey)) {
-      try {
-        const tavRes = await fetch('https://api.tavily.com/search', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            api_key: tavilyKey,
-            query: input.query,
-            max_results: maxItems,
-            include_images: true,
-            include_answer: true,
-          }),
-          signal: AbortSignal.timeout(resolveProviderTimeoutMs(30_000)),
-        });
-        if (tavRes.ok) {
-          const tavData = (await tavRes.json()) as {
-            answer?: string;
-            images?: Array<string | { url?: string; description?: string }>;
-            results?: Array<{ title?: string; url?: string; content?: string }>;
-          };
-          if (tavData.answer && tavData.answer.trim().length > 0) {
-            this.lastSynthesizedAnswer = tavData.answer.trim();
-          }
-          const rawResults = tavData.results ?? [];
-          const items: SearchResultItem[] = [];
-          for (const r of rawResults) {
-            if (r.title && r.url) {
-              items.push({
-                title: r.title,
-                url: r.url,
-                snippet: (r.content ?? `Verified web source for ${input.query}`).slice(0, 320),
-              });
-            }
-            if (items.length >= maxItems) {
-              break;
-            }
-          }
-          if (Array.isArray(tavData.images) && tavData.images.length >= 4) {
-            this.lastSearchImages = tavData.images.slice(0, 4).map((img, idx) => {
-              const imgUrl = typeof img === 'string' ? img : (img.url ?? '');
-              const desc =
-                typeof img === 'object' && img?.description
-                  ? img.description
-                  : `${input.query.slice(0, 32)} — Visual #${idx + 1}`;
-              return Object.freeze({
-                id: `simg_${idx + 1}`,
-                title: desc,
-                imageUrl: imgUrl,
-                sourceUrl: items[idx % Math.max(1, items.length)]?.url ?? imgUrl,
-              });
-            });
-          }
-          if (items.length > 0) {
-            return Object.freeze(items);
-          }
-        }
-      } catch {
-        // Fall through to Gemini googleSearch grounding
-      }
-    }
 
     const ai = await createServerGeminiClient(this.apiKey);
     if (ai) {
@@ -1029,21 +776,8 @@ export class LiveGeminiVisionProvider implements VisionProvider {
           };
         }
       } catch {
-        // Fall through to Groq/OpenRouter Vision
+        // Fall back to offline structural inspection when Gemini is unavailable
       }
-    }
-
-    const fallbackVision = await callOpenAiCompatibleFallback({
-      prompt: visionInstruction,
-      role: 'vision',
-      imageDataUrl: `data:${input.mimeType};base64,${base64Data}`,
-      maxTokens: 2048,
-    });
-    if (fallbackVision) {
-      return {
-        analysis: fallbackVision,
-        tokensUsed: Math.max(32, Math.ceil(fallbackVision.length / 4)),
-      };
     }
 
     const kb = (input.imageBytes.byteLength / 1024).toFixed(1);
@@ -1106,20 +840,20 @@ Return ONLY a valid JSON object with exact keys:
           config: {
             responseMimeType: 'application/json',
             responseSchema: {
-              type: SchemaType.OBJECT,
+              type: SchemaValueType.OBJECT,
               properties: {
-                title: { type: SchemaType.STRING },
-                subtitle: { type: SchemaType.STRING },
+                title: { type: SchemaValueType.STRING },
+                subtitle: { type: SchemaValueType.STRING },
                 sections: {
-                  type: SchemaType.ARRAY,
+                  type: SchemaValueType.ARRAY,
                   items: {
-                    type: SchemaType.OBJECT,
+                    type: SchemaValueType.OBJECT,
                     properties: {
-                      heading: { type: SchemaType.STRING },
-                      content: { type: SchemaType.STRING },
+                      heading: { type: SchemaValueType.STRING },
+                      content: { type: SchemaValueType.STRING },
                       bullets: {
-                        type: SchemaType.ARRAY,
-                        items: { type: SchemaType.STRING },
+                        type: SchemaValueType.ARRAY,
+                        items: { type: SchemaValueType.STRING },
                       },
                     },
                     required: ['heading', 'content', 'bullets'],
@@ -1135,22 +869,7 @@ Return ONLY a valid JSON object with exact keys:
           return compiled;
         }
       } catch {
-        // Fall through to Groq / OpenRouter JSON generation
-      }
-    }
-
-    const fallbackJson = await callOpenAiCompatibleFallback({
-      prompt: pdfPrompt,
-      systemInstruction:
-        'You are a technical author. Respond strictly with a valid JSON object matching { title, subtitle, sections: [{ heading, content, bullets }] }.',
-      jsonMode: true,
-      role: 'chat',
-      maxTokens: Math.max(3000, input.maxOutputTokens),
-    });
-    if (fallbackJson) {
-      const compiled = this.compilePdfFromJson(fallbackJson);
-      if (compiled) {
-        return compiled;
+        // Fall back to deterministic offline PDF generator when Gemini is unavailable
       }
     }
 
@@ -1202,20 +921,20 @@ Return ONLY a valid JSON object with exact keys:
           config: {
             responseMimeType: 'application/json',
             responseSchema: {
-              type: SchemaType.OBJECT,
+              type: SchemaValueType.OBJECT,
               properties: {
-                title: { type: SchemaType.STRING },
-                subtitle: { type: SchemaType.STRING },
+                title: { type: SchemaValueType.STRING },
+                subtitle: { type: SchemaValueType.STRING },
                 slides: {
-                  type: SchemaType.ARRAY,
+                  type: SchemaValueType.ARRAY,
                   items: {
-                    type: SchemaType.OBJECT,
+                    type: SchemaValueType.OBJECT,
                     properties: {
-                      title: { type: SchemaType.STRING },
-                      subtitle: { type: SchemaType.STRING },
+                      title: { type: SchemaValueType.STRING },
+                      subtitle: { type: SchemaValueType.STRING },
                       bullets: {
-                        type: SchemaType.ARRAY,
-                        items: { type: SchemaType.STRING },
+                        type: SchemaValueType.ARRAY,
+                        items: { type: SchemaValueType.STRING },
                       },
                     },
                     required: ['title', 'bullets'],
@@ -1231,22 +950,7 @@ Return ONLY a valid JSON object with exact keys:
           return compiled;
         }
       } catch {
-        // Fall through to Groq / OpenRouter JSON generation
-      }
-    }
-
-    const fallbackJson = await callOpenAiCompatibleFallback({
-      prompt: pptPrompt,
-      systemInstruction:
-        'You are a presentation strategist. Respond strictly with a valid JSON object matching { title, subtitle, slides: [{ title, subtitle, bullets }] }.',
-      jsonMode: true,
-      role: 'chat',
-      maxTokens: Math.max(3000, input.maxOutputTokens),
-    });
-    if (fallbackJson) {
-      const compiled = this.compilePptFromJson(fallbackJson);
-      if (compiled) {
-        return compiled;
+        // Fall back to deterministic offline PPTX generator when Gemini is unavailable
       }
     }
 
@@ -1272,7 +976,7 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
     let enhancedPrompt = input.prompt.trim();
     const ai = await createServerGeminiClient(this.apiKey);
 
-    // 1. Optional prompt enhancement via Gemini or Groq/OpenRouter
+    // 1. Optional prompt enhancement via Gemini
     if (ai) {
       try {
         const res = await ai.generateContent({
@@ -1285,28 +989,27 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
       } catch {
         // Keep original prompt
       }
-    } else {
-      const enhancedViaFallback = await callOpenAiCompatibleFallback({
-        prompt: `Enhance this image generation prompt into a vivid 1-sentence artistic description (max 35 words): "${input.prompt}"`,
-        role: 'chat',
-        maxTokens: 120,
-      });
-      if (enhancedViaFallback) {
-        enhancedPrompt = enhancedViaFallback.replace(/\n+/g, ' ').slice(0, 220);
-      }
     }
 
     // 2. Primary real image generation: Gemini native image models (gemini-3.1-flash-lite-image / gemini-2.5-flash-image)
     if (ai) {
-      for (const imageModel of DEFAULT_IMAGE_MODELS) {
+      const imageModels = uniqueNonEmpty([
+        process.env.GEMINI_IMAGE_MODEL,
+        ...DEFAULT_IMAGE_MODELS,
+      ]);
+      for (const imageModel of imageModels) {
         try {
           const imgRes = await ai.generateContent({
             model: imageModel,
             fallbackModels: [],
-            contents: {
-              parts: [{ text: enhancedPrompt }],
-            },
+            contents: [
+              {
+                role: 'user',
+                parts: [{ text: enhancedPrompt }],
+              },
+            ],
             config: {
+              responseModalities: ['IMAGE', 'TEXT'],
               imageConfig: {
                 aspectRatio: '1:1',
               },
@@ -1337,11 +1040,11 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
             }
           }
         } catch {
-          // Try next image model
+          // Try next Gemini image model
         }
       }
 
-      // 3. Secondary real image generation: Imagen 3 :predict endpoint
+      // 3. Secondary real image generation: Google Imagen 3 :predict endpoint
       if (ai.predictImagen) {
         try {
           const imagen = await ai.predictImagen({
@@ -1357,22 +1060,12 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
             };
           }
         } catch {
-          // Fall through to Cloudflare Flux
+          // Fall through to offline test PNG fallback
         }
       }
     }
 
-    // 4. Tertiary real image generation: Cloudflare Workers AI Flux (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`)
-    const cfImage = await callCloudflareFluxImage(enhancedPrompt);
-    if (cfImage && cfImage.data.byteLength > 64) {
-      return {
-        mimeType: cfImage.mimeType,
-        data: cfImage.data,
-        caption: `### Generated Visual Artwork\n**Enhanced Prompt:** *${enhancedPrompt}*`,
-      };
-    }
-
-    // 5. Offline/test deterministic PNG fallback when no live image key is configured
+    // 4. Offline/test deterministic PNG fallback when GEMINI_API_KEY is not configured
     const pngBytes = new Uint8Array([
       0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
       0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,

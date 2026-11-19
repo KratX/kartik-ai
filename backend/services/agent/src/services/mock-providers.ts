@@ -100,7 +100,7 @@ export class MockCodingModelProvider implements CodingModelProvider {
 }
 
 export class MockSearchProvider implements SearchProvider {
-  public readonly providerName = 'mock-tavily-search';
+  public readonly providerName = 'mock-gemini-search';
 
   public async searchWeb(input: {
     readonly query: string;

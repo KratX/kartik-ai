@@ -593,7 +593,6 @@ export async function startLocalStackServer(options = {}) {
     INTERNAL_CALLER_TOKEN_CHAT: 'internal-secret-token-chat-to-agent',
     MOCK_AI: process.env.GEMINI_API_KEY ? 'false' : 'true',
     GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? 'test-gemini-api-key-value',
-    TAVILY_API_KEY: process.env.TAVILY_API_KEY ?? 'test-tavily-api-key',
     DAILY_LIVE_CALL_BUDGET: '250',
   });
   const agentRepo = new InMemoryAgentRepository();

@@ -37,7 +37,6 @@ function createTestAgentConfig() {
     INTERNAL_CALLER_TOKEN_CHAT: 'internal-secret-token-chat-to-agent',
     MOCK_AI: 'true',
     GEMINI_API_KEY: 'test-gemini-api-key-value',
-    TAVILY_API_KEY: 'test-tavily-api-key',
     DAILY_LIVE_CALL_BUDGET: '25',
   });
 }

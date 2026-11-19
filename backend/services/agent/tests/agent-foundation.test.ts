@@ -49,10 +49,23 @@ describe('@kartik/agent config, 0001_agent_core migration & deterministic mock p
       (err: unknown) => {
         assert.ok(err instanceof ConfigValidationError);
         assert.ok(err.message.includes('GEMINI_API_KEY'));
-        assert.ok(err.message.includes('TAVILY_API_KEY'));
+        assert.ok(!err.message.includes('TAVILY_API_KEY'));
         return true;
       },
     );
+
+    // Providing only GEMINI_API_KEY satisfies live mode without needing Tavily/Groq keys
+    const liveGeminiConfig = loadAgentConfig({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/kartik',
+      REDIS_URL: 'redis://localhost:6379',
+      USER_CONTEXT_PUBLIC_KEY: TEST_PUBLIC_PEM,
+      INTERNAL_CALLER_TOKEN_CHAT: 'internal-secret-token-chat-to-agent',
+      MOCK_AI: 'false',
+      GEMINI_API_KEY: 'AIzaSyGeminiOnlyLiveKey123456',
+    });
+    assert.equal(liveGeminiConfig.mockAi, false);
+    assert.equal(liveGeminiConfig.geminiApiKey, 'AIzaSyGeminiOnlyLiveKey123456');
   });
 
   it('defines agent.files, agent.artifacts, and agent.document_chunks with ownership and size constraints in 0001_agent_core.sql (Invariant #4)', () => {

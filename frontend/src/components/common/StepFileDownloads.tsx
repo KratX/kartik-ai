@@ -17,6 +17,142 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-8',
+    title: 'Fix #8 — Eliminate Specialist 500 INTERNAL_ERROR (DB Auto-Bootstrap + Fallback & Gemini 403/400 Model Retry)',
+    subtitle:
+      '6 files · Fixes 500 INTERNAL_ERROR across Coding/PDF/PPT/Image/RAG/Vision when PostgreSQL tables/columns are missing or unreachable, adds server 5xx logging, and retries Gemini fallback models on HTTP 400/403',
+    zipFilename: 'fix-8-db-fallback-and-gemini-resilience.zip',
+    zipHref: '/__downloads/fix-8-db-fallback-and-gemini-resilience.zip',
+    commitMessage: `fix(db,agent): eliminate specialist 500 INTERNAL_ERROR via auto-schema bootstrap, graceful local DB fallback, and Gemini 400/403 model retries
+
+- Add idempotent ensurePlatformSchemaReady() in src/db/platform-repository.ts (CREATE TABLE IF NOT EXISTS for all 8 tables + ALTER TABLE users ADD COLUMN IF NOT EXISTS reserved_credits) so fresh or pre-Fix-#4 PostgreSQL/Neon databases never crash artifact/file specialists
+- Replace raw Error throws in DrizzleCloudSqlAgentRepository, DrizzleCloudSqlObjectStorage, and platform sync helpers with a 30s degraded circuit breaker and clean local cache/filesystem fallback while preserving 404 NOT_FOUND tenant isolation
+- Log 5xx error details (method, URL, traceId, message, cause) in server.ts sendError when NODE_ENV !== test for instant diagnostics
+- Expand createServerGeminiClient model-candidate fallback retries in backend/services/agent/src/services/live-gemini-providers.ts to include HTTP 400 and 403 so personal Gemini API keys seamlessly fall back from gemini-4-hydrogen to gemini-2.5-flash (and image fallbacks)
+- Normalize empty css/js fields in LiveGeminiCodingModelProvider so manifest size validation never rejects valid HTML bundles
+- Add Fix #8 regression tests in src/server/platform-multi-user-isolation.test.ts and backend/services/agent/tests/live-providers-and-limits.test.ts`,
+    changedFiles: [
+      {
+        path: 'src/db/platform-repository.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/db/platform-repository.ts',
+      },
+      {
+        path: 'server.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=server.ts',
+      },
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'src/server/platform-multi-user-isolation.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=src/server/platform-multi-user-isolation.test.ts',
+      },
+      {
+        path: 'backend/services/agent/tests/live-providers-and-limits.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/tests/live-providers-and-limits.test.ts',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
+    id: 'fix-7',
+    title: 'Fix #7 — Pure Gemini-Only AI Stack (Remove Groq, Tavily, OpenRouter & Cloudflare AI)',
+    subtitle:
+      '12 files · Consolidates all 8 agents strictly onto Google Gemini API (gemini-4-hydrogen, googleSearch grounding, gemini-embedding-2, gemini-3.1-flash-lite-image) with only GEMINI_API_KEY required',
+    zipFilename: 'fix-7-gemini-only-ai-stack.zip',
+    zipHref: '/__downloads/fix-7-gemini-only-ai-stack.zip',
+    commitMessage: `refactor(agent): remove Groq, Tavily, OpenRouter, and Cloudflare AI so all agents run exclusively on Gemini
+
+- Remove Groq, OpenRouter, Tavily, and Cloudflare Workers AI Flux adapters from backend/services/agent/src/services/live-gemini-providers.ts, routing Chat, Search (googleSearch grounding), Coding, PDF, PPT, RAG embeddings, Vision, and Image Generation strictly through Google Gemini API
+- Remove TAVILY_API_KEY from backend/services/agent/src/config/index.ts and update default model IDs to gemini-4-hydrogen and gemini-embedding-2 so only GEMINI_API_KEY is required when MOCK_AI=false
+- Simplify live AI key detection in src/server/platform-api-runtime.ts and scripts/start-local-stack.mjs to GEMINI_API_KEY only
+- Clean up .env.example to remove GROQ_API_KEY, TAVILY_API_KEY, OPENROUTER_API_KEY, CLOUDFLARE_* AI vars, and Llama/Qwen model overrides
+- Rename MockSearchProvider.providerName from mock-tavily-search to mock-gemini-search
+- Update agent unit tests to verify all specialist providers call only generativelanguage.googleapis.com and ignore any legacy third-party AI keys`,
+    changedFiles: [
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'backend/services/agent/src/config/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/config/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/services/mock-providers.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/services/mock-providers.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: '.env.example',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=.env.example',
+      },
+      {
+        path: 'scripts/start-local-stack.mjs',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=scripts/start-local-stack.mjs',
+      },
+      {
+        path: 'backend/services/agent/tests/agent-foundation.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/tests/agent-foundation.test.ts',
+      },
+      {
+        path: 'backend/services/agent/tests/agent-graph.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/tests/agent-graph.test.ts',
+      },
+      {
+        path: 'backend/services/agent/tests/artifact-content-and-upload-routes.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/tests/artifact-content-and-upload-routes.test.ts',
+      },
+      {
+        path: 'backend/services/agent/tests/pdf-ppt-generators.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/tests/pdf-ppt-generators.test.ts',
+      },
+      {
+        path: 'backend/services/agent/tests/live-providers-and-limits.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/tests/live-providers-and-limits.test.ts',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
     id: 'fix-6',
     title: 'Fix #6 — Fix All 7 Specialist Agents (Search, Coding, PDF, PPT, RAG, Vision, Image) for Real Live AI',
     subtitle:

@@ -321,12 +321,7 @@ export class KartikPlatformRuntime {
     const explicitMockAi =
       process.env.MOCK_AI === 'true' || process.env.AI_PROVIDER_MODE === 'mock';
     const hasLiveAiKey =
-      !explicitMockAi &&
-      (isUsableApiKey(process.env.GEMINI_API_KEY) ||
-        isUsableApiKey(process.env.GROQ_API_KEY) ||
-        isUsableApiKey(process.env.OPENROUTER_API_KEY) ||
-        isUsableApiKey(process.env.TAVILY_API_KEY) ||
-        isUsableApiKey(process.env.CLOUDFLARE_API_TOKEN));
+      !explicitMockAi && isUsableApiKey(process.env.GEMINI_API_KEY);
     const configuredImageProvider =
       process.env.IMAGE_PROVIDER === 'mock'
         ? 'mock'
@@ -344,11 +339,7 @@ export class KartikPlatformRuntime {
       MOCK_AI: hasLiveAiKey ? 'false' : 'true',
       IMAGE_PROVIDER: configuredImageProvider,
       GEMINI_API_KEY:
-        process.env.GEMINI_API_KEY?.trim() ||
-        process.env.GROQ_API_KEY?.trim() ||
-        process.env.OPENROUTER_API_KEY?.trim() ||
-        'test-gemini-api-key-value',
-      TAVILY_API_KEY: process.env.TAVILY_API_KEY?.trim() || 'test-tavily-api-key',
+        process.env.GEMINI_API_KEY?.trim() || 'test-gemini-api-key-value',
       DAILY_LIVE_CALL_BUDGET: process.env.DAILY_LIVE_CALL_BUDGET?.trim() || '500',
     });
 

@@ -39,7 +39,6 @@ function createTestConfig() {
     INTERNAL_CALLER_TOKEN_CHAT: 'internal-secret-token-chat-to-agent',
     MOCK_AI: 'true',
     GEMINI_API_KEY: 'test-gemini-api-key-value',
-    TAVILY_API_KEY: 'test-tavily-api-key',
     DAILY_LIVE_CALL_BUDGET: '25',
   });
 }
@@ -298,7 +297,6 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
       MOCK_AI: 'false',
       IMAGE_PROVIDER: 'live',
       GEMINI_API_KEY: 'live-stub-key-for-unit-test',
-      TAVILY_API_KEY: 'live-tavily-stub-key',
       DAILY_LIVE_CALL_BUDGET: '25',
     });
 
@@ -435,87 +433,133 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
     assert.ok(chatPrompts.length >= 2);
   });
 
-  it('Fix #6: decodes real Gemini inlineData image bytes and routes Coding/PDF/PPT through Groq fallback when Gemini key is absent', async () => {
+  it('Fix #7: routes all specialist agents exclusively through Google Gemini API and never calls Groq, Tavily, OpenRouter, or Cloudflare', async () => {
     const prevFetch = globalThis.fetch;
     const prevGeminiKey = process.env.GEMINI_API_KEY;
     const prevGroqKey = process.env.GROQ_API_KEY;
+    const prevTavilyKey = process.env.TAVILY_API_KEY;
     const prevOpenRouterKey = process.env.OPENROUTER_API_KEY;
+    const prevCfToken = process.env.CLOUDFLARE_API_TOKEN;
 
     try {
-      // A. Real Gemini image inlineData decoding
+      const requestedUrls: string[] = [];
       const fakePngPayload = Buffer.concat([
         Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
         Buffer.alloc(256, 0x42),
       ]);
+
+      // Even if legacy third-party keys exist in env, they MUST be ignored
       process.env.GEMINI_API_KEY = 'AIzaSyRealLookingUnitTestKey987654321';
-      delete process.env.GROQ_API_KEY;
-      delete process.env.OPENROUTER_API_KEY;
+      process.env.GROQ_API_KEY = 'gsk_should_never_be_called_987654321';
+      process.env.TAVILY_API_KEY = 'tvly-should-never-be-called-987654321';
+      process.env.OPENROUTER_API_KEY = 'sk-or-v1-should-never-be-called-987654321';
+      process.env.CLOUDFLARE_API_TOKEN = 'cf_should_never_be_called_987654321';
 
-      globalThis.fetch = (async () =>
-        new Response(
-          JSON.stringify({
-            candidates: [
-              {
-                content: {
-                  parts: [
-                    { text: 'Rendered cyberpunk skyline at dusk' },
-                    {
-                      inlineData: {
-                        mimeType: 'image/png',
-                        data: fakePngPayload.toString('base64'),
-                      },
-                    },
-                  ],
-                },
-              },
-            ],
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        )) as typeof fetch;
+      globalThis.fetch = (async (inputUrl, init) => {
+        const urlStr = String(inputUrl);
+        requestedUrls.push(urlStr);
+        assert.ok(
+          urlStr.startsWith('https://generativelanguage.googleapis.com/v1beta/models/'),
+          `Expected Gemini-only URL, got: ${urlStr}`,
+        );
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        assert.equal(headers['User-Agent'], 'aistudio-build');
 
-      const imageProvider = new LiveGeminiImageGenerationProvider();
-      const generatedImage = await imageProvider.generateImage({
-        prompt: 'Cyberpunk skyline at dusk',
-      });
-      assert.equal(generatedImage.mimeType, 'image/png');
-      assert.equal(generatedImage.data.byteLength, fakePngPayload.byteLength);
-      assert.deepEqual(Buffer.from(generatedImage.data), fakePngPayload);
-
-      // B. Groq fallback for Coding + PDF + PPT when only GROQ_API_KEY is configured
-      delete process.env.GEMINI_API_KEY;
-      process.env.GROQ_API_KEY = 'gsk_real_looking_unit_test_key_987654321';
-
-      globalThis.fetch = (async (_url, init) => {
         const body = JSON.parse(String(init?.body ?? '{}')) as {
-          messages?: Array<{ role: string; content: string }>;
+          tools?: Array<{ googleSearch?: Record<string, unknown> }>;
+          generationConfig?: { responseModalities?: string[]; responseMimeType?: string };
+          contents?: Array<{ parts?: Array<{ text?: string; inlineData?: { mimeType?: string } }> }>;
         };
-        const sys = (body.messages?.[0]?.content ?? '').toLowerCase();
-        const userMsg = (body.messages?.[1]?.content ?? '').toLowerCase();
-        let content = '{}';
-        if (sys.includes('frontend engineer') || userMsg.includes('index.html')) {
-          content = JSON.stringify({
-            title: 'Live Groq Todo App',
-            summary: 'Built via Groq live coding fallback.',
-            html: '<!doctype html><html><body><h1>Groq App</h1></body></html>',
+        const firstText = body.contents?.[0]?.parts?.map((p) => p.text ?? '').join(' ') ?? '';
+
+        if (body.generationConfig?.responseModalities?.includes('IMAGE')) {
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      { text: 'Rendered cyberpunk skyline at dusk' },
+                      {
+                        inlineData: {
+                          mimeType: 'image/png',
+                          data: fakePngPayload.toString('base64'),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        if (body.tools?.some((t) => Boolean(t.googleSearch))) {
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  content: {
+                    parts: [{ text: 'Gemini Google Search grounded answer on Raft consensus.' }],
+                  },
+                  groundingMetadata: {
+                    groundingChunks: [
+                      {
+                        web: {
+                          title: 'Raft Consensus Specification',
+                          uri: 'https://raft.github.io/',
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        if (body.contents?.[0]?.parts?.some((p) => Boolean(p.inlineData))) {
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  content: {
+                    parts: [{ text: 'Gemini Vision OCR: System architecture diagram with 3 tiers.' }],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        let jsonText = 'Gemini live text reply.';
+        if (firstText.includes('index.html')) {
+          jsonText = JSON.stringify({
+            title: 'Gemini Live Todo App',
+            summary: 'Built exclusively via Gemini JSON output.',
+            html: '<!doctype html><html><body><h1>Gemini App</h1></body></html>',
             css: 'body { color: #fff; background: #0f172a; }',
-            js: 'console.log("live");',
+            js: 'console.log("gemini-live");',
           });
-        } else if (sys.includes('technical author') || userMsg.includes('pdf document')) {
-          content = JSON.stringify({
-            title: 'Groq Live Architecture Brief',
+        } else if (firstText.includes('PDF document')) {
+          jsonText = JSON.stringify({
+            title: 'Gemini Live Architecture Brief',
             subtitle: 'Executive Overview',
             footer: 'Kartik.ai',
             sections: [
               {
                 heading: 'Summary',
-                content: 'Generated dynamically through Groq JSON mode.',
-                bullets: ['Real structured PDF content'],
+                content: 'Generated exclusively via Gemini structured JSON.',
+                bullets: ['Pure Gemini PDF pipeline'],
               },
             ],
           });
-        } else if (sys.includes('presentation strategist') || userMsg.includes('presentation deck')) {
-          content = JSON.stringify({
-            title: 'Groq Live Deck',
+        } else if (firstText.includes('presentation deck')) {
+          jsonText = JSON.stringify({
+            title: 'Gemini Live Deck',
             subtitle: 'Generated Slides',
             slides: [
               { title: 'Overview', subtitle: 'Intro', bullets: ['Point A', 'Point B'] },
@@ -523,45 +567,163 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
             ],
           });
         }
+
         return new Response(
           JSON.stringify({
-            choices: [{ message: { content } }],
+            candidates: [{ content: { parts: [{ text: jsonText }] } }],
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
       }) as typeof fetch;
 
+      // 1. Search via Gemini googleSearch grounding (no Tavily)
+      const searchProvider = new LiveGeminiSearchProvider();
+      const searchResults = await searchProvider.searchWeb({ query: 'Raft consensus', maxResults: 3 });
+      assert.equal(searchResults.length, 1);
+      assert.equal(searchResults[0]?.url, 'https://raft.github.io/');
+      assert.ok(searchProvider.lastSynthesizedAnswer?.includes('Gemini Google Search'));
+
+      // 2. Image via Gemini inlineData (no Cloudflare)
+      const imageProvider = new LiveGeminiImageGenerationProvider();
+      const generatedImage = await imageProvider.generateImage({ prompt: 'Cyberpunk skyline at dusk' });
+      assert.equal(generatedImage.mimeType, 'image/png');
+      assert.deepEqual(Buffer.from(generatedImage.data), fakePngPayload);
+
+      // 3. Coding, PDF, PPT, Vision via Gemini (no Groq / OpenRouter)
       const codingProvider = new LiveGeminiCodingModelProvider();
-      const codeBundle = await codingProvider.generateCodeBundle({
-        prompt: 'Build a todo app',
-        maxOutputTokens: 2048,
-      });
-      assert.ok(codeBundle.rawManifestJson.includes('Live Groq Todo App'));
+      const codeBundle = await codingProvider.generateCodeBundle({ prompt: 'Build a todo app', maxOutputTokens: 2048 });
+      assert.ok(codeBundle.rawManifestJson.includes('Gemini Live Todo App'));
 
       const pdfProvider = new LiveGeminiPdfDocumentProvider();
-      const pdfDoc = await pdfProvider.generatePdfDocument({
-        prompt: 'Create a PDF brief on event-driven architecture',
-        maxOutputTokens: 2048,
-      });
-      assert.equal(pdfDoc.spec.title, 'Groq Live Architecture Brief');
+      const pdfDoc = await pdfProvider.generatePdfDocument({ prompt: 'Create a PDF brief on event-driven architecture', maxOutputTokens: 2048 });
+      assert.equal(pdfDoc.spec.title, 'Gemini Live Architecture Brief');
       assert.equal(Buffer.from(pdfDoc.pdfBytes.subarray(0, 8)).toString('ascii'), '%PDF-1.4');
 
       const pptProvider = new LiveGeminiPptPresentationProvider();
-      const pptDeck = await pptProvider.generatePptPresentation({
-        prompt: 'Create a presentation on distributed systems',
-        maxOutputTokens: 2048,
-      });
-      assert.equal(pptDeck.spec.title, 'Groq Live Deck');
+      const pptDeck = await pptProvider.generatePptPresentation({ prompt: 'Create a presentation on distributed systems', maxOutputTokens: 2048 });
+      assert.equal(pptDeck.spec.title, 'Gemini Live Deck');
       assert.equal(pptDeck.pptxBytes[0], 0x50);
       assert.equal(pptDeck.pptxBytes[1], 0x4b);
+
+      const visionProvider = new LiveGeminiVisionProvider();
+      const visionRes = await visionProvider.analyzeImage({
+        prompt: 'Describe this diagram',
+        mimeType: 'image/png',
+        imageBytes: MOCK_PNG_BYTES,
+      });
+      assert.ok(visionRes.analysis.includes('Gemini Vision OCR'));
+
+      // 4. Verify zero non-Gemini calls occurred AND when GEMINI_API_KEY is absent, Groq/Tavily are still never called
+      assert.ok(requestedUrls.length >= 6);
+      assert.ok(requestedUrls.every((u) => u.startsWith('https://generativelanguage.googleapis.com/')));
+
+      requestedUrls.length = 0;
+      delete process.env.GEMINI_API_KEY;
+      await new LiveGeminiChatModelProvider().generateReply({ prompt: 'Hello', maxOutputTokens: 256 });
+      await new LiveGeminiSearchProvider().searchWeb({ query: 'Hello', maxResults: 2 });
+      assert.equal(requestedUrls.length, 0);
     } finally {
       globalThis.fetch = prevFetch;
       if (prevGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
       else process.env.GEMINI_API_KEY = prevGeminiKey;
       if (prevGroqKey === undefined) delete process.env.GROQ_API_KEY;
       else process.env.GROQ_API_KEY = prevGroqKey;
+      if (prevTavilyKey === undefined) delete process.env.TAVILY_API_KEY;
+      else process.env.TAVILY_API_KEY = prevTavilyKey;
       if (prevOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
       else process.env.OPENROUTER_API_KEY = prevOpenRouterKey;
+      if (prevCfToken === undefined) delete process.env.CLOUDFLARE_API_TOKEN;
+      else process.env.CLOUDFLARE_API_TOKEN = prevCfToken;
+    }
+  });
+
+  it('Fix #8: retries fallback Gemini models on HTTP 403/400 and normalizes Coding bundles with missing css/js', async () => {
+    const prevFetch = globalThis.fetch;
+    const prevGeminiKey = process.env.GEMINI_API_KEY;
+
+    try {
+      process.env.GEMINI_API_KEY = 'AIzaSyRealLookingUnitTestKey987654321';
+      const attemptedModels: string[] = [];
+
+      globalThis.fetch = (async (inputUrl) => {
+        const urlStr = String(inputUrl);
+        const match = urlStr.match(/\/models\/([^:]+):/);
+        const model = match?.[1] ? decodeURIComponent(match[1]) : 'unknown';
+        attemptedModels.push(model);
+
+        if (model === 'gemini-4-hydrogen') {
+          return new Response(
+            JSON.stringify({
+              error: { code: 403, message: 'Permission denied for preview model' },
+            }),
+            { status: 403, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        if (attemptedModels.length <= 2) {
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  content: {
+                    parts: [{ text: 'Fallback gemini-2.5-flash reply succeeded.' }],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        // Coding response omitting css and js to verify safe non-empty normalization
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        title: 'Minimal HTML App',
+                        summary: 'Normalized coding bundle',
+                        html: '<!doctype html><html><body><h1>Hello</h1></body></html>',
+                        css: '',
+                        js: '   ',
+                      }),
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }) as typeof fetch;
+
+      const chatRes = await new LiveGeminiChatModelProvider().generateReply({
+        prompt: 'Verify 403 model fallback',
+        maxOutputTokens: 256,
+      });
+      assert.equal(chatRes.content, 'Fallback gemini-2.5-flash reply succeeded.');
+      assert.deepEqual(attemptedModels.slice(0, 2), [
+        'gemini-4-hydrogen',
+        'gemini-2.5-flash',
+      ]);
+
+      const codingRes = await new LiveGeminiCodingModelProvider().generateCodeBundle({
+        prompt: 'Build a minimal hello app',
+        maxOutputTokens: 1024,
+      });
+      const parsed = JSON.parse(codingRes.rawManifestJson) as {
+        files: Array<{ path: string; sizeBytes: number; content: string }>;
+      };
+      assert.equal(parsed.files.length, 3);
+      assert.ok(parsed.files.every((f) => f.sizeBytes > 0 && f.content.trim().length > 0));
+    } finally {
+      globalThis.fetch = prevFetch;
+      if (prevGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = prevGeminiKey;
     }
   });
 });
+

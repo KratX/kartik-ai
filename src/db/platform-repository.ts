@@ -1,3 +1,5 @@
+import os from 'node:os';
+import path from 'node:path';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import type {
   AgentCitation,
@@ -14,6 +16,7 @@ import {
 import type { SpecialistAgentName } from '../../backend/shared/contracts/index.js';
 import { AppError } from '../../backend/shared/errors/index.js';
 import {
+  FileSystemObjectStorage,
   InMemoryObjectStorage,
   type ObjectStorage,
   type PutPrivateObjectInput,
@@ -21,7 +24,7 @@ import {
   type SignedUrlIssueOptions,
   type StoredPrivateObjectMetadata,
 } from '../../backend/shared/storage/index.js';
-import { db } from './index.ts';
+import { db, pool } from './index.ts';
 import {
   artifacts,
   conversations,
@@ -44,8 +47,43 @@ function isPlaceholderDatabaseUrl(rawUrl: string): boolean {
   );
 }
 
+let dbDegradedUntilMs = 0;
+let schemaBootstrapPromise: Promise<boolean> | null = null;
+const DB_DEGRADED_COOLDOWN_MS = 30_000;
+
+function extractRootErrorMessage(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const withCause = err as { message?: string; cause?: unknown };
+    if (withCause.cause && withCause.cause !== err) {
+      return extractRootErrorMessage(withCause.cause);
+    }
+    if (typeof withCause.message === 'string' && withCause.message.trim().length > 0) {
+      return withCause.message.trim();
+    }
+  }
+  return String(err ?? 'Unknown database error');
+}
+
+function markDatabaseDegraded(context: string, err: unknown): void {
+  const alreadyDegraded = Date.now() < dbDegradedUntilMs;
+  dbDegradedUntilMs = Date.now() + DB_DEGRADED_COOLDOWN_MS;
+  if (!alreadyDegraded && process.env.NODE_ENV !== 'test') {
+    console.warn(
+      `[kartik-db] ${context} failed (${extractRootErrorMessage(err)}); using local fallback store for ${DB_DEGRADED_COOLDOWN_MS / 1000}s.`,
+    );
+  }
+}
+
+export function resetDatabaseDegradedStateForTest(): void {
+  dbDegradedUntilMs = 0;
+  schemaBootstrapPromise = null;
+}
+
 export function isCloudSqlConfigured(): boolean {
-  if (process.env.NODE_ENV === 'test') {
+  if (process.env.NODE_ENV === 'test' && process.env.FORCE_CLOUDSQL_IN_TEST !== 'true') {
+    return false;
+  }
+  if (Date.now() < dbDegradedUntilMs) {
     return false;
   }
   const hasCloudSql = Boolean(
@@ -54,6 +92,127 @@ export function isCloudSqlConfigured(): boolean {
   const rawDbUrl = process.env.DATABASE_URL?.trim() ?? '';
   const hasDatabaseUrl = Boolean(rawDbUrl && !isPlaceholderDatabaseUrl(rawDbUrl));
   return hasCloudSql || hasDatabaseUrl;
+}
+
+/**
+ * Idempotently creates any missing platform tables/columns (including `users.reserved_credits`,
+ * `artifacts`, `uploaded_files`, and `private_objects`) on first DB access so a fresh or
+ * older PostgreSQL/Neon database never crashes specialist agents with 500 INTERNAL_ERROR.
+ */
+async function ensurePlatformSchemaReady(): Promise<boolean> {
+  if (!isCloudSqlConfigured()) {
+    return false;
+  }
+  if (!schemaBootstrapPromise) {
+    schemaBootstrapPromise = (async () => {
+      try {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS users (
+            id serial PRIMARY KEY,
+            uid text NOT NULL UNIQUE,
+            email text NOT NULL,
+            display_name text NOT NULL DEFAULT 'Kartik Rawat',
+            avatar_url text,
+            plan_id text NOT NULL DEFAULT 'plan_free',
+            available_credits integer NOT NULL DEFAULT 250,
+            reserved_credits integer NOT NULL DEFAULT 0,
+            created_at timestamp NOT NULL DEFAULT now(),
+            updated_at timestamp NOT NULL DEFAULT now()
+          );
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS reserved_credits integer NOT NULL DEFAULT 0;
+          CREATE TABLE IF NOT EXISTS conversations (
+            conversation_id text PRIMARY KEY,
+            user_uid text NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+            title text NOT NULL,
+            deletion_state text NOT NULL DEFAULT 'active',
+            message_count integer NOT NULL DEFAULT 0,
+            created_at timestamp NOT NULL DEFAULT now(),
+            updated_at timestamp NOT NULL DEFAULT now()
+          );
+          CREATE TABLE IF NOT EXISTS messages (
+            message_id text PRIMARY KEY,
+            conversation_id text NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+            user_uid text NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+            role text NOT NULL,
+            content text NOT NULL,
+            agent_used text,
+            request_id text,
+            credits_charged integer DEFAULT 0,
+            idempotent_replay boolean DEFAULT false,
+            citations_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+            search_images_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+            artifact_ids_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+            attached_file_ids_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+            created_at timestamp NOT NULL DEFAULT now()
+          );
+          CREATE TABLE IF NOT EXISTS uploaded_files (
+            file_id text PRIMARY KEY,
+            user_uid text NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+            conversation_id text NOT NULL,
+            original_filename text NOT NULL,
+            mime_type text NOT NULL,
+            size_bytes integer NOT NULL,
+            storage_key text NOT NULL UNIQUE,
+            sha256_hex text NOT NULL,
+            page_count integer,
+            chunk_count integer NOT NULL DEFAULT 0,
+            status text NOT NULL DEFAULT 'ready',
+            created_at timestamp NOT NULL DEFAULT now()
+          );
+          CREATE TABLE IF NOT EXISTS artifacts (
+            artifact_id text PRIMARY KEY,
+            user_uid text NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+            request_id text NOT NULL UNIQUE,
+            conversation_id text NOT NULL,
+            artifact_type text NOT NULL,
+            title text NOT NULL,
+            entry_file text NOT NULL,
+            storage_key text NOT NULL UNIQUE,
+            mime_type text NOT NULL,
+            size_bytes integer NOT NULL,
+            files_manifest_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+            created_at timestamp NOT NULL DEFAULT now()
+          );
+          CREATE TABLE IF NOT EXISTS credit_ledger_entries (
+            entry_id text PRIMARY KEY,
+            user_uid text NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+            request_id text NOT NULL,
+            description text NOT NULL,
+            delta_credits integer NOT NULL,
+            balance_after integer NOT NULL,
+            created_at timestamp NOT NULL DEFAULT now()
+          );
+          CREATE TABLE IF NOT EXISTS payment_orders (
+            order_id text PRIMARY KEY,
+            user_uid text NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+            plan_id text NOT NULL,
+            request_id text NOT NULL,
+            amount_paise integer NOT NULL,
+            credits_granted integer NOT NULL,
+            payment_id text,
+            settled boolean NOT NULL DEFAULT false,
+            created_at timestamp NOT NULL DEFAULT now(),
+            updated_at timestamp NOT NULL DEFAULT now()
+          );
+          CREATE TABLE IF NOT EXISTS private_objects (
+            storage_key text PRIMARY KEY,
+            owner_user_uid text NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+            mime_type text NOT NULL,
+            size_bytes integer NOT NULL,
+            sha256_hex text NOT NULL,
+            content_base64 text NOT NULL,
+            created_at timestamp NOT NULL DEFAULT now()
+          );
+        `);
+        return true;
+      } catch (err) {
+        schemaBootstrapPromise = null;
+        markDatabaseDegraded('ensurePlatformSchemaReady', err);
+        return false;
+      }
+    })();
+  }
+  return schemaBootstrapPromise;
 }
 
 export interface PersistedUserProfileRecord {
@@ -233,7 +392,7 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
 
   public async saveFile(file: UploadedFileRecord): Promise<void> {
     await this.cache.saveFile(file);
-    if (!isCloudSqlConfigured()) {
+    if (!(await ensurePlatformSchemaReady())) {
       return;
     }
     try {
@@ -265,9 +424,7 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
           setWhere: eq(uploadedFiles.userUid, file.userId),
         });
     } catch (error) {
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('AgentRepository.saveFile', error);
     }
   }
 
@@ -279,7 +436,7 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
     if (cached) {
       return cached;
     }
-    if (!isCloudSqlConfigured()) {
+    if (!(await ensurePlatformSchemaReady())) {
       return null;
     }
     try {
@@ -313,16 +470,15 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
       await this.cache.saveFile(mapped);
       return mapped;
     } catch (error) {
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('AgentRepository.getFileById', error);
+      return null;
     }
   }
 
   public async listFilesByUser(
     userId: string,
   ): Promise<readonly UploadedFileRecord[]> {
-    if (!isCloudSqlConfigured()) {
+    if (!(await ensurePlatformSchemaReady())) {
       return this.cache.listFilesByUser(userId);
     }
     try {
@@ -354,15 +510,14 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
       }
       return list.length > 0 ? Object.freeze(list) : this.cache.listFilesByUser(userId);
     } catch (error) {
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('AgentRepository.listFilesByUser', error);
+      return this.cache.listFilesByUser(userId);
     }
   }
 
   public async saveArtifact(artifact: ArtifactRecord): Promise<void> {
     await this.cache.saveArtifact(artifact);
-    if (!isCloudSqlConfigured()) {
+    if (!(await ensurePlatformSchemaReady())) {
       return;
     }
     try {
@@ -385,9 +540,7 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
         })
         .onConflictDoNothing();
     } catch (error) {
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('AgentRepository.saveArtifact', error);
     }
   }
 
@@ -399,7 +552,7 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
     if (cached) {
       return cached;
     }
-    if (!isCloudSqlConfigured()) {
+    if (!(await ensurePlatformSchemaReady())) {
       return null;
     }
     try {
@@ -438,9 +591,8 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
       await this.cache.saveArtifact(mapped);
       return mapped;
     } catch (error) {
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('AgentRepository.getArtifactById', error);
+      return null;
     }
   }
 
@@ -452,7 +604,7 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
     if (cached) {
       return cached;
     }
-    if (!isCloudSqlConfigured()) {
+    if (!(await ensurePlatformSchemaReady())) {
       return null;
     }
     try {
@@ -488,9 +640,8 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
       await this.cache.saveArtifact(mapped);
       return mapped;
     } catch (error) {
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('AgentRepository.getArtifactByRequestId', error);
+      return null;
     }
   }
 
@@ -502,7 +653,7 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
       userId,
       conversationId,
     );
-    if (!isCloudSqlConfigured()) {
+    if (!(await ensurePlatformSchemaReady())) {
       return cached;
     }
     try {
@@ -538,9 +689,8 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
       );
       return list.length > 0 ? Object.freeze(list) : cached;
     } catch (error) {
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('AgentRepository.listArtifactsByConversation', error);
+      return cached;
     }
   }
 
@@ -555,7 +705,7 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
     fileId: string,
   ): Promise<boolean> {
     const deletedCache = await this.cache.deleteFileMetadata(userId, fileId);
-    if (!isCloudSqlConfigured()) {
+    if (!(await ensurePlatformSchemaReady())) {
       return deletedCache;
     }
     try {
@@ -570,9 +720,8 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
         .returning({ fileId: uploadedFiles.fileId });
       return deletedCache || deletedRows.length > 0;
     } catch (error) {
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('AgentRepository.deleteFileMetadata', error);
+      return deletedCache;
     }
   }
 
@@ -584,7 +733,7 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
       userId,
       artifactId,
     );
-    if (!isCloudSqlConfigured()) {
+    if (!(await ensurePlatformSchemaReady())) {
       return deletedCache;
     }
     try {
@@ -599,9 +748,8 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
         .returning({ artifactId: artifacts.artifactId });
       return deletedCache || deletedRows.length > 0;
     } catch (error) {
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('AgentRepository.deleteArtifactMetadata', error);
+      return deletedCache;
     }
   }
 }
@@ -609,7 +757,7 @@ export class DrizzleCloudSqlAgentRepository implements AgentRepository {
 export async function loadPlatformUserSnapshotFromCloudSql(
   userId: string,
 ): Promise<PersistedPlatformUserSnapshot | null> {
-  if (!isCloudSqlConfigured()) {
+  if (!(await ensurePlatformSchemaReady())) {
     return null;
   }
   try {
@@ -793,16 +941,15 @@ export async function loadPlatformUserSnapshotFromCloudSql(
       uploadedFiles: Object.freeze(mappedFiles),
     });
   } catch (error) {
-    throw new Error('Database query failed. Please try again later.', {
-      cause: error,
-    });
+    markDatabaseDegraded('loadPlatformUserSnapshotFromCloudSql', error);
+    return null;
   }
 }
 
 export async function syncPlatformConversationToCloudSql(
   input: SyncConversationInput,
 ): Promise<void> {
-  if (!isCloudSqlConfigured()) {
+  if (!(await ensurePlatformSchemaReady())) {
     return;
   }
   try {
@@ -832,16 +979,14 @@ export async function syncPlatformConversationToCloudSql(
         setWhere: eq(conversations.userUid, input.userId),
       });
   } catch (error) {
-    throw new Error('Database query failed. Please try again later.', {
-      cause: error,
-    });
+    markDatabaseDegraded('syncPlatformConversationToCloudSql', error);
   }
 }
 
 export async function syncPlatformMessageToCloudSql(
   input: SyncMessageInput,
 ): Promise<void> {
-  if (!isCloudSqlConfigured()) {
+  if (!(await ensurePlatformSchemaReady())) {
     return;
   }
   try {
@@ -864,16 +1009,14 @@ export async function syncPlatformMessageToCloudSql(
       })
       .onConflictDoNothing();
   } catch (error) {
-    throw new Error('Database query failed. Please try again later.', {
-      cause: error,
-    });
+    markDatabaseDegraded('syncPlatformMessageToCloudSql', error);
   }
 }
 
 export async function syncPlatformBillingLedgerToCloudSql(
   input: SyncBillingLedgerInput,
 ): Promise<void> {
-  if (!isCloudSqlConfigured()) {
+  if (!(await ensurePlatformSchemaReady())) {
     return;
   }
   try {
@@ -902,16 +1045,14 @@ export async function syncPlatformBillingLedgerToCloudSql(
       })
       .onConflictDoNothing();
   } catch (error) {
-    throw new Error('Database query failed. Please try again later.', {
-      cause: error,
-    });
+    markDatabaseDegraded('syncPlatformBillingLedgerToCloudSql', error);
   }
 }
 
 export async function syncPlatformPaymentOrderToCloudSql(
   input: SyncPaymentOrderInput,
 ): Promise<void> {
-  if (!isCloudSqlConfigured()) {
+  if (!(await ensurePlatformSchemaReady())) {
     return;
   }
   try {
@@ -938,9 +1079,7 @@ export async function syncPlatformPaymentOrderToCloudSql(
         setWhere: eq(paymentOrders.userUid, input.userId),
       });
   } catch (error) {
-    throw new Error('Database query failed. Please try again later.', {
-      cause: error,
-    });
+    markDatabaseDegraded('syncPlatformPaymentOrderToCloudSql', error);
   }
 }
 
@@ -949,15 +1088,19 @@ export const cloudSqlPlatformPersistenceAdapter: PlatformPersistenceAdapter = {
     return loadPlatformUserSnapshotFromCloudSql(userId);
   },
   async syncUser(input) {
-    if (!isCloudSqlConfigured()) {
+    if (!(await ensurePlatformSchemaReady())) {
       return;
     }
-    await getOrCreateUser(
-      input.userId,
-      input.email,
-      input.displayName,
-      input.avatarUrl,
-    );
+    try {
+      await getOrCreateUser(
+        input.userId,
+        input.email,
+        input.displayName,
+        input.avatarUrl,
+      );
+    } catch (error) {
+      markDatabaseDegraded('cloudSqlPlatformPersistenceAdapter.syncUser', error);
+    }
   },
   async syncConversation(input) {
     await syncPlatformConversationToCloudSql(input);
@@ -1177,13 +1320,21 @@ export class InMemoryPlatformPersistenceAdapter
  * instant sub-millisecond reads and enforcing Invariants #10 & #20 (`404 NOT_FOUND` on foreign objects).
  */
 export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
-  private readonly cache = new InMemoryObjectStorage();
+  private readonly cache: ObjectStorage =
+    process.env.NODE_ENV === 'test'
+      ? new InMemoryObjectStorage()
+      : new FileSystemObjectStorage({
+          rootDir:
+            process.env.OBJECT_STORAGE_DIR ??
+            process.env.OBJECT_STORAGE_ROOT_DIR ??
+            path.join(os.tmpdir(), 'kartik-ai-storage', 'object-storage'),
+        });
 
   public async putPrivateObject(
     input: PutPrivateObjectInput,
   ): Promise<StoredPrivateObjectMetadata> {
     const metadata = await this.cache.putPrivateObject(input);
-    if (!isCloudSqlConfigured()) {
+    if (!(await ensurePlatformSchemaReady())) {
       return metadata;
     }
     try {
@@ -1217,9 +1368,8 @@ export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
         });
       return metadata;
     } catch (error) {
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('ObjectStorage.putPrivateObject', error);
+      return metadata;
     }
   }
 
@@ -1230,7 +1380,7 @@ export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
     try {
       return await this.cache.headPrivateObject(key, requesterUserId);
     } catch (err) {
-      if (!isCloudSqlConfigured()) {
+      if (!(await ensurePlatformSchemaReady())) {
         throw err;
       }
     }
@@ -1263,9 +1413,8 @@ export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
       if (error instanceof AppError) {
         throw error;
       }
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('ObjectStorage.headPrivateObject', error);
+      throw new AppError('NOT_FOUND', 'Requested object was not found');
     }
   }
 
@@ -1279,7 +1428,7 @@ export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
     try {
       return await this.cache.getPrivateObject(key, requesterUserId);
     } catch (err) {
-      if (!isCloudSqlConfigured()) {
+      if (!(await ensurePlatformSchemaReady())) {
         throw err;
       }
     }
@@ -1314,9 +1463,8 @@ export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
       if (error instanceof AppError) {
         throw error;
       }
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('ObjectStorage.getPrivateObject', error);
+      throw new AppError('NOT_FOUND', 'Requested object was not found');
     }
   }
 
@@ -1332,7 +1480,7 @@ export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
     ownerUserId: string,
   ): Promise<boolean> {
     const deletedCache = await this.cache.deletePrivateObject(key, ownerUserId);
-    if (!isCloudSqlConfigured()) {
+    if (!(await ensurePlatformSchemaReady())) {
       return deletedCache;
     }
     try {
@@ -1346,9 +1494,8 @@ export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
         );
       return true;
     } catch (error) {
-      throw new Error('Database query failed. Please try again later.', {
-        cause: error,
-      });
+      markDatabaseDegraded('ObjectStorage.deletePrivateObject', error);
+      return deletedCache;
     }
   }
 }
