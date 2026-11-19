@@ -6,8 +6,10 @@ import {
   buildDatabasePoolConfig,
   buildObjectStorageKey,
   computeMigrationChecksum,
+  createLazyPostgresPool,
   InMemoryObjectStorage,
   PostgresObjectStorage,
+  resolvePostgresTlsConfig,
   runForwardMigrations,
   validatePostgresConnectionUrl,
   validateUploadFile,
@@ -16,6 +18,7 @@ import {
   type DatabaseClient,
   type DatabasePool,
   type DatabaseQueryResult,
+  type UnderlyingPgPoolLike,
 } from '../index.js';
 
 function createMockDatabasePool(initialAppliedMigrations: { version: string; filename: string; checksum: string }[] = []): {
@@ -348,6 +351,98 @@ describe('@kartik/shared/database & @kartik/shared/storage (1.8.a)', () => {
 
     const deleted = await pgStorage.deletePrivateObject(key, 'usr_kartik_01');
     assert.equal(deleted, true);
+  });
+
+  it('hardens PostgreSQL TLS certificate verification for sslmode=verify-full, verify-ca, require, and neon.tech while supporting explicit no-verify opt-out (Fix #3)', async () => {
+    // 1. sslmode=verify-full enforces rejectUnauthorized: true and servername even if env tries to disable it
+    const verifyFullTls = resolvePostgresTlsConfig(
+      'postgresql://kartik:secret@ep-rapid-rain.ap-southeast-1.aws.neon.tech/neondb?sslmode=verify-full',
+      {
+        PGSSL_REJECT_UNAUTHORIZED: 'false',
+        PGSSLROOTCERT_PEM: '-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----',
+      },
+    );
+    assert.equal(verifyFullTls.requiresSsl, true);
+    assert.equal(verifyFullTls.sslMode, 'verify-full');
+    assert.equal(verifyFullTls.rejectUnauthorized, true);
+    assert.deepEqual(verifyFullTls.ssl, {
+      rejectUnauthorized: true,
+      ca: '-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----',
+      servername: 'ep-rapid-rain.ap-southeast-1.aws.neon.tech',
+    });
+
+    // 2. sslmode=verify-ca enforces rejectUnauthorized: true
+    const verifyCaTls = resolvePostgresTlsConfig(
+      'postgresql://kartik:secret@db.internal.kartik.ai:5432/kartik?sslmode=verify-ca',
+      {},
+    );
+    assert.equal(verifyCaTls.requiresSsl, true);
+    assert.equal(verifyCaTls.sslMode, 'verify-ca');
+    assert.equal(verifyCaTls.ssl?.rejectUnauthorized, true);
+    assert.equal(verifyCaTls.ssl?.servername, undefined);
+
+    // 3. sslmode=require and *.neon.tech default to rejectUnauthorized: true
+    const neonRequireTls = resolvePostgresTlsConfig(
+      'postgresql://neondb_owner:secret@ep-rapid-rain-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require',
+      {},
+    );
+    assert.equal(neonRequireTls.requiresSsl, true);
+    assert.equal(neonRequireTls.sslMode, 'require');
+    assert.equal(neonRequireTls.ssl?.rejectUnauthorized, true);
+    assert.equal(
+      neonRequireTls.ssl?.servername,
+      'ep-rapid-rain-pooler.ap-southeast-1.aws.neon.tech',
+    );
+
+    // 4. Explicit sslmode=no-verify opts out of certificate chain verification for self-signed certs
+    const noVerifyTls = resolvePostgresTlsConfig(
+      'postgresql://kartik:secret@self-signed-pg.local:5432/kartik?sslmode=no-verify',
+      {},
+    );
+    assert.equal(noVerifyTls.requiresSsl, true);
+    assert.equal(noVerifyTls.sslMode, 'no-verify');
+    assert.equal(noVerifyTls.ssl?.rejectUnauthorized, false);
+
+    // 5. Unsupported sslmode in connection URL is rejected by validatePostgresConnectionUrl
+    const invalidSslModeCheck = validatePostgresConnectionUrl(
+      'postgresql://kartik:secret@db.kartik.ai:5432/kartik?sslmode=bogus-mode',
+    );
+    assert.equal(invalidSslModeCheck.valid, false);
+    assert.match(invalidSslModeCheck.reason ?? '', /unsupported sslmode "bogus-mode"/);
+
+    // 6. createLazyPostgresPool forwards hardened ssl config to pg.Pool constructor
+    const capturedPoolConfigs: Array<Record<string, unknown>> = [];
+    class FakePgPool implements UnderlyingPgPoolLike {
+      constructor(cfg: Record<string, unknown>) {
+        capturedPoolConfigs.push(cfg);
+      }
+      async connect() {
+        return {
+          async query() {
+            return { rows: [{ ok: 1 }], rowCount: 1 };
+          },
+          release() {},
+        };
+      }
+      async query() {
+        return { rows: [{ ok: 1 }], rowCount: 1 };
+      }
+      async end() {}
+    }
+
+    const verifiedPool = createLazyPostgresPool({
+      schema: 'billing',
+      connectionString:
+        'postgresql://neondb_owner:secret@ep-rapid-rain.ap-southeast-1.aws.neon.tech:5432/neondb?sslmode=verify-full',
+      env: {},
+      poolConstructor: FakePgPool,
+    });
+    await verifiedPool.query('SELECT 1 AS ok');
+    assert.equal(capturedPoolConfigs.length, 1);
+    assert.deepEqual(capturedPoolConfigs[0]?.ssl, {
+      rejectUnauthorized: true,
+      servername: 'ep-rapid-rain.ap-southeast-1.aws.neon.tech',
+    });
   });
 });
 

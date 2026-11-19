@@ -1,6 +1,7 @@
 import * as dotenv from 'dotenv';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
+import { resolvePostgresTlsConfig } from '../../backend/shared/database/index.js';
 import * as schema from './schema.ts';
 
 dotenv.config();
@@ -15,27 +16,32 @@ export const createPool = () => {
     const databaseUrl = process.env.DATABASE_URL?.trim();
     if (databaseUrl && !process.env.SQL_HOST) {
       const parsed = new URL(databaseUrl);
-      const requiresSsl =
-        parsed.searchParams.get('sslmode') === 'require' ||
-        parsed.hostname.includes('neon.tech');
+      const tlsConfig = resolvePostgresTlsConfig(parsed, process.env);
       global._postgresPool = new Pool({
         host: parsed.hostname,
         port: parsed.port ? Number(parsed.port) : 5432,
         user: decodeURIComponent(parsed.username),
         password: decodeURIComponent(parsed.password),
         database: parsed.pathname.replace(/^\/+/, '') || 'neondb',
-        ...(requiresSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+        ...(tlsConfig.ssl ? { ssl: tlsConfig.ssl } : {}),
         max: 10,
         idleTimeoutMillis: 10000,
         connectionTimeoutMillis: 15000,
         keepAlive: true,
       });
     } else {
+      const sqlHost = process.env.SQL_HOST ?? '127.0.0.1';
+      const sqlDbName = process.env.SQL_DB_NAME ?? 'kartik';
+      const syntheticUrl = new URL(
+        `postgresql://${encodeURIComponent(sqlHost)}:5432/${encodeURIComponent(sqlDbName)}`,
+      );
+      const tlsConfig = resolvePostgresTlsConfig(syntheticUrl, process.env);
       global._postgresPool = new Pool({
         host: process.env.SQL_HOST,
         user: process.env.SQL_USER,
         password: process.env.SQL_PASSWORD,
         database: process.env.SQL_DB_NAME,
+        ...(tlsConfig.ssl ? { ssl: tlsConfig.ssl } : {}),
         max: 10,
         idleTimeoutMillis: 10000,
         connectionTimeoutMillis: 15000,

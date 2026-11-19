@@ -54,10 +54,155 @@ export interface ResolvedDatabasePoolConfig {
   readonly options: string;
 }
 
+export const POSTGRES_SSL_MODES = [
+  'disable',
+  'allow',
+  'prefer',
+  'require',
+  'verify-ca',
+  'verify-full',
+  'no-verify',
+] as const;
+
+export type PostgresSslMode = (typeof POSTGRES_SSL_MODES)[number];
+
+export interface ResolvedPostgresTlsConfig {
+  readonly requiresSsl: boolean;
+  readonly sslMode: PostgresSslMode;
+  readonly rejectUnauthorized?: boolean;
+  readonly ssl:
+    | {
+        readonly rejectUnauthorized: boolean;
+        readonly ca?: string;
+        readonly servername?: string;
+      }
+    | undefined;
+}
+
+/**
+ * Resolves PostgreSQL TLS/SSL connection options from a connection URL and environment.
+ *
+ * Security policy (Fix #3):
+ * - `sslmode=verify-full` and `sslmode=verify-ca` strictly enforce `rejectUnauthorized: true`
+ *   (and `servername` hostname verification for `verify-full`).
+ * - `sslmode=require`, `ssl=true`, and managed `*.neon.tech` hosts default to
+ *   `rejectUnauthorized: true` unless the operator explicitly opts out via
+ *   `sslmode=no-verify`, `sslaccept=accept_invalid_certs`, or `PGSSL_REJECT_UNAUTHORIZED=false`.
+ * - `sslmode=no-verify` enables TLS encryption with `rejectUnauthorized: false` for self-signed certs.
+ * - `sslmode=disable` or `ssl=false` disables TLS (`ssl: undefined`).
+ */
+export function resolvePostgresTlsConfig(
+  parsedOrUrl: URL | string,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedPostgresTlsConfig {
+  const parsed =
+    typeof parsedOrUrl === 'string' ? new URL(parsedOrUrl.trim()) : parsedOrUrl;
+  const hostname = parsed.hostname.trim().toLowerCase();
+  const rawSslMode = (
+    parsed.searchParams.get('sslmode') ??
+    env.PGSSLMODE ??
+    ''
+  )
+    .trim()
+    .toLowerCase();
+  const sslParam = (parsed.searchParams.get('ssl') ?? '').trim().toLowerCase();
+  const sslAccept = (parsed.searchParams.get('sslaccept') ?? '')
+    .trim()
+    .toLowerCase();
+  const envRejectUnauthorized = (
+    env.PGSSL_REJECT_UNAUTHORIZED ??
+    env.PGSSLREJECTUNAUTHORIZED ??
+    ''
+  )
+    .trim()
+    .toLowerCase();
+  const caCertPem =
+    (env.PGSSLROOTCERT_PEM ?? env.DATABASE_CA_CERT ?? '').trim() || undefined;
+
+  if (
+    rawSslMode === 'disable' ||
+    sslParam === 'false' ||
+    sslParam === '0'
+  ) {
+    return Object.freeze({
+      requiresSsl: false,
+      sslMode: 'disable',
+      ssl: undefined,
+    });
+  }
+
+  if (rawSslMode === 'verify-full' || rawSslMode === 'verify-ca') {
+    const sslObj: {
+      readonly rejectUnauthorized: boolean;
+      readonly ca?: string;
+      readonly servername?: string;
+    } = Object.freeze({
+      rejectUnauthorized: true,
+      ...(caCertPem ? { ca: caCertPem } : {}),
+      ...(rawSslMode === 'verify-full' && hostname
+        ? { servername: hostname }
+        : {}),
+    });
+    return Object.freeze({
+      requiresSsl: true,
+      sslMode: rawSslMode,
+      rejectUnauthorized: true,
+      ssl: sslObj,
+    });
+  }
+
+  if (rawSslMode === 'no-verify') {
+    const sslObj = Object.freeze({
+      rejectUnauthorized: false,
+      ...(caCertPem ? { ca: caCertPem } : {}),
+    });
+    return Object.freeze({
+      requiresSsl: true,
+      sslMode: 'no-verify',
+      rejectUnauthorized: false,
+      ssl: sslObj,
+    });
+  }
+
+  const implicitlyRequiresSsl =
+    rawSslMode === 'require' ||
+    sslParam === 'true' ||
+    sslParam === '1' ||
+    hostname.includes('neon.tech');
+
+  if (implicitlyRequiresSsl) {
+    const explicitInsecureOptOut =
+      sslAccept === 'accept_invalid_certs' ||
+      envRejectUnauthorized === 'false' ||
+      envRejectUnauthorized === '0';
+    const rejectUnauthorized = !explicitInsecureOptOut;
+    const sslObj = Object.freeze({
+      rejectUnauthorized,
+      ...(caCertPem ? { ca: caCertPem } : {}),
+      ...(rejectUnauthorized && hostname ? { servername: hostname } : {}),
+    });
+    return Object.freeze({
+      requiresSsl: true,
+      sslMode: 'require',
+      rejectUnauthorized,
+      ssl: sslObj,
+    });
+  }
+
+  const fallbackMode: PostgresSslMode =
+    rawSslMode === 'allow' || rawSslMode === 'prefer' ? rawSslMode : 'disable';
+  return Object.freeze({
+    requiresSsl: false,
+    sslMode: fallbackMode,
+    ssl: undefined,
+  });
+}
+
 export interface PostgresUrlValidationOptions {
   readonly envName?: string;
   readonly nodeEnv?: string;
   readonly forbidComposePostgresHost?: boolean;
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 export interface ValidatedPostgresUrlResult {
@@ -66,6 +211,8 @@ export interface ValidatedPostgresUrlResult {
   readonly hostname?: string;
   readonly database?: string;
   readonly requiresSsl?: boolean;
+  readonly sslMode?: PostgresSslMode;
+  readonly rejectUnauthorized?: boolean;
   readonly isPoolerEndpoint?: boolean;
   readonly reason?: string;
 }
@@ -130,13 +277,18 @@ export function validatePostgresConnectionUrl(
     };
   }
 
-  const sslMode = parsed.searchParams.get('sslmode')?.toLowerCase();
-  const requiresSsl =
-    sslMode === 'require' ||
-    sslMode === 'verify-full' ||
-    sslMode === 'verify-ca' ||
-    parsed.searchParams.get('ssl') === 'true' ||
-    hostname.includes('neon.tech');
+  const rawSslMode = parsed.searchParams.get('sslmode')?.trim().toLowerCase();
+  if (
+    rawSslMode &&
+    !(POSTGRES_SSL_MODES as readonly string[]).includes(rawSslMode)
+  ) {
+    return {
+      valid: false,
+      reason: `${envName} specifies unsupported sslmode "${rawSslMode}"; allowed values: ${POSTGRES_SSL_MODES.join(', ')}`,
+    };
+  }
+
+  const tls = resolvePostgresTlsConfig(parsed, options.env ?? process.env);
   const isPoolerEndpoint = hostname.includes('-pooler');
 
   return {
@@ -144,7 +296,9 @@ export function validatePostgresConnectionUrl(
     normalizedUrl: trimmed,
     hostname,
     database,
-    requiresSsl,
+    requiresSsl: tls.requiresSsl,
+    sslMode: tls.sslMode,
+    rejectUnauthorized: tls.rejectUnauthorized,
     isPoolerEndpoint,
   };
 }
@@ -545,6 +699,10 @@ export function createLazyPostgresPool(options: {
   readonly max?: number;
   readonly idleTimeoutMillis?: number;
   readonly connectionTimeoutMillis?: number;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly poolConstructor?: new (
+    cfg: Record<string, unknown>,
+  ) => UnderlyingPgPoolLike;
 }): DatabasePool {
   const validSchema = assertDatabaseSchema(options.schema);
   let resolvedPoolPromise: Promise<DatabasePool> | null = null;
@@ -552,22 +710,35 @@ export function createLazyPostgresPool(options: {
   const getPool = async (): Promise<DatabasePool> => {
     if (!resolvedPoolPromise) {
       resolvedPoolPromise = (async () => {
-        const pgModule = (await import('pg')) as {
-          default?: { Pool: new (cfg: Record<string, unknown>) => UnderlyingPgPoolLike };
-          Pool?: new (cfg: Record<string, unknown>) => UnderlyingPgPoolLike;
-        };
-        const PoolCtor = pgModule.Pool ?? pgModule.default?.Pool;
+        let PoolCtor = options.poolConstructor;
         if (!PoolCtor) {
-          throw new AppError('INTERNAL_ERROR', 'pg.Pool constructor is unavailable');
+          const pgModule = (await import('pg')) as {
+            default?: {
+              Pool: new (cfg: Record<string, unknown>) => UnderlyingPgPoolLike;
+            };
+            Pool?: new (cfg: Record<string, unknown>) => UnderlyingPgPoolLike;
+          };
+          PoolCtor = pgModule.Pool ?? pgModule.default?.Pool;
+        }
+        if (!PoolCtor) {
+          throw new AppError(
+            'INTERNAL_ERROR',
+            'pg.Pool constructor is unavailable',
+          );
         }
 
-        let host = options.host ?? process.env.SQL_HOST ?? '127.0.0.1';
-        let user = options.user ?? process.env.SQL_USER ?? 'postgres';
-        let password = options.password ?? process.env.SQL_PASSWORD ?? '';
-        let database = options.database ?? process.env.SQL_DB_NAME ?? 'kartik';
+        const runtimeEnv = options.env ?? process.env;
+        let host = options.host ?? runtimeEnv.SQL_HOST ?? '127.0.0.1';
+        let user = options.user ?? runtimeEnv.SQL_USER ?? 'postgres';
+        let password = options.password ?? runtimeEnv.SQL_PASSWORD ?? '';
+        let database = options.database ?? runtimeEnv.SQL_DB_NAME ?? 'kartik';
         let port = options.port ?? 5432;
 
-        let requiresSsl = false;
+        let tlsConfig: ResolvedPostgresTlsConfig = {
+          requiresSsl: false,
+          sslMode: 'disable',
+          ssl: undefined,
+        };
         let isPoolerEndpoint = false;
 
         if (!options.host && options.connectionString) {
@@ -578,16 +749,20 @@ export function createLazyPostgresPool(options: {
             password = decodeURIComponent(parsed.password || password);
             database = parsed.pathname.replace(/^\/+/, '') || database;
             port = parsed.port ? Number(parsed.port) : port;
-            const sslMode = parsed.searchParams.get('sslmode')?.toLowerCase();
-            requiresSsl =
-              sslMode === 'require' ||
-              sslMode === 'verify-full' ||
-              sslMode === 'verify-ca' ||
-              parsed.searchParams.get('ssl') === 'true' ||
-              host.includes('neon.tech');
+            tlsConfig = resolvePostgresTlsConfig(parsed, runtimeEnv);
             isPoolerEndpoint = host.includes('-pooler');
           } catch {
             // Keep defaults if URL parse fails
+          }
+        } else {
+          try {
+            const syntheticUrl = new URL(
+              `postgresql://${encodeURIComponent(host)}:${port}/${encodeURIComponent(database)}`,
+            );
+            tlsConfig = resolvePostgresTlsConfig(syntheticUrl, runtimeEnv);
+            isPoolerEndpoint = host.includes('-pooler');
+          } catch {
+            // Keep defaults
           }
         }
 
@@ -597,11 +772,14 @@ export function createLazyPostgresPool(options: {
           password,
           database,
           port,
-          ...(requiresSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+          ...(tlsConfig.ssl ? { ssl: tlsConfig.ssl } : {}),
           max: options.max ?? DEFAULT_PGPOOL_MAX_CONNECTIONS,
-          idleTimeoutMillis: options.idleTimeoutMillis ?? DEFAULT_PGPOOL_IDLE_TIMEOUT_MS,
+          idleTimeoutMillis:
+            options.idleTimeoutMillis ?? DEFAULT_PGPOOL_IDLE_TIMEOUT_MS,
           connectionTimeoutMillis: options.connectionTimeoutMillis ?? 15_000,
-          ...(isPoolerEndpoint ? {} : { options: `-c search_path=${validSchema},public` }),
+          ...(isPoolerEndpoint
+            ? {}
+            : { options: `-c search_path=${validSchema},public` }),
         });
 
         return new PgDriverDatabasePool(rawPool, validSchema);
@@ -615,7 +793,10 @@ export function createLazyPostgresPool(options: {
       const pool = await getPool();
       return pool.connect();
     },
-    query: async <TRow = QueryResultRow>(sql: string, params?: readonly unknown[]) => {
+    query: async <TRow = QueryResultRow>(
+      sql: string,
+      params?: readonly unknown[],
+    ) => {
       const pool = await getPool();
       return pool.query<TRow>(sql, params);
     },

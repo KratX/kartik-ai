@@ -17,6 +17,43 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-3',
+    title: 'Fix #3 — Harden PostgreSQL TLS Certificate Verification (sslmode=verify-full / verify-ca / require)',
+    subtitle:
+      '4 files · Enforces rejectUnauthorized: true & SNI servername for verify-full, verify-ca, require & *.neon.tech unless sslmode=no-verify is explicitly configured',
+    zipFilename: 'fix-3-postgres-tls-verification.zip',
+    zipHref: '/__downloads/fix-3-postgres-tls-verification.zip',
+    commitMessage: `security(db): harden PostgreSQL TLS certificate verification in @kartik/shared and root db pool
+
+- Add resolvePostgresTlsConfig and POSTGRES_SSL_MODES in backend/shared/database/index.ts
+- Enforce rejectUnauthorized: true (and SNI servername for verify-full) when sslmode=verify-full, verify-ca, require, or *.neon.tech is used instead of unconditionally setting rejectUnauthorized: false
+- Support explicit opt-out via sslmode=no-verify, sslaccept=accept_invalid_certs, or PGSSL_REJECT_UNAUTHORIZED=false for self-signed dev/staging certificates
+- Apply hardened resolvePostgresTlsConfig in src/db/index.ts and validate sslmode values in validatePostgresConnectionUrl
+- Add unit tests in backend/shared/tests/database-storage.test.ts covering verify-full, verify-ca, require, no-verify, custom CA certs, and createLazyPostgresPool`,
+    changedFiles: [
+      {
+        path: 'backend/shared/database/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/shared/database/index.ts',
+      },
+      {
+        path: 'src/db/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/db/index.ts',
+      },
+      {
+        path: 'backend/shared/tests/database-storage.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/shared/tests/database-storage.test.ts',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
     id: 'fix-2',
     title: 'Fix #2 — Full PostgreSQL Read/Write State Hydration in KartikPlatformRuntime',
     subtitle:
