@@ -42,6 +42,8 @@ function isPlaceholderDatabaseUrl(rawUrl: string): boolean {
   return (
     normalized.includes('placeholder_password') ||
     normalized.includes('ep-example') ||
+    normalized.includes('ep-calm-brook-a1k9x8z2') ||
+    normalized.includes('npg_kartikneonprod') ||
     normalized.includes('<your-endpoint>') ||
     normalized.includes('replace_me')
   );
@@ -50,6 +52,7 @@ function isPlaceholderDatabaseUrl(rawUrl: string): boolean {
 let dbDegradedUntilMs = 0;
 let schemaBootstrapPromise: Promise<boolean> | null = null;
 const DB_DEGRADED_COOLDOWN_MS = 30_000;
+const DB_AUTH_FAILURE_COOLDOWN_MS = 10 * 60_000;
 
 function extractRootErrorMessage(err: unknown): string {
   if (err && typeof err === 'object') {
@@ -64,13 +67,35 @@ function extractRootErrorMessage(err: unknown): string {
   return String(err ?? 'Unknown database error');
 }
 
+function isPermanentDbAuthOrHostError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('password authentication failed') ||
+    lower.includes('no pg_hba.conf entry') ||
+    lower.includes('enotfound') ||
+    lower.includes('28p01') ||
+    lower.includes('28000')
+  );
+}
+
 function markDatabaseDegraded(context: string, err: unknown): void {
   const alreadyDegraded = Date.now() < dbDegradedUntilMs;
-  dbDegradedUntilMs = Date.now() + DB_DEGRADED_COOLDOWN_MS;
+  const rootMsg = extractRootErrorMessage(err);
+  const permanentAuth = isPermanentDbAuthOrHostError(rootMsg);
+  const cooldownMs = permanentAuth
+    ? DB_AUTH_FAILURE_COOLDOWN_MS
+    : DB_DEGRADED_COOLDOWN_MS;
+  dbDegradedUntilMs = Date.now() + cooldownMs;
   if (!alreadyDegraded && process.env.NODE_ENV !== 'test') {
-    console.warn(
-      `[kartik-db] ${context} failed (${extractRootErrorMessage(err)}); using local fallback store for ${DB_DEGRADED_COOLDOWN_MS / 1000}s.`,
-    );
+    if (permanentAuth) {
+      console.warn(
+        `[kartik-db] ${context} failed (${rootMsg}); using local fallback store (pausing PostgreSQL retries for 10m — update or clear DATABASE_URL in .env to reconnect).`,
+      );
+    } else {
+      console.warn(
+        `[kartik-db] ${context} failed (${rootMsg}); using local fallback store for ${cooldownMs / 1000}s.`,
+      );
+    }
   }
 }
 

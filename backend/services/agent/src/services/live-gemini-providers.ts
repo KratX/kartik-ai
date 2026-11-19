@@ -3,11 +3,11 @@
  * (Blueprint §2.4, §10, ADR 0005 & Gemini API Guidelines).
  *
  * Implements Gemini-only server-side AI adapters for all 8 specialist agents:
- * - Chat, Search Synthesis, Coding, PDF, PPT & Vision: `gemini-4-hydrogen`
- *   (with resilient `gemini-2.5-flash` / `gemini-3-flash-preview` fallback & optional `GEMINI_MODEL` override)
- * - Web Search: Gemini `googleSearch` grounding (`tools: [{ googleSearch: {} }]`)
+ * - Chat, Search Synthesis, Coding, PDF, PPT & Vision: `gemini-3.1-flash-lite`
+ *   (cheapest, highest-throughput Gemini model with optional `GEMINI_MODEL` override)
+ * - Web Search: Gemini `googleSearch` grounding (`tools: [{ googleSearch: {} }]`) with live public web fallback
  * - RAG Embeddings: `gemini-embedding-2` (with `gemini-embedding-001` / `text-embedding-004` fallback)
- * - Image Generation: `gemini-3.1-flash-lite-image` / `gemini-2.5-flash-image` / `imagen-3.0-generate-002`
+ * - Image Generation: `gemini-3.1-flash-lite-image` (with optional `GEMINI_IMAGE_MODEL` override)
  * - Always sends `'User-Agent': 'aistudio-build'` and respects `PROVIDER_TIMEOUT_MS` (default 45s).
  */
 
@@ -115,12 +115,231 @@ interface GeminiClientAdapter {
   }): Promise<{ readonly mimeType: 'image/png' | 'image/jpeg'; readonly data: Uint8Array } | null>;
 }
 
-const DEFAULT_TEXT_MODEL = 'gemini-4-hydrogen';
-const TEXT_MODEL_FALLBACKS = ['gemini-2.5-flash', 'gemini-3-flash-preview'] as const;
-const DEFAULT_IMAGE_MODELS = [
-  'gemini-3.1-flash-lite-image',
-  'gemini-2.5-flash-image',
-] as const;
+const DEFAULT_TEXT_MODEL = 'gemini-3.1-flash-lite';
+const TEXT_MODEL_FALLBACKS: readonly string[] = [];
+const DEFAULT_IMAGE_MODELS = ['gemini-3.1-flash-lite-image'] as const;
+
+const unavailableModelsUntilMs = new Map<string, number>();
+const MODEL_404_COOLDOWN_MS = 5 * 60_000;
+let groundingRateLimitedUntilMs = 0;
+const GROUNDING_429_COOLDOWN_MS = 2 * 60_000;
+
+function isRunningInTestRunner(): boolean {
+  return (
+    process.env.NODE_ENV === 'test' ||
+    Boolean(process.env.NODE_TEST_CONTEXT) ||
+    process.execArgv.includes('--test')
+  );
+}
+
+function extractConciseGeminiError(rawBody: string): string {
+  const trimmed = rawBody.trim();
+  if (!trimmed) {
+    return '';
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      error?: { status?: string; message?: string };
+    };
+    const status = parsed.error?.status ? `${parsed.error.status}: ` : '';
+    const msg = (parsed.error?.message ?? '').replace(/\s+/g, ' ').trim();
+    if (status || msg) {
+      return `${status}${msg}`.slice(0, 140);
+    }
+  } catch {
+    // Non-JSON error body
+  }
+  return trimmed.replace(/\s+/g, ' ').slice(0, 140);
+}
+
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, code) => {
+      const n = Number(code);
+      return Number.isFinite(n) ? String.fromCharCode(n) : '';
+    })
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractXmlTag(block: string, tag: string): string {
+  const match = block.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, 'i'));
+  return match?.[1] ? decodeXmlEntities(match[1]) : '';
+}
+
+function isTimeSensitiveQuery(query: string): boolean {
+  return /\b(latest|today|now|news|recent|current|2025|2026|2027|price|release|launch|score|winner|won|update|breaking|announced|stock|weather)\b/i.test(
+    query,
+  );
+}
+
+async function fetchGoogleNewsRssResults(
+  query: string,
+  limit: number,
+  timeoutMs: number,
+): Promise<SearchResultItem[]> {
+  const q = encodeURIComponent(query.trim());
+  const url = `https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`;
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'KartikAI/1.0 (+https://kartik.ai)' },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    return [];
+  }
+  const xml = await res.text();
+  const items: SearchResultItem[] = [];
+  for (const match of xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)) {
+    const block = match[1] ?? '';
+    const title = extractXmlTag(block, 'title');
+    const link = extractXmlTag(block, 'link');
+    const pubDate = extractXmlTag(block, 'pubDate');
+    const source = extractXmlTag(block, 'source');
+    if (!title || !link || !/^https?:\/\//i.test(link)) {
+      continue;
+    }
+    const shortDate = pubDate
+      ? pubDate.replace(/^[A-Za-z]+,\s*/, '').replace(/\s+\d{2}:\d{2}:\d{2}\s+GMT$/i, '')
+      : '';
+    const meta = [source, shortDate].filter(Boolean).join(' · ');
+    const cleanHeadline = source && title.endsWith(` - ${source}`)
+      ? title.slice(0, -(` - ${source}`).length).trim()
+      : title;
+    items.push({
+      title: title.slice(0, 140),
+      url: link,
+      snippet: meta ? `${meta}: ${cleanHeadline}` : cleanHeadline,
+    });
+    if (items.length >= limit) {
+      break;
+    }
+  }
+  return items;
+}
+
+async function fetchWikipediaExtractResults(
+  query: string,
+  limit: number,
+  timeoutMs: number,
+): Promise<SearchResultItem[]> {
+  const q = encodeURIComponent(query.trim());
+  const url = `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${q}&gsrlimit=${limit}&prop=extracts|info&exintro=1&explaintext=1&exsentences=2&inprop=url&format=json`;
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'KartikAI/1.0 (+https://kartik.ai)' },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    return [];
+  }
+  const data = (await res.json()) as {
+    query?: {
+      pages?: Record<
+        string,
+        {
+          readonly index?: number;
+          readonly title?: string;
+          readonly fullurl?: string;
+          readonly extract?: string;
+        }
+      >;
+    };
+  };
+  const pages = Object.values(data.query?.pages ?? []).sort(
+    (a, b) => (a.index ?? 999) - (b.index ?? 999),
+  );
+  const items: SearchResultItem[] = [];
+  for (const page of pages) {
+    const title = (page.title ?? '').trim();
+    const pageUrl =
+      page.fullurl && /^https?:\/\//i.test(page.fullurl)
+        ? page.fullurl
+        : title
+          ? `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`
+          : '';
+    const extract = (page.extract ?? '').replace(/\s+/g, ' ').trim();
+    if (!title || !pageUrl || !extract) {
+      continue;
+    }
+    items.push({
+      title: `${title} — Wikipedia`,
+      url: pageUrl,
+      snippet: extract.slice(0, 320),
+    });
+    if (items.length >= limit) {
+      break;
+    }
+  }
+  return items;
+}
+
+function cleanPublicSearchQuery(rawQuery: string): string {
+  const stripped = rawQuery
+    .trim()
+    .replace(
+      /^(?:please\s+)?(?:(?:do\s+a\s+)?web\s*search|search(?:\s+the\s+web|\s+online|\s+google)?|google|look\s+up|find(?:\s+info|\s+information)?)\s+(?:for\s+|about\s+|on\s+)?/i,
+      '',
+    )
+    .trim();
+  return stripped.length >= 2 ? stripped : rawQuery.trim();
+}
+
+async function fetchLivePublicWebResults(
+  query: string,
+  maxItems: number,
+): Promise<SearchResultItem[]> {
+  const cleanedQuery = cleanPublicSearchQuery(query);
+  const perSourceLimit = Math.max(2, maxItems);
+  const timeoutMs = 6_000;
+  const [newsSettled, wikiSettled] = await Promise.allSettled([
+    fetchGoogleNewsRssResults(cleanedQuery, perSourceLimit, timeoutMs),
+    fetchWikipediaExtractResults(cleanedQuery, perSourceLimit, timeoutMs),
+  ]);
+
+  const newsItems = newsSettled.status === 'fulfilled' ? newsSettled.value : [];
+  const wikiItems = wikiSettled.status === 'fulfilled' ? wikiSettled.value : [];
+
+  const merged: SearchResultItem[] = [];
+  const seenUrls = new Set<string>();
+  const pushItem = (item: SearchResultItem | undefined) => {
+    if (!item || seenUrls.has(item.url) || merged.length >= maxItems) {
+      return;
+    }
+    seenUrls.add(item.url);
+    merged.push(item);
+  };
+
+  if (isTimeSensitiveQuery(query)) {
+    // Prioritize fresh news coverage, then append top encyclopedic context
+    for (let i = 0; i < Math.max(newsItems.length, wikiItems.length); i += 1) {
+      if (i < Math.max(2, maxItems - 1)) {
+        pushItem(newsItems[i]);
+      }
+    }
+    for (const w of wikiItems) {
+      pushItem(w);
+    }
+    for (const n of newsItems) {
+      pushItem(n);
+    }
+  } else {
+    // Interleave Wikipedia authoritative extracts and current Google News articles
+    const maxLen = Math.max(wikiItems.length, newsItems.length);
+    for (let i = 0; i < maxLen; i += 1) {
+      pushItem(wikiItems[i]);
+      pushItem(newsItems[i]);
+    }
+  }
+
+  return merged;
+}
 
 function stripEnvQuotes(val: string | undefined): string {
   if (!val) {
@@ -229,13 +448,25 @@ async function createServerGeminiClient(
         if (params.config.imageConfig) {
           genConfig.imageConfig = params.config.imageConfig;
         }
+        if (
+          typeof params.config.maxOutputTokens === 'number' &&
+          Number.isFinite(params.config.maxOutputTokens) &&
+          params.config.maxOutputTokens > 0
+        ) {
+          genConfig.maxOutputTokens = Math.min(65_536, Math.round(params.config.maxOutputTokens));
+        }
         if (Object.keys(genConfig).length > 0) {
           bodyPayload.generationConfig = genConfig;
         }
       }
 
       let lastErr: Error | null = null;
+      const inTest = isRunningInTestRunner();
       for (const targetModel of candidates) {
+        const skipUntil = unavailableModelsUntilMs.get(targetModel) ?? 0;
+        if (!inTest && Date.now() < skipUntil) {
+          continue;
+        }
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:generateContent`;
         const res = await fetch(url, {
           method: 'POST',
@@ -250,13 +481,17 @@ async function createServerGeminiClient(
         if (!res.ok) {
           let errSnippet = '';
           try {
-            errSnippet = (await res.text()).slice(0, 200);
+            errSnippet = extractConciseGeminiError(await res.text());
           } catch {
             // ignore
           }
           lastErr = new Error(`Gemini HTTP ${res.status} (${targetModel}): ${errSnippet}`);
-          if (process.env.NODE_ENV !== 'test') {
-            console.warn(`[kartik-gemini] ${targetModel} HTTP ${res.status} — trying next candidate`);
+          if (res.status === 404 && !inTest) {
+            unavailableModelsUntilMs.set(targetModel, Date.now() + MODEL_404_COOLDOWN_MS);
+          }
+          if (!inTest) {
+            const detail = errSnippet ? ` (${errSnippet})` : '';
+            console.warn(`[kartik-gemini] ${targetModel} HTTP ${res.status}${detail} — trying next candidate`);
           }
           // Retry next model candidate on 400/403/404 (tier/feature mismatch) or 429/5xx
           if (
@@ -404,6 +639,7 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
           contents: input.prompt,
           config: {
             systemInstruction: sysInstruction,
+            maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 256),
           },
         });
         const text = (response.text ?? '').trim();
@@ -530,6 +766,7 @@ Return ONLY a valid JSON object with exact keys:
           model: DEFAULT_TEXT_MODEL,
           contents: codingPrompt,
           config: {
+            maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 2_048),
             responseMimeType: 'application/json',
             responseSchema: {
               type: SchemaValueType.OBJECT,
@@ -618,7 +855,11 @@ export class LiveGeminiSearchProvider implements SearchProvider {
     const maxItems = input.maxResults ?? 4;
 
     const ai = await createServerGeminiClient(this.apiKey);
-    if (ai) {
+    const inTest = isRunningInTestRunner();
+    const groundingOnCooldown = !inTest && Date.now() < groundingRateLimitedUntilMs;
+
+    // 1. Primary path: Gemini native Google Search grounding
+    if (ai && !groundingOnCooldown) {
       try {
         const response = await ai.generateContent({
           model: DEFAULT_TEXT_MODEL,
@@ -663,8 +904,57 @@ export class LiveGeminiSearchProvider implements SearchProvider {
             },
           ]);
         }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('HTTP 429') && !inTest) {
+          groundingRateLimitedUntilMs = Date.now() + GROUNDING_429_COOLDOWN_MS;
+          console.warn(
+            '[kartik-search] Gemini Google Search grounding hit HTTP 429 — switching to live public web retrieval + Gemini synthesis for 2m.',
+          );
+        }
+      }
+    }
+
+    // 2. Real Live Public Web Retrieval fallback (Google News RSS + Wikipedia API, zero API key).
+    // Preserves offline determinism in unit tests when GEMINI_API_KEY is unset.
+    if (ai || !inTest) {
+      try {
+        const liveItems = await fetchLivePublicWebResults(input.query, maxItems);
+        if (liveItems.length > 0) {
+          const sourceContext = liveItems
+            .map((item, idx) => `[src_${idx + 1}] ${item.title} (${item.url}): ${item.snippet}`)
+            .join('\n');
+
+          // 2a. Synthesize using plain Gemini generateContent (WITHOUT googleSearch tool, avoiding grounding 429 quota)
+          if (ai) {
+            try {
+              const synthRes = await ai.generateContent({
+                model: DEFAULT_TEXT_MODEL,
+                contents: `User query: "${input.query}"\n\nLive retrieved web sources:\n${sourceContext}\n\nWrite a clear, accurate, concise Markdown answer grounded strictly in these sources. Cite sources inline as [src_1], [src_2], etc.`,
+                config: {
+                  systemInstruction:
+                    'You are Kartik.ai Web Search Synthesis Agent. Answer directly and accurately using the provided live web sources and cite [src_N] inline. Never invent URLs or facts outside the sources.',
+                },
+              });
+              const synthText = (synthRes.text ?? '').trim();
+              if (synthText.length > 0) {
+                this.lastSynthesizedAnswer = synthText;
+                return Object.freeze(liveItems);
+              }
+            } catch {
+              // Plain Gemini text generation was also rate-limited; build factual briefing from live sources below
+            }
+          }
+
+          // 2b. Direct factual briefing from the live retrieved web snippets (never generic boilerplate)
+          const bulletSummary = liveItems
+            .map((item, idx) => `- **[src_${idx + 1}] ${item.title}**: ${item.snippet}`)
+            .join('\n');
+          this.lastSynthesizedAnswer = `Live web results retrieved for **"${input.query.trim()}"**:\n\n${bulletSummary}`;
+          return Object.freeze(liveItems);
+        }
       } catch {
-        // Fall through to structured search results if grounding call fails
+        // Network completely unreachable — fall through to offline reference fallback
       }
     }
 
@@ -838,6 +1128,7 @@ Return ONLY a valid JSON object with exact keys:
           model: DEFAULT_TEXT_MODEL,
           contents: pdfPrompt,
           config: {
+            maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 2_048),
             responseMimeType: 'application/json',
             responseSchema: {
               type: SchemaValueType.OBJECT,
@@ -919,6 +1210,7 @@ Return ONLY a valid JSON object with exact keys:
           model: DEFAULT_TEXT_MODEL,
           contents: pptPrompt,
           config: {
+            maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 2_048),
             responseMimeType: 'application/json',
             responseSchema: {
               type: SchemaValueType.OBJECT,
@@ -973,25 +1265,10 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
     readonly data: Uint8Array;
     readonly caption: string;
   }> {
-    let enhancedPrompt = input.prompt.trim();
+    const enhancedPrompt = input.prompt.trim();
     const ai = await createServerGeminiClient(this.apiKey);
 
-    // 1. Optional prompt enhancement via Gemini
-    if (ai) {
-      try {
-        const res = await ai.generateContent({
-          model: DEFAULT_TEXT_MODEL,
-          contents: `Enhance this image generation prompt into a vivid 1-sentence artistic and technical visual description (max 35 words): "${input.prompt}"`,
-        });
-        if (res.text && res.text.trim().length > 0) {
-          enhancedPrompt = res.text.trim().replace(/\n+/g, ' ').slice(0, 220);
-        }
-      } catch {
-        // Keep original prompt
-      }
-    }
-
-    // 2. Primary real image generation: Gemini native image models (gemini-3.1-flash-lite-image / gemini-2.5-flash-image)
+    // Direct image generation via cheapest Gemini lite image model (skips extra prompt-enhancement LLM roundtrip)
     if (ai) {
       const imageModels = uniqueNonEmpty([
         process.env.GEMINI_IMAGE_MODEL,

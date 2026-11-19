@@ -664,7 +664,10 @@ export class S3CompatibleObjectStorage implements ObjectStorage {
         headers,
       });
       if (res.status === 404) {
-        throw new AppError('NOT_FOUND', 'Requested object was not found');
+        if (this.bucketEnsured) {
+          throw new AppError('NOT_FOUND', 'Requested object was not found');
+        }
+        throw new Error('S3 HEAD returned 404 on unverified bucket; falling back');
       }
       if (!res.ok) {
         throw new Error(`S3 HEAD failed with status ${res.status}`);
@@ -682,7 +685,7 @@ export class S3CompatibleObjectStorage implements ObjectStorage {
         createdAt: res.headers.get('x-amz-meta-created-at') ?? new Date().toISOString(),
       });
     } catch (err) {
-      if (err instanceof AppError) {
+      if (err instanceof AppError && err.code !== 'INTERNAL_ERROR') {
         throw err;
       }
       return this.fallback.headPrivateObject(key, requesterUserId);
@@ -707,7 +710,10 @@ export class S3CompatibleObjectStorage implements ObjectStorage {
         headers,
       });
       if (res.status === 404) {
-        throw new AppError('NOT_FOUND', 'Requested object was not found');
+        if (this.bucketEnsured) {
+          throw new AppError('NOT_FOUND', 'Requested object was not found');
+        }
+        throw new Error('S3 GET returned 404 on unverified bucket; falling back');
       }
       if (!res.ok) {
         throw new Error(`S3 GET failed with status ${res.status}`);
@@ -728,7 +734,7 @@ export class S3CompatibleObjectStorage implements ObjectStorage {
       });
       return Object.freeze({ metadata, body });
     } catch (err) {
-      if (err instanceof AppError) {
+      if (err instanceof AppError && err.code !== 'INTERNAL_ERROR') {
         throw err;
       }
       return this.fallback.getPrivateObject(key, requesterUserId);
@@ -872,11 +878,24 @@ export class PostgresObjectStorage implements ObjectStorage {
     this.tableInitialized = true;
   }
 
+  private degradedUntilMs = 0;
+
+  private isDegraded(): boolean {
+    return Date.now() < this.degradedUntilMs;
+  }
+
+  private markDegraded(): void {
+    this.degradedUntilMs = Date.now() + 60_000;
+  }
+
   async putPrivateObject(input: PutPrivateObjectInput): Promise<StoredPrivateObjectMetadata> {
     if (!input.key.includes(`/${input.ownerUserId}/`)) {
       throw new AppError('VALIDATION_FAILED', 'Object storage key must be scoped to ownerUserId');
     }
     const fallbackMeta = await this.fallback.putPrivateObject(input);
+    if (this.isDegraded()) {
+      return fallbackMeta;
+    }
     const contentBase64 = Buffer.from(input.body).toString('base64');
 
     try {
@@ -901,12 +920,16 @@ export class PostgresObjectStorage implements ObjectStorage {
         ],
       );
     } catch {
-      // Fallback already holds the object in memory when local Postgres is unreachable
+      // Fallback already holds the object locally when Postgres is unreachable/misconfigured
+      this.markDegraded();
     }
     return fallbackMeta;
   }
 
   async headPrivateObject(key: string, requesterUserId: string): Promise<StoredPrivateObjectMetadata> {
+    if (this.isDegraded()) {
+      return this.fallback.headPrivateObject(key, requesterUserId);
+    }
     try {
       await this.ensureTable();
       const res = await this.pool.query<PostgresObjectRow>(
@@ -932,9 +955,12 @@ export class PostgresObjectStorage implements ObjectStorage {
             : String(row.created_at),
       });
     } catch (err) {
-      if (err instanceof AppError) {
+      // Strictly preserve domain errors (e.g. NOT_FOUND for Invariants #10 & #20),
+      // but fall back cleanly when PostgreSQL fails with INTERNAL_ERROR / connection errors.
+      if (err instanceof AppError && err.code !== 'INTERNAL_ERROR') {
         throw err;
       }
+      this.markDegraded();
       return this.fallback.headPrivateObject(key, requesterUserId);
     }
   }
@@ -943,6 +969,9 @@ export class PostgresObjectStorage implements ObjectStorage {
     key: string,
     requesterUserId: string,
   ): Promise<{ readonly metadata: StoredPrivateObjectMetadata; readonly body: Uint8Array }> {
+    if (this.isDegraded()) {
+      return this.fallback.getPrivateObject(key, requesterUserId);
+    }
     try {
       await this.ensureTable();
       const res = await this.pool.query<PostgresObjectRow>(
@@ -970,9 +999,10 @@ export class PostgresObjectStorage implements ObjectStorage {
       });
       return Object.freeze({ metadata, body });
     } catch (err) {
-      if (err instanceof AppError) {
+      if (err instanceof AppError && err.code !== 'INTERNAL_ERROR') {
         throw err;
       }
+      this.markDegraded();
       return this.fallback.getPrivateObject(key, requesterUserId);
     }
   }
@@ -1060,7 +1090,9 @@ export function createObjectStorageFromEnv(
         env.BILLING_DATABASE_URL ??
         'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
     }),
-    fallbackStorage: new InMemoryObjectStorage(),
+    fallbackStorage: new FileSystemObjectStorage({
+      rootDir: path.join(os.tmpdir(), 'kartik-ai-storage', 'object-storage'),
+    }),
   });
 
   if (

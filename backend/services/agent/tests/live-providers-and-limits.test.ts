@@ -637,21 +637,31 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
     }
   });
 
-  it('Fix #8: retries fallback Gemini models on HTTP 403/400 and normalizes Coding bundles with missing css/js', async () => {
+  it('Fix #8 & #12: uses gemini-3.1-flash-lite directly by default with maxOutputTokens, falls back from GEMINI_MODEL override on 403, and normalizes Coding bundles', async () => {
     const prevFetch = globalThis.fetch;
     const prevGeminiKey = process.env.GEMINI_API_KEY;
+    const prevGeminiModel = process.env.GEMINI_MODEL;
 
     try {
       process.env.GEMINI_API_KEY = 'AIzaSyRealLookingUnitTestKey987654321';
+      process.env.GEMINI_MODEL = 'custom-preview-override';
       const attemptedModels: string[] = [];
+      let capturedMaxOutputTokens: number | undefined;
 
-      globalThis.fetch = (async (inputUrl) => {
+      globalThis.fetch = (async (inputUrl, init) => {
         const urlStr = String(inputUrl);
         const match = urlStr.match(/\/models\/([^:]+):/);
         const model = match?.[1] ? decodeURIComponent(match[1]) : 'unknown';
         attemptedModels.push(model);
 
-        if (model === 'gemini-4-hydrogen') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          generationConfig?: { maxOutputTokens?: number };
+        };
+        if (body.generationConfig?.maxOutputTokens) {
+          capturedMaxOutputTokens = body.generationConfig.maxOutputTokens;
+        }
+
+        if (model === 'custom-preview-override') {
           return new Response(
             JSON.stringify({
               error: { code: 403, message: 'Permission denied for preview model' },
@@ -666,7 +676,7 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
               candidates: [
                 {
                   content: {
-                    parts: [{ text: 'Fallback gemini-2.5-flash reply succeeded.' }],
+                    parts: [{ text: 'Fallback gemini-3.1-flash-lite reply succeeded.' }],
                   },
                 },
               ],
@@ -702,23 +712,150 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
 
       const chatRes = await new LiveGeminiChatModelProvider().generateReply({
         prompt: 'Verify 403 model fallback',
-        maxOutputTokens: 256,
+        maxOutputTokens: 8192,
       });
-      assert.equal(chatRes.content, 'Fallback gemini-2.5-flash reply succeeded.');
+      assert.equal(chatRes.content, 'Fallback gemini-3.1-flash-lite reply succeeded.');
+      assert.equal(capturedMaxOutputTokens, 8192);
       assert.deepEqual(attemptedModels.slice(0, 2), [
-        'gemini-4-hydrogen',
-        'gemini-2.5-flash',
+        'custom-preview-override',
+        'gemini-3.1-flash-lite',
       ]);
+
+      // Clear override: default path MUST go straight to gemini-3.1-flash-lite only (never hydrogen/big models)
+      delete process.env.GEMINI_MODEL;
+      attemptedModels.length = 0;
 
       const codingRes = await new LiveGeminiCodingModelProvider().generateCodeBundle({
         prompt: 'Build a minimal hello app',
-        maxOutputTokens: 1024,
+        maxOutputTokens: 8192,
       });
+      assert.deepEqual(attemptedModels, ['gemini-3.1-flash-lite']);
       const parsed = JSON.parse(codingRes.rawManifestJson) as {
         files: Array<{ path: string; sizeBytes: number; content: string }>;
       };
       assert.equal(parsed.files.length, 3);
       assert.ok(parsed.files.every((f) => f.sizeBytes > 0 && f.content.trim().length > 0));
+    } finally {
+      globalThis.fetch = prevFetch;
+      if (prevGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = prevGeminiKey;
+      if (prevGeminiModel === undefined) delete process.env.GEMINI_MODEL;
+      else process.env.GEMINI_MODEL = prevGeminiModel;
+    }
+  });
+
+  it('Fix #11: falls back to real live web retrieval + plain-Gemini synthesis when googleSearch grounding returns HTTP 429, and never calls 404 gemini-2.5-flash', async () => {
+    const prevFetch = globalThis.fetch;
+    const prevGeminiKey = process.env.GEMINI_API_KEY;
+
+    try {
+      process.env.GEMINI_API_KEY = 'AIzaSyRealLookingUnitTestKey987654321';
+      const attemptedGeminiModels: string[] = [];
+      let plainGeminiShould429 = false;
+
+      globalThis.fetch = (async (inputUrl, init) => {
+        const urlStr = String(inputUrl);
+
+        if (urlStr.startsWith('https://generativelanguage.googleapis.com/')) {
+          const match = urlStr.match(/\/models\/([^:]+):/);
+          const model = match?.[1] ? decodeURIComponent(match[1]) : 'unknown';
+          attemptedGeminiModels.push(model);
+
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            tools?: Array<{ googleSearch?: Record<string, unknown> }>;
+          };
+          const isGroundingCall = Boolean(body.tools?.some((t) => Boolean(t.googleSearch)));
+
+          if (isGroundingCall || plainGeminiShould429) {
+            return new Response(
+              JSON.stringify({
+                error: {
+                  code: 429,
+                  status: 'RESOURCE_EXHAUSTED',
+                  message: 'Quota exceeded for grounding metric',
+                },
+              }),
+              { status: 429, headers: { 'Content-Type': 'application/json' } },
+            );
+          }
+
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text: 'Node.js moved to an annual major release cadence [src_1], running on the V8 engine [src_2].',
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        if (urlStr.startsWith('https://news.google.com/rss/search')) {
+          return new Response(
+            `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <item>
+    <title>Node.js Moves to Annual Major Releases - ADTmag</title>
+    <link>https://news.google.com/rss/articles/node-annual-lts</link>
+    <pubDate>Mon, 26 Oct 2026 07:00:00 GMT</pubDate>
+    <source url="https://adtmag.com">ADTmag</source>
+  </item>
+</channel></rss>`,
+            { status: 200, headers: { 'Content-Type': 'application/xml' } },
+          );
+        }
+
+        if (urlStr.startsWith('https://en.wikipedia.org/w/api.php')) {
+          return new Response(
+            JSON.stringify({
+              query: {
+                pages: {
+                  '26415635': {
+                    index: 1,
+                    title: 'Node.js',
+                    fullurl: 'https://en.wikipedia.org/wiki/Node.js',
+                    extract: 'Node.js is a cross-platform JavaScript runtime built on Chrome V8.',
+                  },
+                },
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        return new Response('Not Found', { status: 404 });
+      }) as typeof fetch;
+
+      // Case A: googleSearch grounding 429s across all models, plain Gemini synthesis succeeds over live sources
+      const provider = new LiveGeminiSearchProvider();
+      const resultsA = await provider.searchWeb({
+        query: 'latest Node.js LTS release',
+        maxResults: 4,
+      });
+      assert.equal(resultsA.length, 2);
+      assert.equal(resultsA[0]?.url, 'https://news.google.com/rss/articles/node-annual-lts');
+      assert.equal(resultsA[1]?.url, 'https://en.wikipedia.org/wiki/Node.js');
+      assert.ok(provider.lastSynthesizedAnswer?.includes('[src_1]'));
+      assert.ok(provider.lastSynthesizedAnswer?.includes('annual major release'));
+      assert.ok(!attemptedGeminiModels.includes('gemini-2.5-flash'));
+
+      // Case B: BOTH googleSearch grounding AND plain Gemini 429 — still returns live web sources + factual briefing
+      plainGeminiShould429 = true;
+      const resultsB = await provider.searchWeb({
+        query: 'latest Node.js LTS release',
+        maxResults: 4,
+      });
+      assert.equal(resultsB.length, 2);
+      assert.ok(provider.lastSynthesizedAnswer?.includes('Node.js Moves to Annual Major Releases'));
+      assert.ok(provider.lastSynthesizedAnswer?.includes('Node.js — Wikipedia'));
+      assert.ok(!provider.lastSynthesizedAnswer?.includes('Ingress & Gateway'));
     } finally {
       globalThis.fetch = prevFetch;
       if (prevGeminiKey === undefined) delete process.env.GEMINI_API_KEY;

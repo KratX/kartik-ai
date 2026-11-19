@@ -17,6 +17,185 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-12',
+    title: 'Fix #12 — Use Cheapest Highest-Output Gemini Model Only (gemini-3.1-flash-lite + 8192 Max Output Tokens)',
+    subtitle:
+      '5 files · Removes gemini-4-hydrogen and other larger models from defaults, routes all agents directly to gemini-3.1-flash-lite / gemini-3.1-flash-lite-image, skips extra image prompt-rewrite roundtrip, and raises default MAX_OUTPUT_TOKENS to 8192',
+    zipFilename: 'fix-12-gemini-flash-lite-only.zip',
+    zipHref: '/__downloads/fix-12-gemini-flash-lite-only.zip',
+    commitMessage: `perf(agent,config): switch all agents to cheapest high-output gemini-3.1-flash-lite only and bump maxOutputTokens to 8192
+
+- Set DEFAULT_TEXT_MODEL='gemini-3.1-flash-lite', clear big-model TEXT_MODEL_FALLBACKS, and set DEFAULT_IMAGE_MODELS=['gemini-3.1-flash-lite-image'] in backend/services/agent/src/services/live-gemini-providers.ts
+- Pass generationConfig.maxOutputTokens (default 8192, max 65536) across Chat, Coding, PDF, and PPT providers and remove redundant prompt-enhancement LLM roundtrip in image generation
+- Update ROUTER_MODEL_ID, CHAT_MODEL_ID, CODING_MODEL_ID defaults to gemini-3.1-flash-lite and MAX_OUTPUT_TOKENS default to 8192 in backend/services/agent/src/config/index.ts and .env.example
+- Update agent live provider tests to verify direct gemini-3.1-flash-lite routing and maxOutputTokens forwarding`,
+    changedFiles: [
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'backend/services/agent/src/config/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/config/index.ts',
+      },
+      {
+        path: '.env.example',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=.env.example',
+      },
+      {
+        path: 'backend/services/agent/tests/live-providers-and-limits.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/tests/live-providers-and-limits.test.ts',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
+    id: 'fix-11',
+    title: 'Fix #11 — Fix Web Search on Gemini 429 Grounding Quota (Live Web Fallback + Plain Gemini Synthesis)',
+    subtitle:
+      '4 files · Eliminates 404 gemini-2.5-flash fallback, adds googleSearch 429 cooldown + live Google News RSS & Wikipedia web retrieval + plain-Gemini grounded synthesis so Web Search works reliably even on free-tier Gemini keys',
+    zipFilename: 'fix-11-websearch-429-live-fallback.zip',
+    zipHref: '/__downloads/fix-11-websearch-429-live-fallback.zip',
+    commitMessage: `fix(agent,search): recover Web Search on Gemini googleSearch 429 via live public web retrieval + plain Gemini synthesis
+
+- Remove 404 gemini-2.5-flash from TEXT_MODEL_FALLBACKS and log concise Gemini API error reasons (status + message) in backend/services/agent/src/services/live-gemini-providers.ts
+- Add a 2-minute googleSearch grounding 429 cooldown so free-tier keys do not repeatedly spam failing grounding calls
+- When Gemini googleSearch grounding hits HTTP 429, retrieve real live web results from Google News RSS + Wikipedia extract API (zero API key required), then synthesize an inline-cited answer via plain Gemini generateContent (or a factual live-source briefing if all Gemini models are temporarily rate-limited)
+- Increase Search specialist maxResults to 4 in backend/services/agent/src/graph/index.ts
+- Add Fix #11 unit test covering googleSearch 429 fallback + full-429 live briefing in backend/services/agent/tests/live-providers-and-limits.test.ts`,
+    changedFiles: [
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'backend/services/agent/src/graph/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/graph/index.ts',
+      },
+      {
+        path: 'backend/services/agent/tests/live-providers-and-limits.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/tests/live-providers-and-limits.test.ts',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
+    id: 'fix-10',
+    title: 'Fix #10 — Fix Artifact /raw 500 (PostgresObjectStorage Fallback), DB Auth Backoff & Gemini 3.1 Flash Lite Fallback',
+    subtitle:
+      '6 files · Fixes 500 "Database query failed" on GET /api/v1/artifacts/:id/raw when S3/Neon fail, stops 30s auth-error log spam, and adds gemini-3.1-flash-lite + 404 model skipping',
+    zipFilename: 'fix-10-artifact-raw-fallback-and-gemini-lite.zip',
+    zipHref: '/__downloads/fix-10-artifact-raw-fallback-and-gemini-lite.zip',
+    commitMessage: `fix(storage,db,agent): fix 500 on /artifacts/:id/raw when Postgres fails, back off DB auth errors, and add Gemini 3.1 Flash Lite fallback
+
+- Fix PostgresObjectStorage and S3CompatibleObjectStorage in backend/shared/storage/index.ts so AppError(INTERNAL_ERROR) from a failing PostgreSQL pool falls back cleanly to local storage instead of re-throwing 500 "Database query failed" on GET /api/v1/artifacts/:id/raw (while strictly preserving 404 NOT_FOUND tenant isolation)
+- Use FileSystemObjectStorage as local fallback in createObjectStorageFromEnv and add a 60s degraded circuit breaker to PostgresObjectStorage
+- Detect permanent PostgreSQL auth/host failures (password authentication failed / 28P01 / ENOTFOUND) and placeholder Neon URLs in src/db/platform-repository.ts to back off retries for 10m instead of spamming every 30s
+- Add gemini-3.1-flash-lite and gemini-nano-banana-2.1 to Gemini fallback chains and cache HTTP 404 models for 5 minutes in backend/services/agent/src/services/live-gemini-providers.ts
+- Add Fix #10 regression tests in backend/shared/tests/database-storage.test.ts and update fallback order test in backend/services/agent/tests/live-providers-and-limits.test.ts`,
+    changedFiles: [
+      {
+        path: 'backend/shared/storage/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/shared/storage/index.ts',
+      },
+      {
+        path: 'src/db/platform-repository.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/db/platform-repository.ts',
+      },
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'backend/shared/tests/database-storage.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/shared/tests/database-storage.test.ts',
+      },
+      {
+        path: 'backend/services/agent/tests/live-providers-and-limits.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=backend/services/agent/tests/live-providers-and-limits.test.ts',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
+    id: 'fix-9',
+    title: 'Fix #9 — Fix Live Preview Instant Result Deletion (App.tsx useEffect Reset Loop & Cross-Site Iframe Cookies)',
+    subtitle:
+      '5 files · Fixes results vanishing immediately after arriving by stopping the activeConversationId useEffect reset loop, guarding stale message loads, and enabling SameSite=None; Secure; Partitioned cookies + X-Kartik-Guest-Id persistence in preview iframes',
+    zipFilename: 'fix-9-live-preview-message-persistence.zip',
+    zipHref: '/__downloads/fix-9-live-preview-message-persistence.zip',
+    commitMessage: `fix(frontend,auth): stop live preview results from disappearing instantly after arrival
+
+- Fix React useEffect reset loop in frontend/src/App.tsx where refreshConversations depended on activeConversationId and re-triggered refreshConversations('conv_welcome_01') on every conversation change, immediately wiping freshly arrived messages
+- Guard loadConversationMessages with a monotonic sequence counter (messagesLoadSeqRef), keep activeConversationId in a ref, run initial workspace bootstrap once on mount, and skip redundant message reloads after executeTurnRequest and handleCreateConversation
+- Add buildAuthCookieHeader in src/middleware/auth.ts and enable trust proxy in server.ts so HTTPS preview iframes receive SameSite=None; Secure; Partitioned cookies (while localhost HTTP continues using SameSite=Lax)
+- Add X-Kartik-Guest-Id client workspace header fallback in frontend/src/App.tsx and src/middleware/auth.ts so guest turns and conversations persist even when browsers strictly block third-party iframe cookies
+- Add Fix #9 unit test in src/server/platform-multi-user-isolation.test.ts verifying HTTPS Partitioned cookies, X-Kartik-Guest-Id persistence, and verified Firebase Bearer token precedence`,
+    changedFiles: [
+      {
+        path: 'frontend/src/App.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/App.tsx',
+      },
+      {
+        path: 'src/middleware/auth.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/middleware/auth.ts',
+      },
+      {
+        path: 'server.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=server.ts',
+      },
+      {
+        path: 'src/server/platform-multi-user-isolation.test.ts',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=src/server/platform-multi-user-isolation.test.ts',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref:
+          '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
     id: 'fix-8',
     title: 'Fix #8 — Eliminate Specialist 500 INTERNAL_ERROR (DB Auto-Bootstrap + Fallback & Gemini 403/400 Model Retry)',
     subtitle:

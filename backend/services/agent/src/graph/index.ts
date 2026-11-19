@@ -232,7 +232,7 @@ export class AgentGraphExecutor {
       try {
         results = await this.deps.searchProvider.searchWeb({
           query: trimmedPrompt,
-          maxResults: 3,
+          maxResults: 4,
         });
       } catch {
         // §10: "If search fails, say the lookup failed — never invent sources."

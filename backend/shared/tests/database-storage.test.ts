@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  AppError,
   assertDirectMigrationUrl,
   assertValidPostgresConnectionUrl,
   buildDatabasePoolConfig,
@@ -11,6 +12,7 @@ import {
   PostgresObjectStorage,
   resolvePostgresTlsConfig,
   runForwardMigrations,
+  S3CompatibleObjectStorage,
   validatePostgresConnectionUrl,
   validateUploadFile,
   verifyDatabaseConnectivity,
@@ -444,5 +446,59 @@ describe('@kartik/shared/database & @kartik/shared/storage (1.8.a)', () => {
       servername: 'ep-rapid-rain.ap-southeast-1.aws.neon.tech',
     });
   });
+
+  it('Fix #10: falls back cleanly in PostgresObjectStorage & S3CompatibleObjectStorage when PostgreSQL throws INTERNAL_ERROR (Database query failed), while preserving 404 isolation', async () => {
+    const failingPool = {
+      getSchema: () => 'agent' as const,
+      async connect() {
+        throw new AppError('INTERNAL_ERROR', 'Database connection failed. Please try again later.');
+      },
+      async query() {
+        throw new AppError('INTERNAL_ERROR', 'Database query failed. Please try again later.');
+      },
+      async end() {},
+    };
+
+    const pgStorage = new PostgresObjectStorage({
+      pool: failingPool,
+      fallbackStorage: new InMemoryObjectStorage(),
+    });
+    const s3Storage = new S3CompatibleObjectStorage({
+      endpoint: 'https://s3.unreachable.invalid',
+      bucket: 'kartik-test',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'SECRETEXAMPLE',
+      region: 'ap-southeast-1',
+      fetchImpl: (async () => new Response('Not Found', { status: 404 })) as typeof fetch,
+      fallbackStorage: pgStorage,
+    });
+
+    const key = buildObjectStorageKey({
+      namespace: 'artifacts',
+      userId: 'usr_owner_1',
+      resourceId: 'conv_1',
+      fileId: 'art_1',
+      extension: '.pdf',
+    });
+    const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]);
+    await s3Storage.putPrivateObject({
+      key,
+      ownerUserId: 'usr_owner_1',
+      mimeType: 'application/pdf',
+      body: pdfBytes,
+      sha256: 'abc123',
+    });
+
+    // Owner retrieves raw bytes cleanly even when S3 returns 404 and Postgres throws AppError(INTERNAL_ERROR)
+    const fetched = await s3Storage.getPrivateObject(key, 'usr_owner_1');
+    assert.deepEqual(Buffer.from(fetched.body), Buffer.from(pdfBytes));
+
+    // Foreign user still strictly receives 404 NOT_FOUND
+    await assert.rejects(
+      () => s3Storage.getPrivateObject(key, 'usr_foreign_2'),
+      (err: unknown) => (err as { code?: string }).code === 'NOT_FOUND',
+    );
+  });
 });
+
 

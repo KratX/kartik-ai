@@ -64,15 +64,15 @@ export const AGENT_CONFIG_SCHEMA: ConfigSchema = {
   },
   ROUTER_MODEL_ID: {
     type: 'string',
-    default: 'gemini-4-hydrogen',
+    default: 'gemini-3.1-flash-lite',
   },
   CHAT_MODEL_ID: {
     type: 'string',
-    default: 'gemini-4-hydrogen',
+    default: 'gemini-3.1-flash-lite',
   },
   CODING_MODEL_ID: {
     type: 'string',
-    default: 'gemini-4-hydrogen',
+    default: 'gemini-3.1-flash-lite',
   },
   EMBEDDING_MODEL_ID: {
     type: 'string',
@@ -86,9 +86,9 @@ export const AGENT_CONFIG_SCHEMA: ConfigSchema = {
   },
   MAX_OUTPUT_TOKENS: {
     type: 'int',
-    default: 4_096,
+    default: 8_192,
     min: 1,
-    max: 32_768,
+    max: 65_536,
   },
   MAX_ATTACHMENTS: {
     type: 'int',
