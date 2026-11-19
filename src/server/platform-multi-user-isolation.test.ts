@@ -7,6 +7,7 @@ import {
   assertRootRuntimeDemoOrLocalOnly,
   KartikPlatformRuntime,
 } from './platform-api-runtime.ts';
+import { InMemoryPlatformPersistenceAdapter } from '../db/platform-repository.ts';
 import { setFirebaseTokenVerifierForTests } from '../middleware/auth.ts';
 
 function buildDecodedFirebaseToken(input: {
@@ -342,5 +343,264 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
         DEMO_MODE: 'true',
       }),
     );
+  });
+
+  it('hydrates persisted conversations, messages, idempotent turn replays, credit balance, ledger, and payment orders across a server restart (Fix #2)', async () => {
+    const validTokens: Record<string, DecodedIdToken> = {
+      'verified-firebase-jwt-alice': buildDecodedFirebaseToken({
+        uid: 'fb_alice_restart_01',
+        email: 'alice.restart@example.com',
+        name: 'Alice Restart',
+      }),
+      'verified-firebase-jwt-bob': buildDecodedFirebaseToken({
+        uid: 'fb_bob_restart_02',
+        email: 'bob.restart@example.com',
+        name: 'Bob Restart',
+      }),
+    };
+
+    setFirebaseTokenVerifierForTests(async (token: string) => {
+      const match = validTokens[token];
+      if (!match) {
+        throw new Error('FirebaseAuthError: Invalid ID token');
+      }
+      return match;
+    });
+
+    const sharedPersistence = new InMemoryPlatformPersistenceAdapter();
+    const aliceAuthHeader = {
+      Authorization: 'Bearer verified-firebase-jwt-alice',
+      'content-type': 'application/json',
+    };
+    const bobAuthHeader = {
+      Authorization: 'Bearer verified-firebase-jwt-bob',
+      'content-type': 'application/json',
+    };
+
+    let aliceConvId = '';
+    let pendingOrderIdBeforeRestart = '';
+
+    // --- Runtime Instance #1 (Before Server Restart) ---
+    {
+      const runtime1 = new KartikPlatformRuntime({
+        persistence: sharedPersistence,
+      });
+      const app1 = createKartikExpressApp(runtime1);
+      const server1 = http.createServer(app1);
+      await new Promise<void>((resolve) =>
+        server1.listen(0, '127.0.0.1', resolve),
+      );
+      const addr1 = server1.address();
+      const port1 = typeof addr1 === 'object' && addr1 ? addr1.port : 0;
+      const baseUrl1 = `http://127.0.0.1:${port1}`;
+
+      try {
+        // Alice logs in and creates a conversation
+        const loginRes = await fetch(`${baseUrl1}/api/v1/auth/google`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ idToken: 'verified-firebase-jwt-alice' }),
+        });
+        assert.equal(loginRes.status, 200);
+
+        const convRes = await fetch(`${baseUrl1}/api/v1/conversations`, {
+          method: 'POST',
+          headers: aliceAuthHeader,
+          body: JSON.stringify({ title: 'Persisted Across Restart Thread' }),
+        });
+        assert.equal(convRes.status, 201);
+        const convJson = (await convRes.json()) as {
+          data: { conversationId: string };
+        };
+        aliceConvId = convJson.data.conversationId;
+
+        // Alice executes a chat turn (-1 credit => 249 credits)
+        const turnRes = await fetch(
+          `${baseUrl1}/api/v1/conversations/${aliceConvId}/messages`,
+          {
+            method: 'POST',
+            headers: {
+              ...aliceAuthHeader,
+              'Idempotency-Key': 'req_restart_turn_01',
+            },
+            body: JSON.stringify({
+              prompt: 'Verify PostgreSQL read-write hydration across restarts',
+              preferredAgent: 'chat',
+            }),
+          },
+        );
+        assert.equal(turnRes.status, 201);
+
+        // Alice creates & verifies a Starter Plan order (+500 credits => 749 credits, plan_starter_199)
+        const order1Res = await fetch(`${baseUrl1}/api/v1/billing/orders`, {
+          method: 'POST',
+          headers: {
+            ...aliceAuthHeader,
+            'Idempotency-Key': 'req_restart_order_01',
+          },
+          body: JSON.stringify({ planId: 'plan_starter_199' }),
+        });
+        assert.equal(order1Res.status, 201);
+        const order1Json = (await order1Res.json()) as {
+          data: { orderId: string };
+        };
+
+        const verify1Res = await fetch(`${baseUrl1}/api/v1/billing/verify`, {
+          method: 'POST',
+          headers: {
+            ...aliceAuthHeader,
+            'Idempotency-Key': 'req_restart_verify_01',
+          },
+          body: JSON.stringify({ orderId: order1Json.data.orderId }),
+        });
+        assert.equal(verify1Res.status, 200);
+
+        // Alice creates a second order that remains unsettled before the server restarts
+        const order2Res = await fetch(`${baseUrl1}/api/v1/billing/orders`, {
+          method: 'POST',
+          headers: {
+            ...aliceAuthHeader,
+            'Idempotency-Key': 'req_restart_order_02',
+          },
+          body: JSON.stringify({ planId: 'plan_pro_499' }),
+        });
+        assert.equal(order2Res.status, 201);
+        const order2Json = (await order2Res.json()) as {
+          data: { orderId: string };
+        };
+        pendingOrderIdBeforeRestart = order2Json.data.orderId;
+
+        await runtime1.flushPendingPersistence();
+      } finally {
+        await new Promise<void>((resolve) => server1.close(() => resolve()));
+      }
+    }
+
+    // --- Runtime Instance #2 (Fresh Process / Empty In-Memory Maps Hydrating from Persistence) ---
+    {
+      const runtime2 = new KartikPlatformRuntime({
+        persistence: sharedPersistence,
+      });
+      const app2 = createKartikExpressApp(runtime2);
+      const server2 = http.createServer(app2);
+      await new Promise<void>((resolve) =>
+        server2.listen(0, '127.0.0.1', resolve),
+      );
+      const addr2 = server2.address();
+      const port2 = typeof addr2 === 'object' && addr2 ? addr2.port : 0;
+      const baseUrl2 = `http://127.0.0.1:${port2}`;
+
+      try {
+        // 1. Alice's conversations are hydrated from persistence
+        const listRes = await fetch(`${baseUrl2}/api/v1/conversations`, {
+          headers: aliceAuthHeader,
+        });
+        assert.equal(listRes.status, 200);
+        const listJson = (await listRes.json()) as {
+          data: {
+            items: Array<{
+              conversationId: string;
+              title: string;
+              userId: string;
+            }>;
+          };
+        };
+        assert.ok(
+          listJson.data.items.some((c) => c.conversationId === aliceConvId),
+        );
+
+        // 2. Alice's conversation messages are hydrated in order
+        const msgsRes = await fetch(
+          `${baseUrl2}/api/v1/conversations/${aliceConvId}/messages`,
+          { headers: aliceAuthHeader },
+        );
+        assert.equal(msgsRes.status, 200);
+        const msgsJson = (await msgsRes.json()) as {
+          data: {
+            items: Array<{
+              role: string;
+              content: string;
+              requestId?: string;
+            }>;
+          };
+        };
+        assert.equal(msgsJson.data.items.length, 2);
+        assert.equal(msgsJson.data.items[0]?.role, 'user');
+        assert.equal(msgsJson.data.items[1]?.role, 'assistant');
+        assert.equal(msgsJson.data.items[1]?.requestId, 'req_restart_turn_01');
+
+        // 3. Alice's billing summary reflects hydrated 749 credits, plan_starter_199, and ledger entries
+        const balRes = await fetch(`${baseUrl2}/api/v1/billing/balance`, {
+          headers: aliceAuthHeader,
+        });
+        assert.equal(balRes.status, 200);
+        const balJson = (await balRes.json()) as {
+          data: {
+            planId: string;
+            availableCredits: number;
+            ledger: Array<{ deltaCredits: number }>;
+          };
+        };
+        assert.equal(balJson.data.planId, 'plan_starter_199');
+        assert.equal(balJson.data.availableCredits, 749);
+        assert.ok(balJson.data.ledger.length >= 3);
+
+        // 4. Replaying the pre-restart Idempotency-Key returns 200 idempotentReplay: true with 0 extra credit deduction
+        const replayRes = await fetch(
+          `${baseUrl2}/api/v1/conversations/${aliceConvId}/messages`,
+          {
+            method: 'POST',
+            headers: {
+              ...aliceAuthHeader,
+              'Idempotency-Key': 'req_restart_turn_01',
+            },
+            body: JSON.stringify({
+              prompt: 'Verify PostgreSQL read-write hydration across restarts',
+              preferredAgent: 'chat',
+            }),
+          },
+        );
+        assert.equal(replayRes.status, 200);
+        const replayJson = (await replayRes.json()) as {
+          data: { idempotentReplay: boolean; remainingCredits: number };
+        };
+        assert.equal(replayJson.data.idempotentReplay, true);
+        assert.equal(replayJson.data.remainingCredits, 749);
+
+        // 5. Pending order created before restart is hydrated and can be verified after restart (+1500 => 2249 credits)
+        const verify2Res = await fetch(`${baseUrl2}/api/v1/billing/verify`, {
+          method: 'POST',
+          headers: {
+            ...aliceAuthHeader,
+            'Idempotency-Key': 'req_restart_verify_02',
+          },
+          body: JSON.stringify({ orderId: pendingOrderIdBeforeRestart }),
+        });
+        assert.equal(verify2Res.status, 200);
+        const verify2Json = (await verify2Res.json()) as {
+          data: {
+            verified: boolean;
+            planId: string;
+            availableCredits: number;
+          };
+        };
+        assert.equal(verify2Json.data.verified, true);
+        assert.equal(verify2Json.data.planId, 'plan_pro_499');
+        assert.equal(verify2Json.data.availableCredits, 2249);
+
+        // 6. Bob remains strictly isolated on Runtime Instance #2
+        const bobBalRes = await fetch(`${baseUrl2}/api/v1/billing/balance`, {
+          headers: bobAuthHeader,
+        });
+        assert.equal(bobBalRes.status, 200);
+        const bobBalJson = (await bobBalRes.json()) as {
+          data: { availableCredits: number; planId: string };
+        };
+        assert.equal(bobBalJson.data.availableCredits, 250);
+        assert.equal(bobBalJson.data.planId, 'plan_free');
+      } finally {
+        await new Promise<void>((resolve) => server2.close(() => resolve()));
+      }
+    }
   });
 });

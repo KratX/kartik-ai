@@ -17,6 +17,54 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-2',
+    title: 'Fix #2 — Full PostgreSQL Read/Write State Hydration in KartikPlatformRuntime',
+    subtitle:
+      '6 files · Hydrates users, conversations, messages, idempotent turn replays, credit balance, ledger & payment orders from PostgreSQL on cache miss + server-restart test',
+    zipFilename: 'fix-2-postgres-read-write-hydration.zip',
+    zipHref: '/__downloads/fix-2-postgres-read-write-hydration.zip',
+    commitMessage: `feat(db,runtime): add full PostgreSQL read/write state hydration in KartikPlatformRuntime
+
+- Add loadPlatformUserSnapshotFromCloudSql, PlatformPersistenceAdapter, cloudSqlPlatformPersistenceAdapter, and InMemoryPlatformPersistenceAdapter in src/db/platform-repository.ts
+- Preserve existing user profile, planId, and availableCredits on conflict in src/db/users.ts instead of overwriting verified emails with synthetic fallback placeholders
+- Implement hydrateUserFromPersistence, applyPersistedSnapshot, and flushPendingPersistence in KartikPlatformRuntime (src/server/platform-api-runtime.ts)
+- Reconstruct idempotent turn replay cache and warm artifact/file metadata caches from persisted snapshots across server restarts
+- Await runtime.hydrateUserFromPersistence(actor) across auth, conversation, message, and billing routes in server.ts
+- Add multi-instance server-restart hydration integration test in src/server/platform-multi-user-isolation.test.ts`,
+    changedFiles: [
+      {
+        path: 'src/db/platform-repository.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/db/platform-repository.ts',
+      },
+      {
+        path: 'src/db/users.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/db/users.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'server.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=server.ts',
+      },
+      {
+        path: 'src/server/platform-multi-user-isolation.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-multi-user-isolation.test.ts',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
     id: 'fix-1',
     title: 'Fix #1 — Deduplicate Frontend Component Trees (src/components/* -> @kartik/frontend)',
     subtitle:

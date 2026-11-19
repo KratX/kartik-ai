@@ -212,6 +212,7 @@ export function createKartikExpressApp(
         verifiedIdentity = verified.identity;
       }
 
+      await runtime.hydrateUserFromPersistence(verifiedIdentity);
       const session = runtime.loginWithGoogle(verifiedIdentity);
       res.setHeader(
         'Set-Cookie',
@@ -223,9 +224,12 @@ export function createKartikExpressApp(
     }
   });
 
-  app.get('/api/v1/auth/me', (req, res) => {
+  app.get('/api/v1/auth/me', async (req, res) => {
     try {
       const authReq = req as AuthRequest;
+      if (authReq.authIdentity?.uid) {
+        await runtime.hydrateUserFromPersistence(authReq.authIdentity);
+      }
       const status = runtime.getAuthStatus(authReq.authIdentity ?? null);
       sendEnvelope(req, res, 200, status);
     } catch (err) {
@@ -246,9 +250,10 @@ export function createKartikExpressApp(
   });
 
   // 3. Demo Read-Only Toggle (/api/v1/demo/toggle-read-only) — Request-Scoped (Auth or Guest)
-  app.post('/api/v1/demo/toggle-read-only', (req, res) => {
+  app.post('/api/v1/demo/toggle-read-only', async (req, res) => {
     try {
       const actor = resolveWorkspaceIdentity(req);
+      await runtime.hydrateUserFromPersistence(actor);
       const body = (req.body ?? {}) as { enabled?: boolean };
       const result = runtime.toggleDemoReadOnly(actor, body.enabled);
       sendEnvelope(req, res, 200, result);
@@ -258,9 +263,10 @@ export function createKartikExpressApp(
   });
 
   // 4. Conversations & Multi-Agent Turns — Request-Scoped (Auth or Guest)
-  app.get('/api/v1/conversations', (req, res) => {
+  app.get('/api/v1/conversations', async (req, res) => {
     try {
       const actor = resolveWorkspaceIdentity(req);
+      await runtime.hydrateUserFromPersistence(actor);
       const list = runtime.listConversations(actor);
       sendEnvelope(req, res, 200, list);
     } catch (err) {
@@ -268,9 +274,10 @@ export function createKartikExpressApp(
     }
   });
 
-  app.post('/api/v1/conversations', (req, res) => {
+  app.post('/api/v1/conversations', async (req, res) => {
     try {
       const actor = resolveWorkspaceIdentity(req);
+      await runtime.hydrateUserFromPersistence(actor);
       const body = (req.body ?? {}) as { title?: string };
       const conv = runtime.createConversation(actor, body.title);
       sendEnvelope(req, res, 201, conv);
@@ -281,9 +288,10 @@ export function createKartikExpressApp(
 
   app.get(
     '/api/v1/conversations/:conversationId/messages',
-    (req, res) => {
+    async (req, res) => {
       try {
         const actor = resolveWorkspaceIdentity(req);
+        await runtime.hydrateUserFromPersistence(actor);
         const data = runtime.getConversationMessages(
           actor,
           req.params.conversationId ?? '',
@@ -457,9 +465,10 @@ export function createKartikExpressApp(
   // 7. Billing Balance, Plans, Server-Priced Orders & Razorpay Checkout Verification — Request-Scoped (Auth or Guest)
   app.get(
     ['/api/v1/billing/balance', '/api/v1/billing/plans'],
-    (req, res) => {
+    async (req, res) => {
       try {
         const actor = resolveWorkspaceIdentity(req);
+        await runtime.hydrateUserFromPersistence(actor);
         const summary = runtime.getBillingSummary(actor);
         sendEnvelope(req, res, 200, summary);
       } catch (err) {
@@ -487,9 +496,10 @@ export function createKartikExpressApp(
 
   app.post(
     ['/api/v1/billing/verify', '/api/v1/billing/verify-checkout', '/billing/verify'],
-    (req, res) => {
+    async (req, res) => {
       try {
         const actor = resolveWorkspaceIdentity(req);
+        await runtime.hydrateUserFromPersistence(actor);
         const requestId =
           readHeaderString(req, 'idempotency-key') ??
           `req_chk_${crypto.randomBytes(8).toString('hex')}`;

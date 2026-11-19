@@ -8,6 +8,9 @@
  * - Requires request-scoped authenticated identity (`userId` / `VerifiedRequestIdentity`) for all
  *   protected operations and scopes all conversations, messages, files, artifacts, credits,
  *   idempotency keys, and Cloud SQL database queries strictly to the authenticated user.
+ * - Full PostgreSQL Read/Write Hydration: loads persisted user profile, credit balance, ledger,
+ *   conversations, messages, artifacts, uploaded files, and payment orders on first request
+ *   for each user and writes through all state mutations.
  * - Never reassigns conversation ownership across users on login.
  */
 
@@ -47,14 +50,12 @@ import {
 } from '../../backend/services/agent/src/index.js';
 import type { SpecialistAgentName } from '../../backend/shared/contracts/index.js';
 import {
+  cloudSqlPlatformPersistenceAdapter,
   DrizzleCloudSqlAgentRepository,
   DrizzleCloudSqlObjectStorage,
-  syncPlatformBillingLedgerToCloudSql,
-  syncPlatformConversationToCloudSql,
-  syncPlatformMessageToCloudSql,
-  syncPlatformPaymentOrderToCloudSql,
+  type PersistedPlatformUserSnapshot,
+  type PlatformPersistenceAdapter,
 } from '../db/platform-repository.ts';
-import { getOrCreateUser } from '../db/users.ts';
 import type { VerifiedRequestIdentity } from '../middleware/auth.ts';
 
 export interface PlatformUser {
@@ -182,8 +183,13 @@ function sanitizeUserId(rawUid: string): string {
   return safe;
 }
 
+export interface KartikPlatformRuntimeOptions {
+  readonly persistence?: PlatformPersistenceAdapter;
+}
+
 export class KartikPlatformRuntime {
   private readonly redisClient = createRedisClientFromUrl(process.env.REDIS_URL);
+  public readonly persistence: PlatformPersistenceAdapter;
   public readonly repository = new DrizzleCloudSqlAgentRepository();
   public readonly objectStorage =
     process.env.OBJECT_STORAGE_ENDPOINT ||
@@ -211,6 +217,9 @@ export class KartikPlatformRuntime {
   public readonly graphExecutor: AgentGraphExecutor;
 
   private demoReadOnly = false;
+  private readonly hydratedUsers = new Set<string>();
+  private readonly hydrationInFlight = new Map<string, Promise<void>>();
+  private readonly pendingPersistenceWrites = new Set<Promise<void>>();
   private readonly usersById = new Map<string, PlatformUser>();
   private readonly sessionsById = new Map<string, PlatformSessionRecord>();
   private readonly creditsByUserId = new Map<string, number>();
@@ -241,8 +250,9 @@ export class KartikPlatformRuntime {
     }
   >();
 
-  constructor() {
+  constructor(options?: KartikPlatformRuntimeOptions) {
     assertRootRuntimeDemoOrLocalOnly(process.env);
+    this.persistence = options?.persistence ?? cloudSqlPlatformPersistenceAdapter;
 
     const { publicKey } = crypto.generateKeyPairSync('ed25519');
     const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
@@ -303,6 +313,210 @@ export class KartikPlatformRuntime {
     });
   }
 
+  private trackPersistence(task: () => Promise<void>): void {
+    const promise = task().catch(() => undefined);
+    this.pendingPersistenceWrites.add(promise);
+    void promise.finally(() => {
+      this.pendingPersistenceWrites.delete(promise);
+    });
+  }
+
+  public async flushPendingPersistence(): Promise<void> {
+    while (this.pendingPersistenceWrites.size > 0) {
+      await Promise.all(Array.from(this.pendingPersistenceWrites));
+    }
+  }
+
+  private applyPersistedSnapshot(
+    safeUserId: string,
+    snapshot: PersistedPlatformUserSnapshot,
+  ): void {
+    const existingUser = this.usersById.get(safeUserId);
+    if (snapshot.user) {
+      this.usersById.set(safeUserId, {
+        userId: safeUserId,
+        email: snapshot.user.email || existingUser?.email || '',
+        displayName:
+          snapshot.user.displayName || existingUser?.displayName || safeUserId,
+        avatarUrl:
+          snapshot.user.avatarUrl !== null
+            ? snapshot.user.avatarUrl
+            : (existingUser?.avatarUrl ?? null),
+        planId: snapshot.user.planId,
+      });
+      this.creditsByUserId.set(safeUserId, snapshot.user.availableCredits);
+    }
+
+    if (snapshot.ledgerEntries.length > 0) {
+      const mappedLedger: PlatformLedgerEntry[] = snapshot.ledgerEntries.map(
+        (entry) => ({
+          entryId: entry.entryId,
+          timestamp: entry.timestamp,
+          description: entry.description,
+          deltaCredits: entry.deltaCredits,
+          balanceAfter: entry.balanceAfter,
+          requestId: entry.requestId,
+        }),
+      );
+      this.ledgerByUserId.set(safeUserId, mappedLedger);
+      if (!snapshot.user) {
+        this.creditsByUserId.set(safeUserId, mappedLedger[0]!.balanceAfter);
+      }
+    }
+
+    const artifactsById = new Map<string, ArtifactRecord>();
+    for (const art of snapshot.artifacts) {
+      artifactsById.set(art.artifactId, art);
+    }
+    const filesById = new Map<string, UploadedFileRecord>();
+    for (const file of snapshot.uploadedFiles) {
+      filesById.set(file.fileId, file);
+    }
+
+    if (snapshot.conversations.length > 0) {
+      this.seededWelcomeUsers.add(safeUserId);
+      for (const conv of snapshot.conversations) {
+        this.conversations.set(conv.conversationId, {
+          conversationId: conv.conversationId,
+          userId: safeUserId,
+          title: conv.title,
+          deletionState: conv.deletionState,
+          createdAt: conv.createdAt,
+          updatedAt: conv.updatedAt,
+        });
+        if (!this.messagesByConversation.has(conv.conversationId)) {
+          this.messagesByConversation.set(conv.conversationId, []);
+        }
+      }
+    }
+
+    if (snapshot.messages.length > 0) {
+      const grouped = new Map<string, PlatformMessage[]>();
+      const userMsgByReqId = new Map<string, PlatformMessage>();
+      const assistantMsgByReqId = new Map<string, PlatformMessage>();
+
+      for (const msg of snapshot.messages) {
+        const hydratedArtifacts: ArtifactRecord[] = [];
+        for (const artId of msg.artifactIds) {
+          const found = artifactsById.get(artId);
+          if (found) {
+            hydratedArtifacts.push(found);
+          }
+        }
+        const hydratedFiles: UploadedFileRecord[] = [];
+        for (const fileId of msg.attachedFileIds) {
+          const found = filesById.get(fileId);
+          if (found) {
+            hydratedFiles.push(found);
+          }
+        }
+
+        const platformMsg: PlatformMessage = {
+          messageId: msg.messageId,
+          conversationId: msg.conversationId,
+          role: msg.role,
+          content: msg.content,
+          agentUsed: msg.agentUsed,
+          requestId: msg.requestId,
+          creditsCharged: msg.creditsCharged,
+          idempotentReplay: msg.idempotentReplay,
+          citations: msg.citations,
+          searchImages: msg.searchImages.length > 0 ? msg.searchImages : undefined,
+          artifactIds: msg.artifactIds,
+          artifacts: hydratedArtifacts.length > 0 ? hydratedArtifacts : undefined,
+          attachedFiles: hydratedFiles.length > 0 ? hydratedFiles : undefined,
+          createdAt: msg.createdAt,
+        };
+
+        const bucket = grouped.get(msg.conversationId) ?? [];
+        bucket.push(platformMsg);
+        grouped.set(msg.conversationId, bucket);
+
+        if (msg.requestId) {
+          if (msg.role === 'user') {
+            userMsgByReqId.set(msg.requestId, platformMsg);
+          } else {
+            assistantMsgByReqId.set(msg.requestId, platformMsg);
+          }
+        }
+      }
+
+      for (const [convId, list] of grouped.entries()) {
+        this.messagesByConversation.set(convId, list);
+      }
+
+      const currentCredits =
+        this.creditsByUserId.get(safeUserId) ?? INITIAL_FREE_CREDITS;
+      for (const [reqId, assistantMsg] of assistantMsgByReqId.entries()) {
+        const userMsg = userMsgByReqId.get(reqId);
+        if (userMsg) {
+          this.processedTurnsByUserAndRequestId.set(`${safeUserId}:${reqId}`, {
+            conversationId: assistantMsg.conversationId,
+            requestId: reqId,
+            traceId: `trc_hydrated_${reqId}`,
+            remainingCredits: currentCredits,
+            creditsCharged: assistantMsg.creditsCharged ?? 0,
+            idempotentReplay: true,
+            userMessage: userMsg,
+            assistantMessage: assistantMsg,
+          });
+        }
+      }
+    }
+
+    for (const order of snapshot.paymentOrders) {
+      const plan = PLATFORM_CREDIT_PLANS.find((p) => p.planId === order.planId);
+      if (plan) {
+        this.pendingOrders.set(order.orderId, {
+          orderId: order.orderId,
+          plan,
+          userId: safeUserId,
+          settled: order.settled,
+        });
+      }
+    }
+  }
+
+  /**
+   * Hydrates a user's persisted profile, conversations, messages, credit balance, ledger,
+   * artifacts, uploaded files, and payment orders from PostgreSQL (or configured persistence adapter)
+   * on cache miss. Safe to invoke concurrently for the same user.
+   */
+  public async hydrateUserFromPersistence(
+    actor: VerifiedRequestIdentity | string,
+  ): Promise<PlatformUser> {
+    const rawUid = typeof actor === 'string' ? actor : actor?.uid;
+    if (!rawUid) {
+      throw new AppError('UNAUTHENTICATED', 'Authenticated user identity is required');
+    }
+    const safeUserId = sanitizeUserId(rawUid);
+
+    if (!this.hydratedUsers.has(safeUserId)) {
+      let inflight = this.hydrationInFlight.get(safeUserId);
+      if (!inflight) {
+        inflight = (async () => {
+          try {
+            const snapshot = await this.persistence.loadUserSnapshot(safeUserId);
+            if (snapshot) {
+              await this.repository.warmCacheFromSnapshot({
+                artifacts: snapshot.artifacts,
+                uploadedFiles: snapshot.uploadedFiles,
+              });
+              this.applyPersistedSnapshot(safeUserId, snapshot);
+            }
+          } finally {
+            this.hydratedUsers.add(safeUserId);
+            this.hydrationInFlight.delete(safeUserId);
+          }
+        })();
+        this.hydrationInFlight.set(safeUserId, inflight);
+      }
+      await inflight;
+    }
+
+    return this.requireUser(actor);
+  }
+
   private ensureUserProvisioned(
     userId: string,
     profile?: {
@@ -313,16 +527,34 @@ export class KartikPlatformRuntime {
   ): PlatformUser {
     const safeUserId = sanitizeUserId(userId);
     const existing = this.usersById.get(safeUserId);
+    const incomingEmail = profile?.email?.trim().toLowerCase();
+    const isIncomingGuestPlaceholder =
+      incomingEmail === 'guest@local.kartik.ai' ||
+      incomingEmail === `${safeUserId.toLowerCase()}@kartik.ai`;
+
+    const resolvedEmail =
+      (!isIncomingGuestPlaceholder && incomingEmail) ||
+      existing?.email ||
+      incomingEmail ||
+      '';
+    const incomingDisplayName = profile?.displayName?.trim();
+    const isIncomingGenericDisplay =
+      incomingDisplayName === 'Guest Workspace' ||
+      incomingDisplayName === safeUserId;
+
+    const resolvedDisplayName =
+      (!isIncomingGenericDisplay && incomingDisplayName) ||
+      existing?.displayName ||
+      incomingDisplayName ||
+      resolvedEmail.split('@')[0] ||
+      safeUserId;
+
     const updatedUser: PlatformUser = {
       userId: safeUserId,
-      email: profile?.email?.trim().toLowerCase() || existing?.email || '',
-      displayName:
-        profile?.displayName?.trim() ||
-        existing?.displayName ||
-        profile?.email?.split('@')[0] ||
-        safeUserId,
+      email: resolvedEmail,
+      displayName: resolvedDisplayName,
       avatarUrl:
-        profile?.avatarUrl !== undefined
+        profile?.avatarUrl !== undefined && profile?.avatarUrl !== null
           ? profile.avatarUrl
           : (existing?.avatarUrl ?? null),
       planId: existing?.planId ?? 'plan_free',
@@ -334,56 +566,94 @@ export class KartikPlatformRuntime {
     }
 
     if (!this.ledgerByUserId.has(safeUserId)) {
-      this.ledgerByUserId.set(safeUserId, [
-        {
-          entryId: `led_grant_${safeUserId}`,
-          timestamp: new Date().toISOString(),
-          description: 'Initial Free-Tier Starter Grant',
-          deltaCredits: INITIAL_FREE_CREDITS,
-          balanceAfter: INITIAL_FREE_CREDITS,
-          requestId: `req_initial_grant_${safeUserId}`,
-        },
-      ]);
+      const initialEntry: PlatformLedgerEntry = {
+        entryId: `led_grant_${safeUserId}`,
+        timestamp: new Date().toISOString(),
+        description: 'Initial Free-Tier Starter Grant',
+        deltaCredits: INITIAL_FREE_CREDITS,
+        balanceAfter: INITIAL_FREE_CREDITS,
+        requestId: `req_initial_grant_${safeUserId}`,
+      };
+      this.ledgerByUserId.set(safeUserId, [initialEntry]);
+      this.trackPersistence(() =>
+        this.persistence.syncBillingLedger({
+          userId: safeUserId,
+          email: updatedUser.email,
+          displayName: updatedUser.displayName,
+          planId: updatedUser.planId,
+          availableCredits: INITIAL_FREE_CREDITS,
+          entryId: initialEntry.entryId,
+          requestId: initialEntry.requestId,
+          description: initialEntry.description,
+          deltaCredits: initialEntry.deltaCredits,
+          balanceAfter: initialEntry.balanceAfter,
+          timestamp: initialEntry.timestamp,
+        }),
+      );
     }
 
     if (!this.seededWelcomeUsers.has(safeUserId)) {
       this.seededWelcomeUsers.add(safeUserId);
       const convId = `conv_welcome_${safeUserId}`;
       const nowIso = new Date().toISOString();
+      const welcomeTitle = 'Kartik.ai Multi-Agent Architecture & Capabilities';
       this.conversations.set(convId, {
         conversationId: convId,
         userId: safeUserId,
-        title: 'Kartik.ai Multi-Agent Architecture & Capabilities',
+        title: welcomeTitle,
         deletionState: 'active',
         createdAt: nowIso,
         updatedAt: nowIso,
       });
 
-      this.messagesByConversation.set(convId, [
-        {
-          messageId: `msg_welcome_assistant_${safeUserId}`,
+      const welcomeMsg: PlatformMessage = {
+        messageId: `msg_welcome_assistant_${safeUserId}`,
+        conversationId: convId,
+        role: 'assistant',
+        agentUsed: 'chat',
+        content: [
+          '### Welcome to **Kartik.ai** — Multi-Agent AI Workspace',
+          '',
+          'Select any specialist agent pill below or type naturally and the **LangGraph Router** will dispatch your turn automatically:',
+          '',
+          '| Specialist Agent | What It Produces | Cost / Rate Limit |',
+          '| :--- | :--- | :--- |',
+          '| **Chat (`chat`)** | Multi-turn technical synthesis, Markdown tables & architecture reasoning | `1 credit` · `20 req/min` |',
+          '| **Web Search (`search`)** | Live Google Search grounding citations + **4-image Interactive Lightbox Gallery** | `2 credits` · `5 req/min` |',
+          '| **Coding (`coding`)** | Two-stage classifier: builds 3-file (`index.html`, `styles.css`, `app.js`) live sandboxed apps OR inline code reviews | `5 credits` · `5 req/min` |',
+          '| **PDF Generator (`pdf`)** | Compiles real downloadable **`%PDF-1.4`** multi-page binary reports with page numbers & footer | `5 credits` · `5 req/min` |',
+          '| **PPT Generator (`ppt`)** | Compiles real downloadable **OpenXML `.pptx`** slide decks + **Interactive 16:9 Slide Deck Preview** in chat | `8 credits` · `5 req/min` |',
+          '| **PDF RAG (`rag`)** | Extracts multi-page text from uploaded `.pdf` files, chunks, embeds (`768-dim`), and cites `[Document, p. N]` | `2 credits` · `5 req/min` |',
+          '| **Vision & Image (`vision` / `image`)** | Multimodal OCR/diagram inspection on uploaded images & prompt-enhanced visual artwork generation | `3–10 credits` · `5 req/min` |',
+        ].join('\n'),
+        citations: [],
+        createdAt: nowIso,
+      };
+
+      this.messagesByConversation.set(convId, [welcomeMsg]);
+      this.trackPersistence(async () => {
+        await this.persistence.syncConversation({
           conversationId: convId,
-          role: 'assistant',
-          agentUsed: 'chat',
-          content: [
-            '### Welcome to **Kartik.ai** — Multi-Agent AI Workspace',
-            '',
-            'Select any specialist agent pill below or type naturally and the **LangGraph Router** will dispatch your turn automatically:',
-            '',
-            '| Specialist Agent | What It Produces | Cost / Rate Limit |',
-            '| :--- | :--- | :--- |',
-            '| **Chat (`chat`)** | Multi-turn technical synthesis, Markdown tables & architecture reasoning | `1 credit` · `20 req/min` |',
-            '| **Web Search (`search`)** | Live Google Search grounding citations + **4-image Interactive Lightbox Gallery** | `2 credits` · `5 req/min` |',
-            '| **Coding (`coding`)** | Two-stage classifier: builds 3-file (`index.html`, `styles.css`, `app.js`) live sandboxed apps OR inline code reviews | `5 credits` · `5 req/min` |',
-            '| **PDF Generator (`pdf`)** | Compiles real downloadable **`%PDF-1.4`** multi-page binary reports with page numbers & footer | `5 credits` · `5 req/min` |',
-            '| **PPT Generator (`ppt`)** | Compiles real downloadable **OpenXML `.pptx`** slide decks + **Interactive 16:9 Slide Deck Preview** in chat | `8 credits` · `5 req/min` |',
-            '| **PDF RAG (`rag`)** | Extracts multi-page text from uploaded `.pdf` files, chunks, embeds (`768-dim`), and cites `[Document, p. N]` | `2 credits` · `5 req/min` |',
-            '| **Vision & Image (`vision` / `image`)** | Multimodal OCR/diagram inspection on uploaded images & prompt-enhanced visual artwork generation | `3–10 credits` · `5 req/min` |',
-          ].join('\n'),
-          citations: [],
+          userId: safeUserId,
+          email: updatedUser.email,
+          displayName: updatedUser.displayName,
+          title: welcomeTitle,
+          deletionState: 'active',
+          messageCount: 1,
           createdAt: nowIso,
-        },
-      ]);
+          updatedAt: nowIso,
+        });
+        await this.persistence.syncMessage({
+          messageId: welcomeMsg.messageId,
+          conversationId: convId,
+          userId: safeUserId,
+          role: 'assistant',
+          content: welcomeMsg.content,
+          agentUsed: welcomeMsg.agentUsed,
+          citationsJson: [],
+          createdAt: nowIso,
+        });
+      });
     }
 
     return updatedUser;
@@ -481,12 +751,14 @@ export class KartikPlatformRuntime {
       expiresAtMs,
     });
 
-    void getOrCreateUser(
-      user.userId,
-      user.email,
-      user.displayName,
-      user.avatarUrl,
-    ).catch(() => undefined);
+    this.trackPersistence(() =>
+      this.persistence.syncUser({
+        userId: user.userId,
+        email: user.email,
+        displayName: user.displayName,
+        avatarUrl: user.avatarUrl,
+      }),
+    );
 
     return {
       isAuthenticated: true,
@@ -554,15 +826,19 @@ export class KartikPlatformRuntime {
     };
     this.conversations.set(convId, record);
     this.messagesByConversation.set(convId, []);
-    void syncPlatformConversationToCloudSql({
-      conversationId: record.conversationId,
-      userId: user.userId,
-      email: user.email,
-      displayName: user.displayName,
-      title: record.title,
-      deletionState: 'active',
-      messageCount: 0,
-    }).catch(() => undefined);
+    this.trackPersistence(() =>
+      this.persistence.syncConversation({
+        conversationId: record.conversationId,
+        userId: user.userId,
+        email: user.email,
+        displayName: user.displayName,
+        title: record.title,
+        deletionState: 'active',
+        messageCount: 0,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      }),
+    );
     return record;
   }
 
@@ -596,7 +872,7 @@ export class KartikPlatformRuntime {
     conversationId: string,
   ) {
     this.assertWritable();
-    const user = this.requireUser(actor);
+    const user = await this.hydrateUserFromPersistence(actor);
     const resolvedId =
       conversationId === 'conv_welcome_01'
         ? `conv_welcome_${user.userId}`
@@ -632,15 +908,19 @@ export class KartikPlatformRuntime {
     conv.deletionState = 'deleted';
     this.messagesByConversation.delete(resolvedId);
 
-    void syncPlatformConversationToCloudSql({
-      conversationId: conv.conversationId,
-      userId: user.userId,
-      email: user.email,
-      displayName: user.displayName,
-      title: conv.title,
-      deletionState: 'deleted',
-      messageCount: 0,
-    }).catch(() => undefined);
+    this.trackPersistence(() =>
+      this.persistence.syncConversation({
+        conversationId: conv.conversationId,
+        userId: user.userId,
+        email: user.email,
+        displayName: user.displayName,
+        title: conv.title,
+        deletionState: 'deleted',
+        messageCount: 0,
+        createdAt: conv.createdAt,
+        updatedAt: new Date().toISOString(),
+      }),
+    );
 
     return {
       conversationId: resolvedId,
@@ -664,7 +944,7 @@ export class KartikPlatformRuntime {
     },
   ) {
     this.assertWritable();
-    const user = this.requireUser(actor);
+    const user = await this.hydrateUserFromPersistence(actor);
     const resolvedConvId =
       !input.conversationId || input.conversationId === 'conv_welcome_01'
         ? `conv_welcome_${user.userId}`
@@ -691,7 +971,7 @@ export class KartikPlatformRuntime {
   }
 
   public async listFiles(actor: VerifiedRequestIdentity | string) {
-    const user = this.requireUser(actor);
+    const user = await this.hydrateUserFromPersistence(actor);
     const items = await this.repository.listFilesByUser(user.userId);
     return {
       items,
@@ -703,7 +983,7 @@ export class KartikPlatformRuntime {
     actor: VerifiedRequestIdentity | string,
     artifactId: string,
   ) {
-    const user = this.requireUser(actor);
+    const user = await this.hydrateUserFromPersistence(actor);
     return this.ingestionService.getArtifactWithRawBytes({
       userId: user.userId,
       artifactId,
@@ -722,7 +1002,7 @@ export class KartikPlatformRuntime {
     },
   ) {
     this.assertWritable();
-    const user = this.requireUser(actor);
+    const user = await this.hydrateUserFromPersistence(actor);
 
     if (!input.requestId || input.requestId.trim().length === 0) {
       throw new AppError(
@@ -866,8 +1146,8 @@ export class KartikPlatformRuntime {
     }
     conv.updatedAt = assistantMessage.createdAt;
 
-    void (async () => {
-      await syncPlatformConversationToCloudSql({
+    this.trackPersistence(async () => {
+      await this.persistence.syncConversation({
         conversationId: conv.conversationId,
         userId: user.userId,
         email: user.email,
@@ -875,8 +1155,10 @@ export class KartikPlatformRuntime {
         title: conv.title,
         deletionState: 'active',
         messageCount: list.length,
+        createdAt: conv.createdAt,
+        updatedAt: conv.updatedAt,
       });
-      await syncPlatformMessageToCloudSql({
+      await this.persistence.syncMessage({
         messageId: userMessage.messageId,
         conversationId: conv.conversationId,
         userId: user.userId,
@@ -884,8 +1166,9 @@ export class KartikPlatformRuntime {
         content: userMessage.content,
         requestId: input.requestId,
         attachedFileIdsJson: input.attachmentFileIds ?? [],
+        createdAt: userMessage.createdAt,
       });
-      await syncPlatformMessageToCloudSql({
+      await this.persistence.syncMessage({
         messageId: assistantMessage.messageId,
         conversationId: conv.conversationId,
         userId: user.userId,
@@ -898,8 +1181,9 @@ export class KartikPlatformRuntime {
         citationsJson: assistantMessage.citations ?? [],
         searchImagesJson: assistantMessage.searchImages ?? [],
         artifactIdsJson: assistantMessage.artifactIds ?? [],
+        createdAt: assistantMessage.createdAt,
       });
-      await syncPlatformBillingLedgerToCloudSql({
+      await this.persistence.syncBillingLedger({
         userId: user.userId,
         email: user.email,
         displayName: user.displayName,
@@ -910,8 +1194,9 @@ export class KartikPlatformRuntime {
         description: ledgerEntry.description,
         deltaCredits: ledgerEntry.deltaCredits,
         balanceAfter: ledgerEntry.balanceAfter,
+        timestamp: ledgerEntry.timestamp,
       });
-    })().catch(() => undefined);
+    });
 
     const turnResult = {
       conversationId: conv.conversationId,
@@ -953,7 +1238,7 @@ export class KartikPlatformRuntime {
     },
   ) {
     this.assertWritable();
-    const user = this.requireUser(actor);
+    const user = await this.hydrateUserFromPersistence(actor);
     const plan = PLATFORM_CREDIT_PLANS.find((p) => p.planId === input.planId);
     if (!plan) {
       throw new AppError(
@@ -1014,17 +1299,19 @@ export class KartikPlatformRuntime {
       settled: false,
     });
 
-    void syncPlatformPaymentOrderToCloudSql({
-      orderId,
-      userId: user.userId,
-      email: user.email,
-      displayName: user.displayName,
-      planId: plan.planId,
-      requestId: input.requestId,
-      amountPaise: plan.amountPaise,
-      creditsGranted: plan.creditsGranted,
-      settled: false,
-    }).catch(() => undefined);
+    this.trackPersistence(() =>
+      this.persistence.syncPaymentOrder({
+        orderId,
+        userId: user.userId,
+        email: user.email,
+        displayName: user.displayName,
+        planId: plan.planId,
+        requestId: input.requestId,
+        amountPaise: plan.amountPaise,
+        creditsGranted: plan.creditsGranted,
+        settled: false,
+      }),
+    );
 
     return {
       orderId,
@@ -1121,8 +1408,8 @@ export class KartikPlatformRuntime {
     userLedger.unshift(ledgerEntry);
     this.ledgerByUserId.set(user.userId, userLedger);
 
-    void (async () => {
-      await syncPlatformPaymentOrderToCloudSql({
+    this.trackPersistence(async () => {
+      await this.persistence.syncPaymentOrder({
         orderId: order.orderId,
         userId: updatedUser.userId,
         email: updatedUser.email,
@@ -1134,7 +1421,7 @@ export class KartikPlatformRuntime {
         paymentId,
         settled: true,
       });
-      await syncPlatformBillingLedgerToCloudSql({
+      await this.persistence.syncBillingLedger({
         userId: updatedUser.userId,
         email: updatedUser.email,
         displayName: updatedUser.displayName,
@@ -1145,8 +1432,9 @@ export class KartikPlatformRuntime {
         description: ledgerEntry.description,
         deltaCredits: ledgerEntry.deltaCredits,
         balanceAfter: ledgerEntry.balanceAfter,
+        timestamp: ledgerEntry.timestamp,
       });
-    })().catch(() => undefined);
+    });
 
     return {
       verified: true,
