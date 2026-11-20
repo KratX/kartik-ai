@@ -739,7 +739,7 @@ export const AGENT_SELECTOR_PILLS: readonly AgentSelectorPillSpec[] = Object.fre
     id: 'rag',
     label: 'PDF RAG',
     creditCostLabel: '2 cr',
-    placeholder: 'Ask a grounded question about your uploaded PDF documents...',
+    placeholder: 'Upload a .PDF and ask for grounded facts, tables, comparisons, or summaries...',
   },
   {
     id: 'vision',
@@ -1103,4 +1103,45 @@ export function pdfDocumentSpecToMarkdown(doc: ParsedPdfDocumentViewModel): stri
   return lines.join('\n').trim();
 }
 
+export interface DocumentEvidenceSummary {
+  readonly passageCount: number;
+  readonly documentCount: number;
+  readonly uniqueTitles: readonly string[];
+  readonly label: string;
+}
 
+/**
+ * Formats a hybrid RAG relevance score (`0..1`) as an integer match percentage (`0..100`),
+ * returning `null` when score is absent or invalid.
+ */
+export function formatCitationRelevancePercent(score: number | undefined): number | null {
+  if (typeof score !== 'number' || !Number.isFinite(score) || score <= 0) {
+    return null;
+  }
+  return Math.max(1, Math.min(100, Math.round(score * 100)));
+}
+
+/**
+ * Summarizes grounded PDF RAG citations into passage count, unique document count, and compact display label.
+ */
+export function summarizeDocumentCitations(
+  citations: ReadonlyArray<{ readonly title: string; readonly urlOrPage: string }>,
+): DocumentEvidenceSummary {
+  const uniqueTitles = Array.from(
+    new Set(
+      citations
+        .map((c) => c.title.trim())
+        .filter(Boolean),
+    ),
+  );
+  const passageCount = citations.length;
+  const documentCount = uniqueTitles.length;
+  const passageLabel = `${passageCount} ${passageCount === 1 ? 'passage' : 'passages'}`;
+  const docLabel = `${documentCount} ${documentCount === 1 ? 'document' : 'documents'}`;
+  return Object.freeze({
+    passageCount,
+    documentCount,
+    uniqueTitles: Object.freeze(uniqueTitles),
+    label: `${passageLabel} · ${docLabel}`,
+  });
+}

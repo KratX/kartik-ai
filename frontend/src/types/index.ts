@@ -89,6 +89,7 @@ export interface MessageCitation {
   readonly urlOrPage: string;
   readonly domain?: string;
   readonly snippet?: string;
+  readonly score?: number;
   readonly publishedAt?: string;
   readonly sourceType?:
     | 'gemini_grounding'

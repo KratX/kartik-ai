@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   buildArtifactRawDownloadUrl,
+  formatCitationRelevancePercent,
   parsePdfArtifactDocument,
   parsePptArtifactSlideDeck,
   pdfDocumentSpecToMarkdown,
   pptDeckSpecToMarkdown,
+  summarizeDocumentCitations,
   tokenizeInlineMarkdown,
   tokenizeMarkdownBlocks,
 } from '../src/index.js';
@@ -266,5 +268,32 @@ describe('@kartik/frontend SlideDeckPreview & MarkdownRenderer Tokenizers (9.4.a
     assert.ok(md.includes('**Step 01 — Pilot:**'));
     assert.ok(md.includes('*Speaker Notes:*'));
   });
-});
 
+  it('Fix #18: formats hybrid PDF RAG relevance percentages and summarizes multi-passage document citations cleanly', () => {
+    assert.equal(formatCitationRelevancePercent(0.876), 88);
+    assert.equal(formatCitationRelevancePercent(1), 100);
+    assert.equal(formatCitationRelevancePercent(0), null);
+    assert.equal(formatCitationRelevancePercent(undefined), null);
+    assert.equal(formatCitationRelevancePercent(Number.NaN), null);
+
+    const singleSummary = summarizeDocumentCitations([
+      { title: 'security-handbook.pdf', urlOrPage: 'p. 7' },
+    ]);
+    assert.equal(singleSummary.passageCount, 1);
+    assert.equal(singleSummary.documentCount, 1);
+    assert.equal(singleSummary.label, '1 passage · 1 document');
+
+    const multiSummary = summarizeDocumentCitations([
+      { title: 'security-handbook.pdf', urlOrPage: 'p. 2' },
+      { title: 'security-handbook.pdf', urlOrPage: 'p. 7' },
+      { title: 'billing-spec.pdf', urlOrPage: 'p. 4' },
+    ]);
+    assert.equal(multiSummary.passageCount, 3);
+    assert.equal(multiSummary.documentCount, 2);
+    assert.deepEqual(multiSummary.uniqueTitles, [
+      'security-handbook.pdf',
+      'billing-spec.pdf',
+    ]);
+    assert.equal(multiSummary.label, '3 passages · 2 documents');
+  });
+});

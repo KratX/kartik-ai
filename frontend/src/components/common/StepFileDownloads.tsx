@@ -17,6 +17,99 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-18',
+    title: 'Fix #18 — PDF RAG Agent Overhaul (Reading-Order PDF Loader, Sentence-Aware Chunker, Hybrid Semantic+BM25 Reranker, Prompt-Injection Defense & Interactive Document Evidence Viewer)',
+    subtitle:
+      '15 files · Overhauls PDF RAG end-to-end: reading-order binary PDF text extractor (FlateDecode + raw deflate, TJ kerning spacing, hex & UTF-16BE BOM strings, octal escapes, line-break preservation, footer stripping), sentence/paragraph-boundary-aware overlapping chunker, dedicated hybrid dense + BM25/lexical-phrase reranking engine with near-duplicate suppression & query-centered excerpts, 4-intent grounded prompting (summary, fact_qa, compare_extract, table_metrics) with prompt-injection sanitization & hallucination refusal, clickable emerald [1] inline citations, interactive expandable Document Evidence cards with tabular match % & quote copy, and 3 contextual RAG follow-ups',
+    zipFilename: 'fix-18-pdf-rag-hybrid-retrieval-and-evidence-viewer.zip',
+    zipHref: '/__downloads/fix-18-pdf-rag-hybrid-retrieval-and-evidence-viewer.zip',
+    commitMessage: `feat(rag,agent,frontend): overhaul PDF RAG with hybrid semantic+BM25 reranking, upgraded PDF loader & interactive Document Evidence viewer
+
+- Upgrade binary PDF text extractor in backend/services/agent/src/rag/loaders/index.ts with unified reading-order operator scanning (Tj, TJ, ', "), TJ kerning space heuristics, hex & UTF-16BE BOM decoding, octal escapes, inflateRaw fallback, vertical line-break preservation, and running footer stripping
+- Upgrade chunkPdfPages in backend/services/agent/src/rag/index.ts to sentence- and paragraph-boundary-aware overlapping chunking without mid-word slicing
+- Add backend/services/agent/src/agents/rag/index.ts implementing 4-intent RAG classification (summary, fact_qa, compare_extract, table_metrics), hybrid dense + BM25/lexical-phrase reranking (rerankRagHits) with near-duplicate suppression, query-focused excerpts, prompt-injection sanitization (sanitizeUntrustedRetrievedData), inline [1] citation normalization, and contextual RAG follow-up generation
+- Wire wider userId-scoped retrieval (topK: 16 -> top 6 reranked), rich document citations (snippet, score, sourceType: 'document'), clean grounded synthesis, and 3 follow-ups into AgentGraphExecutor and shared contracts
+- Upgrade MarkdownRenderer (emerald inline [1] badges for document citations) and MessageBubble (interactive expandable Document Evidence cards with tabular match %, Copy Quote, and clickable [1] scroll+expand sync)
+- Add Fix #18 backend & frontend PDF RAG unit tests`,
+    changedFiles: [
+      {
+        path: 'backend/shared/contracts/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/shared/contracts/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/rag/loaders/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/rag/loaders/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/rag/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/rag/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/agents/rag/index.ts',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/agents/rag/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/graph/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/graph/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/index.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'frontend/src/types/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/types/index.ts',
+      },
+      {
+        path: 'frontend/src/components/slide-deck-and-markdown.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/slide-deck-and-markdown.ts',
+      },
+      {
+        path: 'frontend/src/components/chat/MarkdownRenderer.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MarkdownRenderer.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageBubble.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageBubble.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+      {
+        path: 'backend/services/agent/tests/pdf-rag-engine.test.ts',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=backend/services/agent/tests/pdf-rag-engine.test.ts',
+      },
+      {
+        path: 'backend/services/agent/tests/live-providers-and-limits.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/tests/live-providers-and-limits.test.ts',
+      },
+      {
+        path: 'frontend/tests/slide-deck-and-markdown.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/tests/slide-deck-and-markdown.test.ts',
+      },
+    ],
+  },
+  {
     id: 'fix-17',
     title: 'Fix #17 — PPT Generator Agent Overhaul (6 Keynote Themes, 5 Visual Slide Layouts, Full OpenXML SlideMaster/Theme/Speaker Notes & 16:9 Presentation Studio)',
     subtitle:

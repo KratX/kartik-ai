@@ -63,12 +63,28 @@ export {
 
 export {
   chunkPdfPages,
+  extractTextFromStreamContent,
   extractTextPagesFromPdfBytes,
   FileIngestionAndArtifactService,
   type PdfPageText,
   type CascadeDeletionStep,
   type PurgeExecutionReport,
 } from './rag/index.js';
+
+export {
+  RAG_INTENT_TYPES,
+  buildQueryFocusedExcerpt,
+  buildRagFollowUps,
+  buildRagSystemInstruction,
+  buildRagUserPrompt,
+  classifyRagIntent,
+  formatOfflineRagReply,
+  normalizeRagInlineCitations,
+  rerankRagHits,
+  tokenizeRagTerms,
+  type RagIntentType,
+  type RankedRagHit,
+} from './agents/rag/index.js';
 
 export {
   readSingleHeader,

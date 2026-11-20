@@ -17,16 +17,74 @@ import type {
 import type { AgentRepository } from '../repositories/index.js';
 import { extractTextPagesFromPdfBytes } from './loaders/index.js';
 
-export { extractTextPagesFromPdfBytes } from './loaders/index.js';
+export {
+  extractTextFromStreamContent,
+  extractTextPagesFromPdfBytes,
+} from './loaders/index.js';
 
 export interface PdfPageText {
   readonly pageNumber: number;
   readonly text: string;
 }
 
+function splitParagraphIntoSentenceSegments(paragraph: string, maxLen: number): string[] {
+  const clean = paragraph.replace(/[ \t]+/g, ' ').trim();
+  if (!clean) {
+    return [];
+  }
+  if (clean.length <= maxLen) {
+    return [clean];
+  }
+
+  // Split at sentence endings while keeping punctuation attached
+  const rawSentences = clean
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9"'(])/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const segments: string[] = [];
+  for (const sentence of rawSentences) {
+    if (sentence.length <= maxLen) {
+      segments.push(sentence);
+      continue;
+    }
+    // Sentence itself exceeds maxLen: split cleanly on word boundaries (never mid-word unless unavoidable)
+    let remaining = sentence;
+    while (remaining.length > maxLen) {
+      let splitAt = remaining.lastIndexOf(' ', maxLen);
+      if (splitAt < Math.floor(maxLen * 0.45)) {
+        splitAt = maxLen;
+      }
+      const head = remaining.slice(0, splitAt).trim();
+      if (head) {
+        segments.push(head);
+      }
+      remaining = remaining.slice(splitAt).trim();
+    }
+    if (remaining) {
+      segments.push(remaining);
+    }
+  }
+
+  return segments;
+}
+
+function buildOverlapTail(text: string, overlapChars: number): string {
+  if (overlapChars <= 0 || text.length <= overlapChars) {
+    return overlapChars <= 0 ? '' : text;
+  }
+  const startIdx = text.length - overlapChars;
+  // Snap forward to word boundary so overlap never starts mid-word
+  const nextSpace = text.indexOf(' ', startIdx);
+  if (nextSpace !== -1 && nextSpace < text.length - 12) {
+    return text.slice(nextSpace + 1).trim();
+  }
+  return text.slice(startIdx).trim();
+}
+
 /**
- * Splits extracted PDF page texts into overlapping semantic chunks while enforcing
- * the explicit `maxPdfPages` ceiling (Blueprint §10 & §12).
+ * Splits extracted PDF page texts into sentence- and paragraph-boundary-aware overlapping
+ * semantic chunks while enforcing the explicit `maxPdfPages` ceiling (Blueprint §10 & §12, Fix #18).
  */
 export function chunkPdfPages(input: {
   readonly pages: readonly PdfPageText[];
@@ -49,9 +107,8 @@ export function chunkPdfPages(input: {
     );
   }
 
-  const chunkSize = Math.max(100, input.chunkSizeChars ?? 600);
-  const overlap = Math.max(0, Math.min(chunkSize - 50, input.overlapChars ?? 100));
-  const step = chunkSize - overlap;
+  const chunkSize = Math.max(100, input.chunkSizeChars ?? 650);
+  const overlap = Math.max(0, Math.min(chunkSize - 50, input.overlapChars ?? 120));
 
   const chunks: Array<{
     readonly pageNumber: number;
@@ -64,32 +121,61 @@ export function chunkPdfPages(input: {
     if (!Number.isInteger(page.pageNumber) || page.pageNumber < 1) {
       throw new AppError('VALIDATION_FAILED', 'PDF pageNumber must be a positive integer >= 1');
     }
-    const normalized = page.text.replace(/\s+/g, ' ').trim();
-    if (normalized.length === 0) {
+
+    // Preserve paragraph breaks when present; collapse excessive spaces within lines
+    const paragraphs = page.text
+      .replace(/\r\n/g, '\n')
+      .split(/\n{2,}/)
+      .map((p) => p.replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+
+    if (paragraphs.length === 0) {
       continue;
     }
 
-    if (normalized.length <= chunkSize) {
+    const flatLength = paragraphs.reduce((acc, p) => acc + p.length + 1, 0);
+    if (flatLength <= chunkSize) {
       chunks.push({
         pageNumber: page.pageNumber,
         chunkIndex: globalChunkIndex++,
-        textContent: normalized,
+        textContent: paragraphs.join(' ').trim(),
       });
       continue;
     }
 
-    for (let offset = 0; offset < normalized.length; offset += step) {
-      const slice = normalized.slice(offset, offset + chunkSize).trim();
-      if (slice.length > 0) {
-        chunks.push({
-          pageNumber: page.pageNumber,
-          chunkIndex: globalChunkIndex++,
-          textContent: slice,
-        });
+    const segments: string[] = [];
+    for (const para of paragraphs) {
+      segments.push(...splitParagraphIntoSentenceSegments(para, chunkSize));
+    }
+
+    let current = '';
+    for (const seg of segments) {
+      const candidate = current ? `${current} ${seg}` : seg;
+      if (candidate.length <= chunkSize) {
+        current = candidate;
+      } else {
+        if (current.trim().length > 0) {
+          chunks.push({
+            pageNumber: page.pageNumber,
+            chunkIndex: globalChunkIndex++,
+            textContent: current.trim(),
+          });
+        }
+        const tail = buildOverlapTail(current, overlap);
+        if (tail && tail.length + 1 + seg.length <= chunkSize) {
+          current = `${tail} ${seg}`;
+        } else {
+          current = seg;
+        }
       }
-      if (offset + chunkSize >= normalized.length) {
-        break;
-      }
+    }
+
+    if (current.trim().length > 0) {
+      chunks.push({
+        pageNumber: page.pageNumber,
+        chunkIndex: globalChunkIndex++,
+        textContent: current.trim(),
+      });
     }
   }
 

@@ -427,8 +427,11 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
       attachmentFileIds: [uploaded.fileId],
     });
     assert.equal(ragRes.agent, 'rag');
-    assert.ok(ragRes.replyContent.includes('Quorum intersection guarantees a single leader per term'));
-    assert.ok(ragRes.replyContent.includes('### Grounded Document Evidence'));
+    assert.ok(ragRes.replyContent.includes('Quorum intersection guarantees a single leader per term [1]'));
+    assert.ok(!ragRes.replyContent.includes('### Grounded Document Evidence'));
+    assert.equal(ragRes.citations?.[0]?.sourceType, 'document');
+    assert.ok((ragRes.citations?.[0]?.snippet?.length ?? 0) > 10);
+    assert.equal(ragRes.followUpQueries?.length, 3);
 
     // 3. Coding non-generation DEBUGGING invokes live chatProvider instead of static template
     const debugRes = await executor.execute({

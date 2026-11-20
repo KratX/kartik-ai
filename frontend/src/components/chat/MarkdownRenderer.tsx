@@ -75,6 +75,9 @@ function renderInlineFormattedText(
         return <React.Fragment key={idx}>{token.raw}</React.Fragment>;
       }
 
+      const isDocumentCitation =
+        matched.sourceType === 'document' || !/^https?:\/\//i.test(matched.urlOrPage);
+
       return (
         <sup key={idx} className="ml-0.5 align-super">
           <button
@@ -82,7 +85,11 @@ function renderInlineFormattedText(
             onClick={() => onCitationClick?.(citationIdx)}
             title={formatCitationTooltip(matched, token.index)}
             aria-label={`Jump to source ${token.index}: ${matched.title}`}
-            className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-mono font-semibold tabular-nums rounded bg-sky-500/15 hover:bg-sky-500/30 text-sky-300 border border-sky-500/35 hover:border-sky-400/70 transition-colors cursor-pointer"
+            className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-mono font-semibold tabular-nums rounded border transition-colors cursor-pointer ${
+              isDocumentCitation
+                ? 'bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/35 hover:border-emerald-400/70'
+                : 'bg-sky-500/15 hover:bg-sky-500/30 text-sky-300 border-sky-500/35 hover:border-sky-400/70'
+            }`}
           >
             {token.index}
           </button>

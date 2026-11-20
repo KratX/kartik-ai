@@ -2,7 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowUpRight,
   Bot,
+  Check,
+  ChevronDown,
+  ChevronUp,
   Code2,
+  Copy,
   Download,
   ExternalLink,
   FileText,
@@ -12,7 +16,11 @@ import {
   ShieldCheck,
   User,
 } from 'lucide-react';
-import { buildArtifactRawDownloadUrl } from '../slide-deck-and-markdown.js';
+import {
+  buildArtifactRawDownloadUrl,
+  formatCitationRelevancePercent,
+  summarizeDocumentCitations,
+} from '../slide-deck-and-markdown.js';
 import type {
   ArtifactRecord,
   MessageCitation,
@@ -87,13 +95,23 @@ export function MessageBubble({
   const [highlightedCitationIdx, setHighlightedCitationIdx] = useState<
     number | null
   >(null);
+  const [expandedDocCitations, setExpandedDocCitations] = useState<
+    ReadonlySet<number>
+  >(() => new Set());
+  const [copiedCitationIdx, setCopiedCitationIdx] = useState<number | null>(
+    null,
+  );
   const citationCardRefs = useRef<Record<number, HTMLElement | null>>({});
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {
       if (highlightTimerRef.current) {
         clearTimeout(highlightTimerRef.current);
+      }
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
       }
     };
   }, []);
@@ -103,6 +121,12 @@ export function MessageBubble({
     if (target) {
       target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
+    setExpandedDocCitations((prev) => {
+      if (prev.has(citationIndex)) return prev;
+      const next = new Set(prev);
+      next.add(citationIndex);
+      return next;
+    });
     setHighlightedCitationIdx(citationIndex);
     if (highlightTimerRef.current) {
       clearTimeout(highlightTimerRef.current);
@@ -110,6 +134,35 @@ export function MessageBubble({
     highlightTimerRef.current = setTimeout(() => {
       setHighlightedCitationIdx(null);
     }, 1800);
+  };
+
+  const toggleDocCitationExpanded = (citationIndex: number) => {
+    setExpandedDocCitations((prev) => {
+      const next = new Set(prev);
+      if (next.has(citationIndex)) {
+        next.delete(citationIndex);
+      } else {
+        next.add(citationIndex);
+      }
+      return next;
+    });
+  };
+
+  const handleCopyDocCitation = (
+    citationIndex: number,
+    citation: MessageCitation,
+  ) => {
+    const quoteBody = citation.snippet?.trim()
+      ? `"${citation.snippet.trim()}" — ${citation.title} (${citation.urlOrPage})`
+      : `${citation.title} (${citation.urlOrPage})`;
+    void navigator.clipboard?.writeText(quoteBody);
+    setCopiedCitationIdx(citationIndex);
+    if (copyTimerRef.current) {
+      clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = setTimeout(() => {
+      setCopiedCitationIdx(null);
+    }, 1600);
   };
 
   // Real HTTPS image thumbnails only — prune broken images cleanly; hide strip if empty.
@@ -274,15 +327,21 @@ export function MessageBubble({
           </div>
         )}
 
-        {/* Grounded Sources (Rich Web Search Cards & PDF RAG Page References) */}
+        {/* Grounded Sources (Rich Web Search Cards & Interactive PDF RAG Evidence Viewer) */}
         {citations.length > 0 && (
           <div className="mt-4 pt-3 border-t border-slate-800/80">
-            <div className="flex items-center justify-between mb-2.5">
+            <div className="flex items-center justify-between gap-2 mb-2.5">
               <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Sources
+                {webCitations.length === 0 && docCitations.length > 0
+                  ? 'Document Evidence'
+                  : 'Sources'}
               </span>
               <span className="text-[11px] font-mono tabular-nums text-slate-500">
-                {citations.length} {citations.length === 1 ? 'source' : 'sources'}
+                {webCitations.length === 0 && docCitations.length > 0
+                  ? summarizeDocumentCitations(
+                      docCitations.map((c) => c.citation),
+                    ).label
+                  : `${citations.length} ${citations.length === 1 ? 'source' : 'sources'}`}
               </span>
             </div>
 
@@ -343,30 +402,106 @@ export function MessageBubble({
 
             {docCitations.length > 0 && (
               <div
-                className={`flex flex-wrap gap-2 ${
-                  webCitations.length > 0 ? 'mt-2.5' : ''
-                }`}
+                className={`grid grid-cols-1 ${
+                  docCitations.length > 1 ? 'sm:grid-cols-2' : ''
+                } gap-2.5 ${webCitations.length > 0 ? 'mt-2.5' : ''}`}
               >
                 {docCitations.map(({ citation, index }) => {
                   const isHighlighted = highlightedCitationIdx === index;
+                  const isExpanded = expandedDocCitations.has(index);
+                  const isCopied = copiedCitationIdx === index;
+                  const matchPct = formatCitationRelevancePercent(citation.score);
+                  const excerpt = citation.snippet?.trim() ?? '';
+                  const isLongExcerpt = excerpt.length > 140;
+
                   return (
-                    <span
+                    <div
                       key={`${citation.sourceId}-${index}`}
                       ref={(el) => {
                         citationCardRefs.current[index] = el;
                       }}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs text-emerald-300 transition-all ${
+                      data-citation-index={index + 1}
+                      data-doc-evidence-card="true"
+                      className={`rounded-lg p-3 bg-slate-900/75 border transition-all ${
                         isHighlighted
-                          ? 'bg-emerald-500/20 border-emerald-400 ring-1 ring-emerald-400/50'
-                          : 'bg-emerald-500/10 border-emerald-500/30'
+                          ? 'border-emerald-400/80 ring-1 ring-emerald-400/45 bg-slate-900'
+                          : 'border-slate-800 hover:border-emerald-500/45'
                       }`}
                     >
-                      <FileText className="w-3 h-3 shrink-0" />
-                      <span className="font-medium">{citation.title}</span>
-                      <span className="font-mono text-[11px] text-emerald-400">
-                        ({citation.urlOrPage})
-                      </span>
-                    </span>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-2 min-w-0">
+                          <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[11px] font-mono font-semibold tabular-nums rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0 mt-0.5">
+                            {index + 1}
+                          </span>
+                          <div className="min-w-0">
+                            <div
+                              className="flex items-center gap-1.5 text-xs font-semibold text-slate-100"
+                              title={citation.title}
+                            >
+                              <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              <span className="truncate">{citation.title}</span>
+                            </div>
+                            <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
+                              {citation.urlOrPage}
+                              {matchPct !== null ? ` · ${matchPct}% match` : ''}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleCopyDocCitation(index, citation)}
+                            title="Copy grounded quote with page attribution"
+                            className="p-1 rounded text-slate-400 hover:text-emerald-300 hover:bg-slate-800/90 transition-colors cursor-pointer"
+                          >
+                            {isCopied ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                          {isLongExcerpt && (
+                            <button
+                              type="button"
+                              onClick={() => toggleDocCitationExpanded(index)}
+                              title={
+                                isExpanded ? 'Collapse excerpt' : 'Expand full excerpt'
+                              }
+                              aria-expanded={isExpanded}
+                              className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/90 transition-colors cursor-pointer"
+                            >
+                              {isExpanded ? (
+                                <ChevronUp className="w-3.5 h-3.5" />
+                              ) : (
+                                <ChevronDown className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {excerpt && (
+                        <div className="mt-2">
+                          <p
+                            className={`text-[11px] text-slate-300/90 leading-relaxed ${
+                              isExpanded ? '' : 'line-clamp-3'
+                            }`}
+                          >
+                            &ldquo;{excerpt}&rdquo;
+                          </p>
+                          {isLongExcerpt && (
+                            <button
+                              type="button"
+                              onClick={() => toggleDocCitationExpanded(index)}
+                              className="mt-1.5 text-[11px] font-medium text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer"
+                            >
+                              {isExpanded ? 'Show less' : 'Read full passage'}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </div>

@@ -40,6 +40,15 @@ import {
   buildNonGenerationCodingMarkdown,
   classifyCodingIntent,
 } from '../agents/coding/index.js';
+import {
+  buildRagFollowUps,
+  buildRagSystemInstruction,
+  buildRagUserPrompt,
+  classifyRagIntent,
+  formatOfflineRagReply,
+  normalizeRagInlineCitations,
+  rerankRagHits,
+} from '../agents/rag/index.js';
 import type { DailyLiveBudgetGuard } from '../services/budget-guard.js';
 import type { AgentSlidingWindowRateLimiter } from '../services/agent-rate-limiter.js';
 import {
@@ -379,17 +388,18 @@ export class AgentGraphExecutor {
         .filter((f) => f.mimeType === 'application/pdf')
         .map((f) => f.fileId);
 
-      const hits = await this.deps.vectorStore.searchChunks({
+      // Fetch wider userId-scoped candidate pool (Invariant #9) for hybrid semantic + BM25 reranking
+      const rawHits = await this.deps.vectorStore.searchChunks({
         userId: request.userId,
         queryVector: queryVector ?? [],
         fileIds: pdfFileIds.length > 0 ? pdfFileIds : undefined,
-        topK: 4,
+        topK: 16,
       });
 
       // §10: "RAG answers must be grounded in retrieved chunks and cite document and page.
       // If retrieval finds nothing useful, say so."
-      if (hits.length === 0) {
-        const emptyReply = `${fallbackNotice}No relevant sections were found in your uploaded documents for this query.`;
+      if (rawHits.length === 0) {
+        const emptyReply = `${fallbackNotice}No relevant sections were found in your uploaded documents for this query. Attach a \`.pdf\` file using the paperclip button below to index and query its pages.`;
         return {
           executionId,
           requestId: request.requestId,
@@ -398,8 +408,8 @@ export class AgentGraphExecutor {
           citations: [],
           usage: {
             promptTokens,
-            completionTokens: 20,
-            totalTokens: promptTokens + 20,
+            completionTokens: 28,
+            totalTokens: promptTokens + 28,
             provider: this.deps.embeddingProvider.providerName,
             model: this.deps.config.chatModelId,
             durationMs: Math.max(1, Date.now() - startMs),
@@ -408,37 +418,40 @@ export class AgentGraphExecutor {
         };
       }
 
-      const citations: AgentCitation[] = hits.map((hit) => ({
+      const ragIntent = classifyRagIntent(trimmedPrompt);
+      const rankedHits = rerankRagHits(trimmedPrompt, rawHits, { topK: 6 });
+
+      const citations: AgentCitation[] = rankedHits.map((hit) => ({
         sourceId: hit.chunkId,
         title: hit.documentTitle,
         urlOrPage: `p. ${hit.pageNumber}`,
+        snippet: hit.excerpt,
+        score: Number(hit.hybridScore.toFixed(3)),
+        sourceType: 'document',
       }));
-
-      const groundedPassages = hits
-        .map(
-          (hit) =>
-            `- **[${hit.documentTitle}, p. ${hit.pageNumber}]**: "${hit.textContent}"`,
-        )
-        .join('\n');
 
       let groundedAnswer = '';
       if (budgetDecision.allowLive && !this.deps.config.mockAi) {
         try {
           const ragReply = await this.deps.chatProvider.generateReply({
-            prompt: `User question: "${trimmedPrompt}"\n\nRetrieved document excerpts:\n${groundedPassages}\n\nAnswer the user's question directly and thoroughly using ONLY the retrieved document excerpts above, citing [Document Title, p. N] inline.`,
-            systemInstruction:
-              'You are Kartik.ai Document RAG Specialist. Ground every statement in the retrieved document excerpts and include [Document Title, p. N] citations.',
+            prompt: buildRagUserPrompt(trimmedPrompt, rankedHits),
+            systemInstruction: buildRagSystemInstruction(ragIntent),
             maxOutputTokens: this.deps.config.maxOutputTokens,
           });
-          groundedAnswer = ragReply.content.trim();
+          groundedAnswer = normalizeRagInlineCitations(
+            ragReply.content.trim(),
+            rankedHits,
+          );
         } catch {
-          // Fall back to direct evidence block
+          // Fall back to deterministic grounded findings below
         }
       }
 
       const replyContent = groundedAnswer
-        ? `${fallbackNotice}${groundedAnswer}\n\n### Grounded Document Evidence\n${groundedPassages}`
-        : `${fallbackNotice}### Grounded Document Evidence\n${groundedPassages}`;
+        ? `${fallbackNotice}${groundedAnswer}`
+        : `${fallbackNotice}${formatOfflineRagReply(rankedHits, trimmedPrompt)}`;
+
+      const followUpQueries = buildRagFollowUps(rankedHits, trimmedPrompt, ragIntent);
 
       return {
         executionId,
@@ -446,6 +459,7 @@ export class AgentGraphExecutor {
         agent: 'rag',
         replyContent,
         citations,
+        followUpQueries,
         usage: {
           promptTokens,
           completionTokens: Math.ceil(replyContent.length / 4),
