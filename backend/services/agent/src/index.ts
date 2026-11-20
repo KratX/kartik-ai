@@ -105,9 +105,13 @@ export {
   MAX_PDF_SECTIONS,
   MAX_PPT_TITLE_CHARS,
   MAX_PPT_SLIDES,
+  PDF_DOCUMENT_TYPES,
   stripMarkdownJsonFences,
   validatePdfDocumentSpec,
   validatePptPresentationSpec,
+  type PdfDocumentType,
+  type PdfMetricSpec,
+  type PdfTableSpec,
   type PdfSectionSpec,
   type PdfDocumentSpec,
   type PptSlideSpec,
@@ -116,8 +120,12 @@ export {
 
 export {
   buildPdfBinaryBuffer,
+  buildPdfFollowUps,
+  buildPdfSystemInstruction,
+  classifyPdfDocumentType,
   formatPdfSummaryMarkdown,
   MockPdfDocumentProvider,
+  transliterateForPdf,
   type PdfDocumentGenerationResult,
   type PdfDocumentProvider,
 } from './agents/pdf/index.js';

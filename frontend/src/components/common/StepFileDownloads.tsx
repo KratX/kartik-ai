@@ -17,6 +17,83 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-16',
+    title: 'Fix #16 — PDF Generator Agent Overhaul (6 Editorial Archetypes, Executive Masthead, KPI Grid, Vector Tables, Callouts & Interactive In-Chat Reader/A4 Print Sheets)',
+    subtitle:
+      '12 files · Upgrades %PDF-1.4 engine with 6 document archetypes (technical_report, executive_brief, proposal, research_paper, playbook, resume), Unicode-to-ASCII transliteration, /Info metadata + Helvetica-Oblique font, executive masthead, Executive Summary box, KPI metrics grid, orphan-free headings, callout cards, zebra-striped vector tables, continuation running headers, upgraded Gemini 3.1 Flash-Lite structured JSON schema, contextual PDF follow-ups, and an interactive in-chat PdfDocumentPreview (Document View + A4 Print Sheets + Section Navigator + Copy Markdown + Download .PDF)',
+    zipFilename: 'fix-16-pdf-generator-editorial-engine-and-interactive-viewer.zip',
+    zipHref: '/__downloads/fix-16-pdf-generator-editorial-engine-and-interactive-viewer.zip',
+    commitMessage: `feat(pdf,agent,frontend): overhaul PDF Generator with 6 archetypes, vector tables/KPIs/callouts & interactive in-chat PDF reader
+
+- Extend PdfDocumentSpec & PdfSectionSpec in backend/services/agent/src/schemas/index.ts with validated optional documentType, author, generatedDate, executiveSummary, keyMetrics (up to 4 KPIs), section callout, and structured table (up to 5x10)
+- Overhaul buildPdfBinaryBuffer in backend/services/agent/src/agents/pdf/index.ts with Unicode transliteration (transliterateForPdf), 6 document-type palettes (classifyPdfDocumentType), tailored system prompts (buildPdfSystemInstruction), executive masthead, Executive Summary card, KPI grid, orphan-free headings, highlighted callout boxes, zebra-striped vector data tables, continuation headers, /Helvetica-Oblique font, /Info metadata dictionary, and contextual follow-ups (buildPdfFollowUps)
+- Upgrade LiveGeminiPdfDocumentProvider (gemini-3.1-flash-lite, maxOutputTokens: 8192) and AgentGraphExecutor to generate rich multi-block PDFs and attach 3 contextual PDF follow-ups
+- Add parsePdfArtifactDocument & pdfDocumentSpecToMarkdown in frontend/src/components/slide-deck-and-markdown.ts and create interactive PdfDocumentPreview component (Document View + A4 Print Sheets + Section Navigator + Copy MD + Download .PDF) wired into MessageBubble.tsx
+- Add Fix #16 backend & frontend PDF regression tests`,
+    changedFiles: [
+      {
+        path: 'backend/services/agent/src/schemas/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/schemas/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/agents/pdf/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/agents/pdf/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'backend/services/agent/src/graph/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/graph/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/index.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'frontend/src/components/slide-deck-and-markdown.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/slide-deck-and-markdown.ts',
+      },
+      {
+        path: 'frontend/src/components/chat/PdfDocumentPreview.tsx',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/PdfDocumentPreview.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageBubble.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageBubble.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+      {
+        path: 'backend/services/agent/tests/pdf-ppt-generators.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/tests/pdf-ppt-generators.test.ts',
+      },
+      {
+        path: 'frontend/tests/slide-deck-and-markdown.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/tests/slide-deck-and-markdown.test.ts',
+      },
+    ],
+  },
+  {
     id: 'fix-15',
     title: 'Fix #15 — Coding Agent Overhaul (6-Intent Classifier, Zero-CDN Sanitizer, Live Editable Sandbox IDE, Console Capture & Standalone HTML Export)',
     subtitle:

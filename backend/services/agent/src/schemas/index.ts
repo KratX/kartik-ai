@@ -16,6 +16,12 @@ export const MAX_PDF_HEADING_CHARS = 120;
 export const MAX_PDF_PARAGRAPH_CHARS = 1600;
 export const MAX_PDF_BULLETS_PER_SECTION = 10;
 export const MAX_PDF_BULLET_CHARS = 240;
+export const MAX_PDF_SUMMARY_CHARS = 650;
+export const MAX_PDF_CALLOUT_CHARS = 360;
+export const MAX_PDF_KEY_METRICS = 4;
+export const MAX_PDF_TABLE_COLS = 5;
+export const MAX_PDF_TABLE_ROWS = 10;
+export const MAX_PDF_TABLE_CELL_CHARS = 90;
 
 export const MAX_PPT_TITLE_CHARS = 120;
 export const MAX_PPT_SUBTITLE_CHARS = 180;
@@ -24,15 +30,45 @@ export const MAX_PPT_SLIDES = 12;
 export const MAX_PPT_BULLETS_PER_SLIDE = 6;
 export const MAX_PPT_BULLET_CHARS = 180;
 
+export const PDF_DOCUMENT_TYPES = [
+  'technical_report',
+  'executive_brief',
+  'proposal',
+  'research_paper',
+  'playbook',
+  'resume',
+] as const;
+
+export type PdfDocumentType = (typeof PDF_DOCUMENT_TYPES)[number];
+
+export interface PdfMetricSpec {
+  readonly label: string;
+  readonly value: string;
+  readonly delta?: string;
+}
+
+export interface PdfTableSpec {
+  readonly caption?: string;
+  readonly headers: readonly string[];
+  readonly rows: readonly (readonly string[])[];
+}
+
 export interface PdfSectionSpec {
   readonly heading: string;
   readonly content: string;
   readonly bullets: readonly string[];
+  readonly callout?: string;
+  readonly table?: PdfTableSpec;
 }
 
 export interface PdfDocumentSpec {
   readonly title: string;
   readonly subtitle: string;
+  readonly documentType?: PdfDocumentType;
+  readonly author?: string;
+  readonly generatedDate?: string;
+  readonly executiveSummary?: string;
+  readonly keyMetrics?: readonly PdfMetricSpec[];
   readonly sections: readonly PdfSectionSpec[];
   readonly footer: string;
 }
@@ -64,6 +100,82 @@ function sanitizePrintableText(raw: unknown, maxChars: number): string {
     return cleaned;
   }
   return `${cleaned.slice(0, Math.max(1, maxChars - 3)).trimEnd()}...`;
+}
+
+function sanitizePdfDocumentType(raw: unknown): PdfDocumentType | undefined {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const normalized = raw.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return (PDF_DOCUMENT_TYPES as readonly string[]).includes(normalized)
+    ? (normalized as PdfDocumentType)
+    : undefined;
+}
+
+function sanitizePdfTable(raw: unknown): PdfTableSpec | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined;
+  }
+  const tbl = raw as Record<string, unknown>;
+  if (!Array.isArray(tbl.headers) || !Array.isArray(tbl.rows)) {
+    return undefined;
+  }
+  const headers = tbl.headers
+    .slice(0, MAX_PDF_TABLE_COLS)
+    .map((h) => sanitizePrintableText(h, 42))
+    .filter((h) => h.length > 0);
+  if (headers.length < 2) {
+    return undefined;
+  }
+  const colCount = headers.length;
+  const rows: (readonly string[])[] = [];
+  for (const rawRow of tbl.rows.slice(0, MAX_PDF_TABLE_ROWS)) {
+    if (!Array.isArray(rawRow)) {
+      continue;
+    }
+    const cells = Array.from({ length: colCount }, (_, cIdx) =>
+      sanitizePrintableText(rawRow[cIdx] ?? '', MAX_PDF_TABLE_CELL_CHARS),
+    );
+    if (cells.some((c) => c.length > 0)) {
+      rows.push(Object.freeze(cells));
+    }
+  }
+  if (rows.length === 0) {
+    return undefined;
+  }
+  const caption = sanitizePrintableText(tbl.caption, 100);
+  return Object.freeze({
+    ...(caption ? { caption } : {}),
+    headers: Object.freeze(headers),
+    rows: Object.freeze(rows),
+  });
+}
+
+function sanitizePdfMetrics(raw: unknown): readonly PdfMetricSpec[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const metrics: PdfMetricSpec[] = [];
+  for (const item of raw.slice(0, MAX_PDF_KEY_METRICS)) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      continue;
+    }
+    const m = item as Record<string, unknown>;
+    const label = sanitizePrintableText(m.label, 40);
+    const value = sanitizePrintableText(m.value, 28);
+    const delta = sanitizePrintableText(m.delta, 36);
+    if (!label || !value) {
+      continue;
+    }
+    metrics.push(
+      Object.freeze({
+        label,
+        value,
+        ...(delta ? { delta } : {}),
+      }),
+    );
+  }
+  return metrics.length > 0 ? Object.freeze(metrics) : undefined;
 }
 
 /**
@@ -126,6 +238,8 @@ export function validatePdfDocumentSpec(rawInput: unknown): PdfDocumentSpec {
       .slice(0, MAX_PDF_BULLETS_PER_SECTION)
       .map((b) => sanitizePrintableText(b, MAX_PDF_BULLET_CHARS))
       .filter((b) => b.length > 0);
+    const callout = sanitizePrintableText(sec.callout, MAX_PDF_CALLOUT_CHARS);
+    const table = sanitizePdfTable(sec.table);
 
     if (!heading && !content && bullets.length === 0) {
       continue;
@@ -136,6 +250,8 @@ export function validatePdfDocumentSpec(rawInput: unknown): PdfDocumentSpec {
         heading: heading || `Section ${sections.length + 1}`,
         content: content || 'Key details and operational considerations for this section.',
         bullets: Object.freeze(bullets),
+        ...(callout ? { callout } : {}),
+        ...(table ? { table } : {}),
       }),
     );
   }
@@ -147,12 +263,25 @@ export function validatePdfDocumentSpec(rawInput: unknown): PdfDocumentSpec {
     );
   }
 
+  const documentType = sanitizePdfDocumentType(obj.documentType);
+  const author = sanitizePrintableText(obj.author, 80);
+  const generatedDate = sanitizePrintableText(obj.generatedDate, 32);
+  const executiveSummary = sanitizePrintableText(
+    obj.executiveSummary,
+    MAX_PDF_SUMMARY_CHARS,
+  );
+  const keyMetrics = sanitizePdfMetrics(obj.keyMetrics);
   const footer =
     sanitizePrintableText(obj.footer, 100) || 'Generated by Kartik.ai';
 
   return Object.freeze({
     title,
     subtitle,
+    ...(documentType ? { documentType } : {}),
+    ...(author ? { author } : {}),
+    ...(generatedDate ? { generatedDate } : {}),
+    ...(executiveSummary ? { executiveSummary } : {}),
+    ...(keyMetrics ? { keyMetrics } : {}),
     sections: Object.freeze(sections),
     footer,
   });

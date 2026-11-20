@@ -25,6 +25,7 @@ import type {
   VisionProvider,
 } from '../models/index.js';
 import {
+  buildPdfFollowUps,
   MockPdfDocumentProvider,
   type PdfDocumentProvider,
 } from '../agents/pdf/index.js';
@@ -674,6 +675,7 @@ export class AgentGraphExecutor {
 
       const specJson = JSON.stringify({
         pageCount: generatedPdf.pageCount,
+        documentType: generatedPdf.spec.documentType ?? 'technical_report',
         spec: generatedPdf.spec,
       });
       const specSha = crypto.createHash('sha256').update(specJson, 'utf8').digest('hex');
@@ -709,6 +711,7 @@ export class AgentGraphExecutor {
         agent: 'pdf',
         replyContent: `${fallbackNotice}${generatedPdf.summaryMarkdown}`,
         artifactIds: [artifactId],
+        followUpQueries: buildPdfFollowUps(generatedPdf.spec, trimmedPrompt),
         usage: {
           promptTokens,
           completionTokens: generatedPdf.tokensUsed,

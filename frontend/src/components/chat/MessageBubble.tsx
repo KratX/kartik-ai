@@ -20,6 +20,7 @@ import type {
   SearchImageGalleryItem,
 } from '../../types/index.js';
 import { MarkdownRenderer } from './MarkdownRenderer.js';
+import { PdfDocumentPreview } from './PdfDocumentPreview.js';
 import { SlideDeckPreview } from './SlideDeckPreview.js';
 
 function resolveCitationDomain(citation: MessageCitation): string {
@@ -409,36 +410,7 @@ export function MessageBubble({
               }
 
               if (art.artifactType === 'pdf_document') {
-                return (
-                  <div
-                    key={art.artifactId}
-                    className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-900/90 border border-emerald-500/30"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
-                        <FileText className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-semibold text-slate-100 truncate">
-                          {art.title}.pdf
-                        </div>
-                        <div className="text-[11px] font-mono text-slate-400">
-                          Standards-Compliant %PDF-1.4 Binary ·{' '}
-                          {Math.max(1, Math.round(art.sizeBytes / 1024))} KB
-                        </div>
-                      </div>
-                    </div>
-
-                    <a
-                      href={rawDownloadUrl}
-                      download={`${art.title.replace(/[^A-Za-z0-9._-]+/g, '-').toLowerCase()}.pdf`}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg transition-colors shrink-0"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Download .PDF
-                    </a>
-                  </div>
-                );
+                return <PdfDocumentPreview key={art.artifactId} artifact={art} />;
               }
 
               if (art.artifactType === 'code_bundle') {

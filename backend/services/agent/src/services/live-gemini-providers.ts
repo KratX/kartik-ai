@@ -39,6 +39,8 @@ import {
 } from './web-search-engine.js';
 import {
   buildPdfBinaryBuffer,
+  buildPdfSystemInstruction,
+  classifyPdfDocumentType,
   formatPdfSummaryMarkdown,
   MockPdfDocumentProvider,
   type PdfDocumentGenerationResult,
@@ -998,9 +1000,25 @@ export class LiveGeminiPdfDocumentProvider implements PdfDocumentProvider {
     this.apiKey = options?.apiKey;
   }
 
-  private compilePdfFromJson(rawJson: string): PdfDocumentGenerationResult | null {
+  private compilePdfFromJson(
+    rawJson: string,
+    defaults?: {
+      readonly documentType: ReturnType<typeof classifyPdfDocumentType>;
+      readonly generatedDate: string;
+    },
+  ): PdfDocumentGenerationResult | null {
     try {
-      const spec = validatePdfDocumentSpec(extractJsonObjectString(rawJson));
+      const parsedObj = JSON.parse(extractJsonObjectString(rawJson)) as Record<
+        string,
+        unknown
+      >;
+      const merged = {
+        ...parsedObj,
+        documentType: parsedObj.documentType ?? defaults?.documentType,
+        generatedDate: parsedObj.generatedDate ?? defaults?.generatedDate,
+        author: parsedObj.author ?? 'Kartik.ai Editorial Engine',
+      };
+      const spec = validatePdfDocumentSpec(merged);
       const compiled = buildPdfBinaryBuffer(spec);
       return {
         spec: compiled.spec,
@@ -1018,11 +1036,21 @@ export class LiveGeminiPdfDocumentProvider implements PdfDocumentProvider {
     readonly prompt: string;
     readonly maxOutputTokens: number;
   }): Promise<PdfDocumentGenerationResult> {
-    const pdfPrompt = `Generate a comprehensive, professional multi-section technical PDF document for: "${input.prompt}".
-Return ONLY a valid JSON object with exact keys:
-- title (string)
-- subtitle (string)
-- sections (array of 4 to 6 objects, each with: heading (string), content (rich paragraph string), bullets (array of 3 to 4 actionable bullet strings))`;
+    const documentType = classifyPdfDocumentType(input.prompt);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const pdfPrompt = `Generate a publication-grade multi-section PDF document (archetype: ${documentType}) for: "${input.prompt}".
+Return ONLY a valid JSON object with keys:
+- title (string, concise executive title)
+- subtitle (string, descriptive subtitle)
+- executiveSummary (string, 2-4 crisp sentences summarizing the key findings/recommendations)
+- keyMetrics (array of 3 to 4 quantified KPI objects, each with: label, value, delta)
+- sections (array of 4 to 6 objects, each with:
+    heading (string),
+    content (rich analytical paragraph string),
+    bullets (array of 3 to 4 concrete actionable bullet strings),
+    callout (optional concise takeaway highlight string on key sections),
+    table (optional structured comparison/milestone/SLA table object with caption, headers (2-4 strings), and rows (3-5 string arrays matching header count) on 1-2 sections where tabular data adds clarity)
+  )`;
 
     const ai = await createServerGeminiClient(this.apiKey);
     if (ai) {
@@ -1031,13 +1059,27 @@ Return ONLY a valid JSON object with exact keys:
           model: DEFAULT_TEXT_MODEL,
           contents: pdfPrompt,
           config: {
-            maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 2_048),
+            systemInstruction: buildPdfSystemInstruction(documentType, todayIso),
+            maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 4_096),
             responseMimeType: 'application/json',
             responseSchema: {
               type: SchemaValueType.OBJECT,
               properties: {
                 title: { type: SchemaValueType.STRING },
                 subtitle: { type: SchemaValueType.STRING },
+                executiveSummary: { type: SchemaValueType.STRING },
+                keyMetrics: {
+                  type: SchemaValueType.ARRAY,
+                  items: {
+                    type: SchemaValueType.OBJECT,
+                    properties: {
+                      label: { type: SchemaValueType.STRING },
+                      value: { type: SchemaValueType.STRING },
+                      delta: { type: SchemaValueType.STRING },
+                    },
+                    required: ['label', 'value'],
+                  },
+                },
                 sections: {
                   type: SchemaValueType.ARRAY,
                   items: {
@@ -1049,16 +1091,38 @@ Return ONLY a valid JSON object with exact keys:
                         type: SchemaValueType.ARRAY,
                         items: { type: SchemaValueType.STRING },
                       },
+                      callout: { type: SchemaValueType.STRING },
+                      table: {
+                        type: SchemaValueType.OBJECT,
+                        properties: {
+                          caption: { type: SchemaValueType.STRING },
+                          headers: {
+                            type: SchemaValueType.ARRAY,
+                            items: { type: SchemaValueType.STRING },
+                          },
+                          rows: {
+                            type: SchemaValueType.ARRAY,
+                            items: {
+                              type: SchemaValueType.ARRAY,
+                              items: { type: SchemaValueType.STRING },
+                            },
+                          },
+                        },
+                        required: ['headers', 'rows'],
+                      },
                     },
                     required: ['heading', 'content', 'bullets'],
                   },
                 },
               },
-              required: ['title', 'subtitle', 'sections'],
+              required: ['title', 'subtitle', 'executiveSummary', 'sections'],
             },
           },
         });
-        const compiled = this.compilePdfFromJson(response.text ?? '');
+        const compiled = this.compilePdfFromJson(response.text ?? '', {
+          documentType,
+          generatedDate: todayIso,
+        });
         if (compiled) {
           return compiled;
         }
