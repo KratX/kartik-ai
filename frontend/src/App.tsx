@@ -487,8 +487,11 @@ export function App() {
       }
 
       setAttachedTurnFiles((prev) => [...prev, json.data.file]);
+      const uploadedFile = json.data.file;
       setStatusBanner(
-        `Indexed "${json.data.file.originalFilename}" (${json.data.chunkCount} vector chunks stored in Qdrant user namespace).`,
+        uploadedFile.mimeType.startsWith('image/')
+          ? `Attached image "${uploadedFile.originalFilename}" (${Math.max(1, Math.round(uploadedFile.sizeBytes / 1024))} KB) — ready for Vision OCR & multimodal inspection.`
+          : `Indexed "${uploadedFile.originalFilename}" (${json.data.chunkCount} vector chunks stored in Qdrant user namespace).`,
       );
       await refreshBillingAndAuth();
     } catch (err) {

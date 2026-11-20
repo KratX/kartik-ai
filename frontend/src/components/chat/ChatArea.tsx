@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Code2,
   ExternalLink,
@@ -94,6 +94,21 @@ export function ChatArea({
     readonly sourceUrl?: string;
   } | null>(null);
 
+  useEffect(() => {
+    if (!lightboxImage) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setLightboxImage(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [lightboxImage]);
+
   return (
     <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-[#070b14]">
       {/* Scrollable Thread Container */}
@@ -158,6 +173,10 @@ export function ChatArea({
       {/* Fullscreen Image Lightbox Modal */}
       {lightboxImage && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Fullscreen preview: ${lightboxImage.title}`}
+          data-image-lightbox="true"
           className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={() => setLightboxImage(null)}
         >
@@ -184,8 +203,9 @@ export function ChatArea({
               </div>
               <button
                 type="button"
+                aria-label="Close image lightbox"
                 onClick={() => setLightboxImage(null)}
-                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>

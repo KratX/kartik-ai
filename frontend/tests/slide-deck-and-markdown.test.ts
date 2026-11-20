@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  AGENT_SELECTOR_PILLS,
   buildArtifactRawDownloadUrl,
+  buildUploadedFileRawUrl,
   formatCitationRelevancePercent,
+  formatImageFileBadge,
   parsePdfArtifactDocument,
   parsePptArtifactSlideDeck,
   pdfDocumentSpecToMarkdown,
@@ -295,5 +298,25 @@ describe('@kartik/frontend SlideDeckPreview & MarkdownRenderer Tokenizers (9.4.a
       'billing-spec.pdf',
     ]);
     assert.equal(multiSummary.label, '3 passages · 2 documents');
+  });
+
+  it('Fix #19: builds ownership-scoped uploaded file raw URLs and formats image file metadata badges', () => {
+    assert.equal(
+      buildUploadedFileRawUrl('fil_abc123'),
+      '/api/v1/files/fil_abc123/raw',
+    );
+    assert.equal(
+      buildUploadedFileRawUrl(' fil/unsafe?id '),
+      '/api/v1/files/fil%2Funsafe%3Fid/raw',
+    );
+
+    assert.equal(formatImageFileBadge('image/png', 42_000), 'PNG · 41 KB');
+    assert.equal(formatImageFileBadge('image/jpeg', 128_000), 'JPEG · 125 KB');
+    assert.equal(formatImageFileBadge('image/webp', 512), 'WEBP · 1 KB');
+
+    const visionPill = AGENT_SELECTOR_PILLS.find((p) => p.id === 'vision');
+    assert.ok(visionPill);
+    assert.equal(visionPill.label, 'Vision OCR');
+    assert.ok(visionPill.placeholder.includes('OCR'));
   });
 });

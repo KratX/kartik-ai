@@ -349,6 +349,33 @@ export class FileIngestionAndArtifactService {
   }
 
   /**
+   * Returns uploaded file metadata, a short-lived signed download URL, and the raw binary payload
+   * encoded as Base64 after verifying ownership (Invariants #10 & #20).
+   */
+  public async getFileWithRawBytes(input: {
+    readonly userId: string;
+    readonly fileId: string;
+    readonly ttlSeconds?: number;
+  }): Promise<{
+    readonly file: UploadedFileRecord;
+    readonly download: SignedDownloadUrlResult;
+    readonly contentBase64: string;
+  }> {
+    const { file, download } = await this.getFileWithSignedUrl(input);
+    const storedObject = await this.objectStorage.getPrivateObject(
+      file.storageKey,
+      input.userId,
+    );
+    const contentBase64 = Buffer.from(storedObject.body).toString('base64');
+
+    return Object.freeze({
+      file,
+      download,
+      contentBase64,
+    });
+  }
+
+  /**
    * Returns artifact metadata and a short-lived signed download URL after verifying ownership.
    * Missing or foreign-owned artifacts both return `404 NOT_FOUND` (Invariants #10 & #20).
    */

@@ -49,6 +49,11 @@ import {
   normalizeRagInlineCitations,
   rerankRagHits,
 } from '../agents/rag/index.js';
+import {
+  buildVisionFollowUps,
+  buildVisionSystemInstruction,
+  classifyVisionIntent,
+} from '../agents/vision/index.js';
 import type { DailyLiveBudgetGuard } from '../services/budget-guard.js';
 import type { AgentSlidingWindowRateLimiter } from '../services/agent-rate-limiter.js';
 import {
@@ -855,10 +860,15 @@ export class AgentGraphExecutor {
         ? await this.deps.loadImageBytes(imageAttachment.storageKey, request.userId)
         : new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+      const visionIntent = classifyVisionIntent(trimmedPrompt);
+      const visionSystemInstruction = buildVisionSystemInstruction(visionIntent);
+
       const visionResult = await this.deps.visionProvider.analyzeImage({
         prompt: trimmedPrompt,
         mimeType: imageAttachment.mimeType as 'image/png' | 'image/jpeg' | 'image/webp',
         imageBytes,
+        filename: imageAttachment.originalFilename,
+        systemInstruction: visionSystemInstruction,
       });
 
       return {
@@ -866,6 +876,11 @@ export class AgentGraphExecutor {
         requestId: request.requestId,
         agent: 'vision',
         replyContent: `${fallbackNotice}${visionResult.analysis}`,
+        followUpQueries: buildVisionFollowUps(
+          visionIntent,
+          trimmedPrompt,
+          imageAttachment.originalFilename,
+        ),
         usage: {
           promptTokens,
           completionTokens: visionResult.tokensUsed,

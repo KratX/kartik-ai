@@ -745,7 +745,7 @@ export const AGENT_SELECTOR_PILLS: readonly AgentSelectorPillSpec[] = Object.fre
     id: 'vision',
     label: 'Vision OCR',
     creditCostLabel: '3 cr',
-    placeholder: 'Attach an image (PNG/JPEG/WebP) and ask Vision Agent to inspect it...',
+    placeholder: 'Attach an image (PNG/JPEG/WebP) to extract OCR text, tables, diagrams, or audit UI...',
   },
   {
     id: 'image',
@@ -1144,4 +1144,30 @@ export function summarizeDocumentCitations(
     uniqueTitles: Object.freeze(uniqueTitles),
     label: `${passageLabel} · ${docLabel}`,
   });
+}
+
+/**
+ * Builds the ownership-scoped raw binary streaming URL for an uploaded file
+ * (`GET /api/v1/files/:fileId/raw`) used for inline image thumbnails and Lightbox inspection.
+ */
+export function buildUploadedFileRawUrl(fileId: string): string {
+  return `/api/v1/files/${encodeURIComponent(fileId.trim())}/raw`;
+}
+
+/**
+ * Formats an uploaded image's MIME type and byte size into a compact tabular metadata label
+ * (e.g. `PNG · 42 KB`, `JPEG · 128 KB`, `WEBP · 64 KB`).
+ */
+export function formatImageFileBadge(mimeType: string, sizeBytes: number): string {
+  const lower = mimeType.toLowerCase();
+  const format =
+    lower === 'image/jpeg' || lower === 'image/jpg'
+      ? 'JPEG'
+      : lower === 'image/webp'
+        ? 'WEBP'
+        : lower === 'image/png'
+          ? 'PNG'
+          : 'IMAGE';
+  const kb = Math.max(1, Math.round(Math.max(0, sizeBytes) / 1024));
+  return `${format} · ${kb} KB`;
 }

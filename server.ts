@@ -410,6 +410,32 @@ export function createKartikExpressApp(
     }
   });
 
+  app.get('/api/v1/files/:fileId/raw', async (req, res) => {
+    try {
+      const actor = resolveWorkspaceIdentity(req);
+      const data = await runtime.getFileContent(actor, req.params.fileId ?? '');
+      const rawBuffer = Buffer.from(data.contentBase64, 'base64');
+      const safeName =
+        data.file.originalFilename
+          .replace(/[^A-Za-z0-9._-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 80) || 'kartik-upload';
+      const isImage = data.file.mimeType.startsWith('image/');
+      const inlineRequested =
+        isImage || req.query.inline === '1' || req.query.inline === 'true';
+      const disposition = inlineRequested ? 'inline' : 'attachment';
+
+      res.setHeader('Content-Type', data.file.mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.setHeader('Content-Length', String(rawBuffer.byteLength));
+      res.status(200).send(rawBuffer);
+    } catch (err) {
+      sendError(req, res, err);
+    }
+  });
+
   // 6. Artifacts & Direct Binary Streaming (/api/v1/artifacts/:artifactId, /content, /raw) — Request-Scoped (Auth or Guest)
   app.get(
     '/api/v1/artifacts/:artifactId/content',

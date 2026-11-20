@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import {
   FileText,
+  Image as ImageIcon,
   Loader2,
   Mic,
   MicOff,
@@ -11,6 +12,8 @@ import {
 } from 'lucide-react';
 import {
   AGENT_SELECTOR_PILLS,
+  buildUploadedFileRawUrl,
+  formatImageFileBadge,
   type AgentSelectorPillSpec,
 } from '../slide-deck-and-markdown.js';
 import type {
@@ -226,25 +229,64 @@ export function ChatInput({
       {/* Attached File Chips */}
       {attachedFiles.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {attachedFiles.map((file) => (
-            <div
-              key={file.fileId}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-xs text-emerald-200"
-            >
-              <FileText className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="font-medium">{file.originalFilename}</span>
-              <span className="text-[10px] font-mono text-emerald-300/80">
-                {file.pageCount ? `${file.pageCount}p · ${file.chunkCount} chunks` : 'ready'}
-              </span>
-              <button
-                type="button"
-                onClick={() => onRemoveAttachedFile(file.fileId)}
-                className="p-0.5 rounded hover:bg-emerald-500/20 text-emerald-300 cursor-pointer"
+          {attachedFiles.map((file) => {
+            const isImage = file.mimeType.startsWith('image/');
+            if (isImage) {
+              return (
+                <div
+                  key={file.fileId}
+                  data-attached-image-chip="true"
+                  className="inline-flex items-center gap-2.5 pl-1.5 pr-2.5 py-1.5 rounded-lg bg-slate-900 border border-sky-500/40 text-xs text-slate-100"
+                >
+                  <div className="w-9 h-9 rounded-md overflow-hidden border border-slate-700 bg-slate-950 flex items-center justify-center shrink-0">
+                    <img
+                      src={buildUploadedFileRawUrl(file.fileId)}
+                      alt={file.originalFilename}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 font-medium text-slate-100 max-w-[200px]">
+                      <ImageIcon className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                      <span className="truncate">{file.originalFilename}</span>
+                    </div>
+                    <div className="text-[10px] font-mono tabular-nums text-sky-300/80">
+                      {formatImageFileBadge(file.mimeType, file.sizeBytes)} · Vision ready
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${file.originalFilename}`}
+                    onClick={() => onRemoveAttachedFile(file.fileId)}
+                    className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-100 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={file.fileId}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-xs text-emerald-200"
               >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ))}
+                <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="font-medium">{file.originalFilename}</span>
+                <span className="text-[10px] font-mono tabular-nums text-emerald-300/80">
+                  {file.pageCount ? `${file.pageCount}p · ${file.chunkCount} chunks` : 'ready'}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${file.originalFilename}`}
+                  onClick={() => onRemoveAttachedFile(file.fileId)}
+                  className="p-0.5 rounded hover:bg-emerald-500/20 text-emerald-300 cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
 

@@ -18,7 +18,9 @@ import {
 } from 'lucide-react';
 import {
   buildArtifactRawDownloadUrl,
+  buildUploadedFileRawUrl,
   formatCitationRelevancePercent,
+  formatImageFileBadge,
   summarizeDocumentCitations,
 } from '../slide-deck-and-markdown.js';
 import type {
@@ -101,9 +103,11 @@ export function MessageBubble({
   const [copiedCitationIdx, setCopiedCitationIdx] = useState<number | null>(
     null,
   );
+  const [copiedVisionReply, setCopiedVisionReply] = useState(false);
   const citationCardRefs = useRef<Record<number, HTMLElement | null>>({});
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const visionCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {
@@ -112,6 +116,9 @@ export function MessageBubble({
       }
       if (copyTimerRef.current) {
         clearTimeout(copyTimerRef.current);
+      }
+      if (visionCopyTimerRef.current) {
+        clearTimeout(visionCopyTimerRef.current);
       }
     };
   }, []);
@@ -162,6 +169,17 @@ export function MessageBubble({
     }
     copyTimerRef.current = setTimeout(() => {
       setCopiedCitationIdx(null);
+    }, 1600);
+  };
+
+  const handleCopyVisionAnalysis = () => {
+    void navigator.clipboard?.writeText(message.content);
+    setCopiedVisionReply(true);
+    if (visionCopyTimerRef.current) {
+      clearTimeout(visionCopyTimerRef.current);
+    }
+    visionCopyTimerRef.current = setTimeout(() => {
+      setCopiedVisionReply(false);
     }, 1600);
   };
 
@@ -228,10 +246,30 @@ export function MessageBubble({
           </div>
 
           <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400">
+            {!isUser && message.agentUsed === 'vision' && (
+              <button
+                type="button"
+                onClick={handleCopyVisionAnalysis}
+                aria-label="Copy Vision OCR analysis"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-[11px] font-sans font-medium text-slate-300 hover:text-sky-300 transition-colors cursor-pointer"
+              >
+                {copiedVisionReply ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-400" />
+                    <span className="text-emerald-300">Copied</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3" />
+                    <span>Copy OCR</span>
+                  </>
+                )}
+              </button>
+            )}
             {!isUser &&
               typeof message.creditsCharged === 'number' &&
               !message.idempotentReplay && (
-                <span className="text-amber-300/90">
+                <span className="text-amber-300/90 tabular-nums">
                   -{message.creditsCharged} cr
                 </span>
               )}
@@ -243,24 +281,87 @@ export function MessageBubble({
           </div>
         </div>
 
-        {/* Attached Files on User Message */}
-        {message.attachedFiles && message.attachedFiles.length > 0 && (
-          <div className="mb-3 flex flex-wrap gap-2">
-            {message.attachedFiles.map((file) => (
-              <div
-                key={file.fileId}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 text-xs text-slate-200"
-              >
-                <Paperclip className="w-3.5 h-3.5 text-sky-400" />
-                <span className="font-medium">{file.originalFilename}</span>
-                <span className="text-[11px] font-mono text-slate-400">
-                  ({Math.max(1, Math.round(file.sizeBytes / 1024))} KB
-                  {file.pageCount ? ` · ${file.pageCount}p` : ''})
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* Attached Files on User Message (Real Clickable Image Previews + PDF Chips) */}
+        {message.attachedFiles && message.attachedFiles.length > 0 && (() => {
+          const attachedImages = message.attachedFiles.filter((f) =>
+            f.mimeType.startsWith('image/'),
+          );
+          const attachedDocs = message.attachedFiles.filter(
+            (f) => !f.mimeType.startsWith('image/'),
+          );
+          return (
+            <div className="mb-3 space-y-2.5">
+              {attachedImages.length > 0 && (
+                <div className="flex flex-wrap gap-2.5">
+                  {attachedImages.map((file) => {
+                    const imageUrl = buildUploadedFileRawUrl(file.fileId);
+                    return (
+                      <div
+                        key={file.fileId}
+                        data-uploaded-image-preview="true"
+                        className="group overflow-hidden rounded-lg bg-slate-950 border border-slate-700/90 hover:border-sky-500/60 transition-colors max-w-sm w-full sm:w-auto"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onOpenLightboxImage?.({
+                              title: file.originalFilename,
+                              imageUrl,
+                            })
+                          }
+                          aria-label={`Inspect ${file.originalFilename} fullscreen`}
+                          className="block w-full bg-slate-950/90 cursor-pointer text-left"
+                        >
+                          <div className="flex items-center justify-center p-2 border-b border-slate-800/80 bg-slate-950">
+                            <img
+                              src={imageUrl}
+                              alt={file.originalFilename}
+                              loading="lazy"
+                              className="max-h-52 w-auto max-w-full rounded object-contain group-hover:scale-[1.01] transition-transform"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-3 px-3 py-2 bg-slate-900/95">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 text-xs font-medium text-slate-100">
+                                <ImageIcon className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                <span className="truncate">{file.originalFilename}</span>
+                              </div>
+                              <div className="text-[10px] font-mono tabular-nums text-slate-400 mt-0.5">
+                                {formatImageFileBadge(file.mimeType, file.sizeBytes)}
+                              </div>
+                            </div>
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-400 group-hover:text-sky-300 shrink-0">
+                              <Maximize2 className="w-3.5 h-3.5" />
+                              <span>Inspect</span>
+                            </span>
+                          </div>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {attachedDocs.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {attachedDocs.map((file) => (
+                    <div
+                      key={file.fileId}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 text-xs text-slate-200"
+                    >
+                      <Paperclip className="w-3.5 h-3.5 text-sky-400" />
+                      <span className="font-medium">{file.originalFilename}</span>
+                      <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                        ({Math.max(1, Math.round(file.sizeBytes / 1024))} KB
+                        {file.pageCount ? ` · ${file.pageCount}p` : ''})
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Markdown Message Content with Clickable Inline Citation Badges */}
         <MarkdownRenderer

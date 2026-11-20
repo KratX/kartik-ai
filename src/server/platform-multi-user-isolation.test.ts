@@ -1277,6 +1277,188 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
       await new Promise<void>((resolve) => prodServer.close(() => resolve()));
     }
   });
+
+  it('Fix #19: streams uploaded images via GET /api/v1/files/:fileId/raw with strict 404 tenant isolation and supports multi-turn Vision follow-ups scoped to the owning user', async () => {
+    const validTokens: Record<string, DecodedIdToken> = {
+      'vision-jwt-alice': buildDecodedFirebaseToken({
+        uid: 'fb_vision_alice_19',
+        email: 'alice.vision@example.com',
+        name: 'Alice Vision',
+      }),
+      'vision-jwt-bob': buildDecodedFirebaseToken({
+        uid: 'fb_vision_bob_19',
+        email: 'bob.vision@example.com',
+        name: 'Bob Vision',
+      }),
+    };
+
+    setFirebaseTokenVerifierForTests(async (token: string) => {
+      const match = validTokens[token];
+      if (!match) {
+        throw new Error('FirebaseAuthError: Invalid ID token');
+      }
+      return match;
+    });
+
+    const runtime = new KartikPlatformRuntime();
+    const app = createKartikExpressApp(runtime);
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const aliceHeaders = {
+      Authorization: 'Bearer vision-jwt-alice',
+      'content-type': 'application/json',
+    };
+    const bobHeaders = {
+      Authorization: 'Bearer vision-jwt-bob',
+      'content-type': 'application/json',
+    };
+
+    // Minimal valid 1x1 PNG (magic bytes 89 50 4E 47 0D 0A 1A 0A)
+    const pngBytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+      0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+      0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
+      0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+      0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+      0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+      0x42, 0x60, 0x82,
+    ]);
+
+    try {
+      // 1. Alice creates a conversation and uploads a PNG image
+      const convRes = await fetch(`${baseUrl}/api/v1/conversations`, {
+        method: 'POST',
+        headers: aliceHeaders,
+        body: JSON.stringify({ title: 'Vision Invoice Audit' }),
+      });
+      assert.equal(convRes.status, 201);
+      const convJson = (await convRes.json()) as {
+        data: { conversationId: string };
+      };
+      const aliceConvId = convJson.data.conversationId;
+
+      const uploadRes = await fetch(`${baseUrl}/api/v1/files/upload`, {
+        method: 'POST',
+        headers: {
+          ...aliceHeaders,
+          'Idempotency-Key': 'req_alice_upload_png_19',
+        },
+        body: JSON.stringify({
+          conversationId: aliceConvId,
+          originalFilename: 'q4-invoice.png',
+          declaredMimeType: 'image/png',
+          contentBase64: pngBytes.toString('base64'),
+        }),
+      });
+      assert.equal(uploadRes.status, 201);
+      const uploadJson = (await uploadRes.json()) as {
+        data: { file: { fileId: string } };
+      };
+      const aliceFileId = uploadJson.data.file.fileId;
+
+      // 2. Alice can stream her raw PNG image with nosniff + inline headers
+      const aliceRawRes = await fetch(
+        `${baseUrl}/api/v1/files/${encodeURIComponent(aliceFileId)}/raw`,
+        { headers: { Authorization: aliceHeaders.Authorization } },
+      );
+      assert.equal(aliceRawRes.status, 200);
+      assert.equal(aliceRawRes.headers.get('content-type'), 'image/png');
+      assert.equal(aliceRawRes.headers.get('x-content-type-options'), 'nosniff');
+      const streamedBytes = Buffer.from(await aliceRawRes.arrayBuffer());
+      assert.deepEqual(streamedBytes, pngBytes);
+
+      // 3. Bob MUST receive 404 NOT_FOUND on Alice's uploaded image (Invariants #10 & #20)
+      const bobRawRes = await fetch(
+        `${baseUrl}/api/v1/files/${encodeURIComponent(aliceFileId)}/raw`,
+        { headers: { Authorization: bobHeaders.Authorization } },
+      );
+      assert.equal(bobRawRes.status, 404);
+
+      // 4. Alice runs initial Vision OCR turn with her attached PNG
+      const turn1Res = await fetch(
+        `${baseUrl}/api/v1/conversations/${encodeURIComponent(aliceConvId)}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            ...aliceHeaders,
+            'Idempotency-Key': 'req_alice_vision_turn1_19',
+          },
+          body: JSON.stringify({
+            prompt: 'Extract line items and totals from this invoice',
+            preferredAgent: 'vision',
+            attachmentFileIds: [aliceFileId],
+          }),
+        },
+      );
+      assert.equal(turn1Res.status, 201);
+      const turn1Json = (await turn1Res.json()) as {
+        data: {
+          assistantMessage: {
+            agentUsed: string;
+            followUpQueries?: string[];
+          };
+        };
+      };
+      assert.equal(turn1Json.data.assistantMessage.agentUsed, 'vision');
+      assert.equal(turn1Json.data.assistantMessage.followUpQueries?.length, 3);
+
+      // 5. Alice clicks a Vision follow-up WITHOUT re-uploading -> resolves her conversation image cleanly
+      const turn2Res = await fetch(
+        `${baseUrl}/api/v1/conversations/${encodeURIComponent(aliceConvId)}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            ...aliceHeaders,
+            'Idempotency-Key': 'req_alice_vision_turn2_19',
+          },
+          body: JSON.stringify({
+            prompt: turn1Json.data.assistantMessage.followUpQueries![0],
+            preferredAgent: 'vision',
+            attachmentFileIds: [],
+          }),
+        },
+      );
+      assert.equal(turn2Res.status, 201);
+      const turn2Json = (await turn2Res.json()) as {
+        data: { assistantMessage: { agentUsed: string } };
+      };
+      assert.equal(turn2Json.data.assistantMessage.agentUsed, 'vision');
+
+      // 6. Bob running Vision without uploading his own image MUST fail (400), never leaking Alice's image
+      const bobConvRes = await fetch(`${baseUrl}/api/v1/conversations`, {
+        method: 'POST',
+        headers: bobHeaders,
+        body: JSON.stringify({ title: 'Bob Empty Vision' }),
+      });
+      const bobConvJson = (await bobConvRes.json()) as {
+        data: { conversationId: string };
+      };
+      const bobVisionRes = await fetch(
+        `${baseUrl}/api/v1/conversations/${encodeURIComponent(bobConvJson.data.conversationId)}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            ...bobHeaders,
+            'Idempotency-Key': 'req_bob_vision_empty_19',
+          },
+          body: JSON.stringify({
+            prompt: 'Extract text from image',
+            preferredAgent: 'vision',
+            attachmentFileIds: [],
+          }),
+        },
+      );
+      assert.equal(bobVisionRes.status, 400);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
 
 

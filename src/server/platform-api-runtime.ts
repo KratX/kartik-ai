@@ -740,7 +740,8 @@ export class KartikPlatformRuntime {
           '| **PDF Generator (`pdf`)** | Publication-grade `%PDF-1.4` engine: 6 document archetypes, executive masthead, KPI metrics, vector tables, callouts & interactive in-chat Document/Native PDF viewer | `5 credits` · `5 req/min` |',
           '| **PPT Generator (`ppt`)** | Keynote-grade 16:9 **OpenXML `.pptx`** compiler: 6 deck themes, 5 visual slide layouts (KPIs, 2-column, process flow, spotlight, bullets), embedded speaker notes & interactive Stage/Grid Studio | `8 credits` · `5 req/min` |',
           '| **PDF RAG (`rag`)** | Hybrid dense + BM25/lexical reranking over uploaded `.pdf` files with prompt-injection defense, clickable `[1]` citations, interactive Document Evidence cards & follow-up research | `2 credits` · `5 req/min` |',
-          '| **Vision & Image (`vision` / `image`)** | Multimodal OCR/diagram inspection on uploaded images & prompt-enhanced visual artwork generation | `3–10 credits` · `5 req/min` |',
+          '| **Vision OCR (`vision`)** | Multi-mode multimodal OCR, table/receipt extraction, diagram & UI/code inspection with real inline image thumbnails, fullscreen Lightbox & multi-turn image follow-ups | `3 credits` · `5 req/min` |',
+          '| **Image Gen (`image`)** | Prompt-enhanced high-resolution visual artwork & architecture illustration generation | `10 credits` · `5 req/min` |',
         ].join('\n'),
         citations: [],
         createdAt: nowIso,
@@ -1095,6 +1096,17 @@ export class KartikPlatformRuntime {
     };
   }
 
+  public async getFileContent(
+    actor: VerifiedRequestIdentity | string,
+    fileId: string,
+  ) {
+    const user = await this.hydrateUserFromPersistence(actor);
+    return this.ingestionService.getFileWithRawBytes({
+      userId: user.userId,
+      fileId,
+    });
+  }
+
   public async getArtifactContent(
     actor: VerifiedRequestIdentity | string,
     artifactId: string,
@@ -1164,6 +1176,50 @@ export class KartikPlatformRuntime {
       hasImageBytes: attachedFiles.some((f) => f.mimeType.startsWith('image/')),
     });
 
+    // Fix #19: For multi-turn Vision follow-ups (e.g. clicking a Vision follow-up chip) where no new image
+    // was explicitly attached on this turn, resolve the authenticated user's most recent uploaded image
+    // in this same conversation (strictly scoped to user.userId).
+    const effectiveAttachmentFileIds = [...attachmentFileIds];
+    if (
+      targetAgent === 'vision' &&
+      !attachedFiles.some((f) => f.mimeType.startsWith('image/'))
+    ) {
+      const convMessages = this.messagesByConversation.get(resolvedConvId) ?? [];
+      let fallbackImageId: string | undefined;
+      for (let i = convMessages.length - 1; i >= 0 && !fallbackImageId; i -= 1) {
+        const msgFiles = convMessages[i]?.attachedFiles ?? [];
+        for (let j = msgFiles.length - 1; j >= 0; j -= 1) {
+          const candidate = msgFiles[j];
+          if (candidate && candidate.mimeType.startsWith('image/')) {
+            const verified = await this.repository.getFileById(
+              user.userId,
+              candidate.fileId,
+            );
+            if (verified && verified.mimeType.startsWith('image/')) {
+              fallbackImageId = verified.fileId;
+              break;
+            }
+          }
+        }
+      }
+      if (!fallbackImageId) {
+        const userFiles = await this.repository.listFilesByUser(user.userId);
+        const latestConvImage = userFiles
+          .filter(
+            (f) =>
+              f.mimeType.startsWith('image/') &&
+              f.storageKey.includes(`/${resolvedConvId}/`),
+          )
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+        if (latestConvImage) {
+          fallbackImageId = latestConvImage.fileId;
+        }
+      }
+      if (fallbackImageId) {
+        effectiveAttachmentFileIds.push(fallbackImageId);
+      }
+    }
+
     const targetConvIdForFingerprint =
       existingConv && existingConv.deletionState !== 'deleted'
         ? existingConv.conversationId
@@ -1174,7 +1230,7 @@ export class KartikPlatformRuntime {
       conversationId: targetConvIdForFingerprint,
       prompt: trimmedPrompt,
       targetAgent,
-      attachmentFileIds,
+      attachmentFileIds: effectiveAttachmentFileIds,
     });
 
     const scopedRequestIdKey = `${user.userId}:${requestId}`;
@@ -1295,7 +1351,7 @@ export class KartikPlatformRuntime {
         messageId: userMessage.messageId,
         prompt: trimmedPrompt,
         preferredAgent: input.preferredAgent,
-        attachmentFileIds,
+        attachmentFileIds: effectiveAttachmentFileIds,
       });
     } catch (err) {
       const failNowIso = new Date().toISOString();

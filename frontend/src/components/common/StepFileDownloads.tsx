@@ -17,6 +17,109 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-19',
+    title: 'Fix #19 — Vision OCR & Multimodal Image Inspector Overhaul (5-Mode Grounded Prompting, PNG/JPEG/WebP Dimension Parser, Ownership-Scoped Raw Image Streaming, Inline Previews, Lightbox & Multi-Turn Follow-Ups)',
+    subtitle:
+      '17 files · Overhauls Vision OCR end-to-end: dedicated pure Vision intelligence module (5-mode intent classification for ocr_extract, table_receipt, diagram_architecture, ui_code_audit & visual_qa; zero-dependency binary PNG/JPEG/WebP header dimension parser; strict anti-hallucination & prompt-injection guardrails; 3 contextual follow-ups), ownership-scoped GET /api/v1/files/:fileId/raw binary image streaming (404 tenant isolation), automatic conversation-scoped multi-turn image resolution so Vision follow-up chips work without re-uploading, real image thumbnail preview chips in ChatInput, clickable inline image preview cards with accessible Escape-dismissible Lightbox inspection & one-click Copy OCR in MessageBubble/ChatArea, plus backend, frontend & multi-user isolation tests',
+    zipFilename: 'fix-19-vision-ocr-multimodal-inspector-and-image-preview.zip',
+    zipHref: '/__downloads/fix-19-vision-ocr-multimodal-inspector-and-image-preview.zip',
+    commitMessage: `feat(vision,agent,server,frontend): overhaul Vision OCR with 5-mode multimodal inspection, raw image previews & multi-turn follow-ups
+
+- Add backend/services/agent/src/agents/vision/index.ts implementing 5-mode Vision intent classification (ocr_extract, table_receipt, diagram_architecture, ui_code_audit, visual_qa), zero-dependency PNG/JPEG/WebP header dimension parser, anti-hallucination & prompt-injection-safe system instructions, 3 contextual Vision follow-ups, and deterministic offline fallback
+- Upgrade LiveGeminiVisionProvider and AgentGraphExecutor to supply tailored systemInstruction, filename metadata, image dimensions, and 3 Vision followUpQueries
+- Add ownership-scoped getFileWithRawBytes and GET /api/v1/files/:fileId/raw (Content-Type + X-Content-Type-Options: nosniff + 404 NOT_FOUND for foreign users)
+- Resolve authenticated user's latest conversation image automatically for multi-turn Vision follow-ups in KartikPlatformRuntime
+- Upgrade ChatInput with real uploaded image thumbnails, MessageBubble with clickable inline image preview cards (opening fullscreen Lightbox) and Copy OCR action, and App.tsx image upload status copy
+- Add Fix #19 backend, frontend, and multi-user isolation tests`,
+    changedFiles: [
+      {
+        path: 'backend/services/agent/src/agents/vision/index.ts',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/agents/vision/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/models/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/models/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/rag/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/rag/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'backend/services/agent/src/graph/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/graph/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/index.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'server.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=server.ts',
+      },
+      {
+        path: 'frontend/src/App.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/App.tsx',
+      },
+      {
+        path: 'frontend/src/components/slide-deck-and-markdown.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/slide-deck-and-markdown.ts',
+      },
+      {
+        path: 'frontend/src/components/chat/ChatArea.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ChatArea.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/ChatInput.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ChatInput.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageBubble.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageBubble.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+      {
+        path: 'backend/services/agent/tests/vision-ocr-engine.test.ts',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=backend/services/agent/tests/vision-ocr-engine.test.ts',
+      },
+      {
+        path: 'frontend/tests/slide-deck-and-markdown.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/tests/slide-deck-and-markdown.test.ts',
+      },
+      {
+        path: 'src/server/platform-multi-user-isolation.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-multi-user-isolation.test.ts',
+      },
+    ],
+  },
+  {
     id: 'fix-18',
     title: 'Fix #18 — PDF RAG Agent Overhaul (Reading-Order PDF Loader, Sentence-Aware Chunker, Hybrid Semantic+BM25 Reranker, Prompt-Injection Defense & Interactive Document Evidence Viewer)',
     subtitle:

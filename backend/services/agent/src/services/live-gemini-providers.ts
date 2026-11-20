@@ -59,6 +59,13 @@ import {
   buildRichCodingTemplateBundle,
   sanitizeGeneratedCodeBundle,
 } from '../agents/coding/index.js';
+import {
+  buildVisionSystemInstruction,
+  buildVisionUserPrompt,
+  classifyVisionIntent,
+  formatOfflineVisionFallback,
+  parseImageDimensions,
+} from '../agents/vision/index.js';
 import { computeDeterministicEmbedding } from './mock-providers.js';
 import {
   stripMarkdownJsonFences,
@@ -939,9 +946,21 @@ export class LiveGeminiVisionProvider implements VisionProvider {
     readonly prompt: string;
     readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
     readonly imageBytes: Uint8Array;
+    readonly filename?: string;
+    readonly systemInstruction?: string;
   }): Promise<{ readonly analysis: string; readonly tokensUsed: number }> {
     const base64Data = Buffer.from(input.imageBytes).toString('base64');
-    const visionInstruction = `Analyze this uploaded image (${input.mimeType}, ${input.imageBytes.byteLength} bytes). Extract any visible text (OCR), describe its layout/diagram/scene structure, and answer the user's prompt: "${input.prompt}"`;
+    const intent = classifyVisionIntent(input.prompt);
+    const dimensions = parseImageDimensions(input.mimeType, input.imageBytes);
+    const meta = {
+      mimeType: input.mimeType,
+      sizeBytes: input.imageBytes.byteLength,
+      filename: input.filename,
+      dimensions,
+    };
+    const systemInstruction =
+      input.systemInstruction ?? buildVisionSystemInstruction(intent);
+    const userPrompt = buildVisionUserPrompt(input.prompt, meta);
 
     const ai = await createServerGeminiClient(this.apiKey);
     if (ai) {
@@ -959,11 +978,15 @@ export class LiveGeminiVisionProvider implements VisionProvider {
                   },
                 },
                 {
-                  text: visionInstruction,
+                  text: userPrompt,
                 },
               ],
             },
           ],
+          config: {
+            systemInstruction,
+            maxOutputTokens: 4_096,
+          },
         });
         const text = (response.text ?? '').trim();
         if (text.length > 0) {
@@ -977,14 +1000,11 @@ export class LiveGeminiVisionProvider implements VisionProvider {
       }
     }
 
-    const kb = (input.imageBytes.byteLength / 1024).toFixed(1);
-    const analysis = [
-      `### Vision & OCR Analysis (\`${input.mimeType}\` · ${kb} KB)`,
-      '',
-      `- **Prompt:** ${input.prompt}`,
-      `- **Binary Signature Verified:** Valid \`${input.mimeType}\` header (${input.imageBytes.byteLength} bytes inspected).`,
-      '- **Structural & Visual Breakdown:** High-contrast visual layout detected with clear typographic hierarchy and component boundaries.',
-    ].join('\n');
+    const analysis = formatOfflineVisionFallback({
+      prompt: input.prompt,
+      intent,
+      meta,
+    });
 
     return {
       analysis,

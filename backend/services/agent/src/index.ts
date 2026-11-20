@@ -87,6 +87,19 @@ export {
 } from './agents/rag/index.js';
 
 export {
+  VISION_INTENT_TYPES,
+  buildVisionFollowUps,
+  buildVisionSystemInstruction,
+  buildVisionUserPrompt,
+  classifyVisionIntent,
+  formatOfflineVisionFallback,
+  parseImageDimensions,
+  type ImageDimensionMetadata,
+  type VisionInspectionMeta,
+  type VisionIntentType,
+} from './agents/vision/index.js';
+
+export {
   readSingleHeader,
   requireAgentUserContext,
   requireAgentServiceAuth,

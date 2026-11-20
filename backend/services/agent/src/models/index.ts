@@ -154,6 +154,8 @@ export interface VisionProvider {
     readonly prompt: string;
     readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
     readonly imageBytes: Uint8Array;
+    readonly filename?: string;
+    readonly systemInstruction?: string;
   }): Promise<{
     readonly analysis: string;
     readonly tokensUsed: number;
