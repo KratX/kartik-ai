@@ -16,6 +16,7 @@ import type { CodingArtifactFile } from '../../models/index.js';
 
 export const CODING_INTENT_TYPES = [
   'CODE_GENERATION',
+  'CODE_SNIPPET',
   'CODE_REVIEW',
   'CODE_EXPLANATION',
   'DEBUGGING',
@@ -25,7 +26,13 @@ export const CODING_INTENT_TYPES = [
 export type CodingIntentType = (typeof CODING_INTENT_TYPES)[number];
 
 /**
- * Classifies a user coding prompt into one of the five Tutorial Part 2 coding intents.
+ * Classifies a user coding prompt into one of six engineering intents:
+ * - `CODE_REVIEW`: audit / critique / security or quality review
+ * - `DEBUGGING`: fix a bug, stack trace, or runtime error
+ * - `OPTIMIZATION`: refactor or improve algorithmic / runtime performance
+ * - `CODE_EXPLANATION`: conceptual or walkthrough explanation without app generation
+ * - `CODE_SNIPPET`: backend / CLI / SQL / Python / Rust / Go / algorithmic code without a web UI
+ * - `CODE_GENERATION`: interactive HTML/CSS/JS web app, component, dashboard, game, or UI artifact
  */
 export function classifyCodingIntent(prompt: string): CodingIntentType {
   const lower = prompt.toLowerCase().trim();
@@ -33,7 +40,11 @@ export function classifyCodingIntent(prompt: string): CodingIntentType {
   if (/\b(review|audit|critique|code quality|best practices for this)\b/.test(lower)) {
     return 'CODE_REVIEW';
   }
-  if (/\b(debug|fix this bug|why is this failing|referenceerror|typeerror|stack trace|broken)\b/.test(lower)) {
+  if (
+    /\b(debug|fix this bug|fix the bug|fix this error|why is this failing|referenceerror|typeerror|syntaxerror|uncaught|stack trace|broken|runtime error)\b/.test(
+      lower,
+    )
+  ) {
     return 'DEBUGGING';
   }
   if (/\b(optimize|refactor|speed up|reduce complexity|time complexity|big o|memoize)\b/.test(lower)) {
@@ -46,7 +57,168 @@ export function classifyCodingIntent(prompt: string): CodingIntentType {
     return 'CODE_EXPLANATION';
   }
 
+  const wantsInteractiveWebUi =
+    /\b(html|css|web\s*app|website|landing page|ui|interface|dashboard|calculator|clone|game|clock|kanban|todo|tracker|widget|component|frontend|sandbox|browser|chart|calendar|timer|pomodoro|portfolio|form|app)\b/.test(
+      lower,
+    );
+  const wantsNonUiSnippet =
+    /\b(python|sql|postgresql|mysql|sqlite|rust|golang|go\s+function|java\b|c\+\+|c#|bash|shell script|dockerfile|terraform|yaml|regex|regular expression|algorithm|leetcode|binary search|linked list|unit test|pytest|jest|express route|rest api|graphql schema|cli tool|cron job|function to|script to)\b/.test(
+      lower,
+    );
+
+  if (wantsNonUiSnippet && !wantsInteractiveWebUi) {
+    return 'CODE_SNIPPET';
+  }
+
   return 'CODE_GENERATION';
+}
+
+function stripOuterCodeFences(raw: string): string {
+  const trimmed = raw.trim();
+  const match = /^```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)\n?```$/.exec(trimmed);
+  return match ? match[1]!.trim() : trimmed;
+}
+
+/**
+ * Sanitizes and normalizes generated multi-file HTML/CSS/JS code bundles so they execute cleanly
+ * inside Kartik.ai's strict zero-network `<iframe sandbox="allow-scripts">` preview:
+ * - Strips accidental Markdown code fences
+ * - Removes external CDN `<script src="http...">` and `<link href="http...">` tags (blocked by strict CSP)
+ * - Removes redundant local `styles.css` / `app.js` references from `index.html` (injected cleanly by sandbox)
+ * - Guarantees valid non-empty UTF-8 files with exact `sizeBytes` and SHA-256 digests
+ */
+export function sanitizeGeneratedCodeBundle(input: {
+  readonly title?: string;
+  readonly summary?: string;
+  readonly html?: string;
+  readonly css?: string;
+  readonly js?: string;
+}): {
+  readonly title: string;
+  readonly summary: string;
+  readonly files: readonly CodingArtifactFile[];
+  readonly rawManifestJson: string;
+} | null {
+  const title = (input.title ?? '').trim().slice(0, 80);
+  let html = stripOuterCodeFences(input.html ?? '');
+  if (!title || !html) {
+    return null;
+  }
+
+  // Strip external CDN script/stylesheet tags that would fail under strict `connect-src 'none'` CSP
+  html = html
+    .replace(/<script\b[^>]*\bsrc\s*=\s*["']https?:\/\/[^"']+["'][^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<link\b[^>]*\bhref\s*=\s*["']https?:\/\/[^"']+["'][^>]*\/?>/gi, '')
+    .replace(/<link\b[^>]*\bhref\s*=\s*["']\.?\/?styles\.css["'][^>]*\/?>/gi, '')
+    .replace(/<script\b[^>]*\bsrc\s*=\s*["']\.?\/?app\.js["'][^>]*>[\s\S]*?<\/script>/gi, '')
+    .trim();
+
+  if (!/<!doctype\s+html/i.test(html) && !/<html[\s>]/i.test(html)) {
+    const safeTitle = title.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    html = `<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1" />\n  <title>${safeTitle}</title>\n</head>\n<body>\n${html}\n</body>\n</html>`;
+  }
+
+  const rawCss = stripOuterCodeFences(input.css ?? '');
+  const css =
+    rawCss.length > 0
+      ? rawCss.replace(/@import\s+url\(["']?https?:\/\/[^"')]+["']?\)\s*;?/gi, '').trim() ||
+        'body { margin: 0; font-family: system-ui, sans-serif; background: #090d16; color: #f8fafc; }\n'
+      : 'body { margin: 0; font-family: system-ui, sans-serif; background: #090d16; color: #f8fafc; }\n';
+
+  const rawJs = stripOuterCodeFences(input.js ?? '');
+  const js =
+    rawJs.length > 0
+      ? rawJs
+      : 'console.info("Kartik.ai sandbox app initialized");\n';
+
+  const files: readonly CodingArtifactFile[] = Object.freeze([
+    makeManifestFile('index.html', 'text/html', html),
+    makeManifestFile('styles.css', 'text/css', css),
+    makeManifestFile('app.js', 'text/javascript', js),
+  ]);
+
+  const rawManifestJson = JSON.stringify({
+    title,
+    entryFile: 'index.html',
+    files,
+  });
+
+  const summary =
+    (input.summary ?? '').trim() ||
+    `Generated interactive **${title}** project (\`index.html\`, \`styles.css\`, \`app.js\`).`;
+
+  return Object.freeze({
+    title,
+    summary,
+    files,
+    rawManifestJson,
+  });
+}
+
+/**
+ * Returns a tailored senior software engineering system prompt for each non-generation coding intent.
+ */
+export function buildCodingSystemInstruction(
+  intent: Exclude<CodingIntentType, 'CODE_GENERATION'>,
+): string {
+  switch (intent) {
+    case 'CODE_REVIEW':
+      return 'You are Kartik.ai Senior Staff Engineer conducting a CODE_REVIEW. Organize findings by severity (Critical, High, Medium), call out security/concurrency/edge-case flaws directly, and provide a clean corrected code block.';
+    case 'DEBUGGING':
+      return 'You are Kartik.ai Principal Debugging Specialist (DEBUGGING). Identify the exact root cause first, explain why the failure happens, provide a verified fixed code block, and add 2–3 defensive regression checks.';
+    case 'OPTIMIZATION':
+      return 'You are Kartik.ai Performance & Systems Specialist (OPTIMIZATION). State current vs optimized Big-O time/space complexity, highlight bottlenecks, and provide a clean benchmark-ready refactored implementation.';
+    case 'CODE_EXPLANATION':
+      return 'You are Kartik.ai Principal Software Architect (CODE_EXPLANATION). Explain the mental model clearly with a concise step-by-step walkthrough, annotated code examples, and common pitfalls to avoid.';
+    case 'CODE_SNIPPET':
+      return 'You are Kartik.ai Senior Software Engineer (CODE_SNIPPET). Provide clean, idiomatic, production-ready code in the exact language requested (e.g., Python, SQL, Rust, Go, TypeScript, Bash) with brief usage examples, edge-case handling, and complexity notes.';
+  }
+}
+
+/**
+ * Generates up to 3 focused engineering follow-up prompts for Coding Agent turns.
+ */
+export function buildCodingFollowUps(
+  prompt: string,
+  titleOrTopic: string,
+  intent: CodingIntentType,
+): readonly string[] {
+  const cleanTopic = titleOrTopic.trim().slice(0, 60) || prompt.trim().slice(0, 60);
+
+  if (intent === 'CODE_GENERATION') {
+    return Object.freeze([
+      `Add keyboard shortcuts, ARIA labels, and responsive polish to ${cleanTopic}`,
+      `Add sample presets and JSON export/import state to ${cleanTopic}`,
+      `Add a light/dark theme toggle and undo history to ${cleanTopic}`,
+    ]);
+  }
+  if (intent === 'DEBUGGING') {
+    return Object.freeze([
+      `Write unit tests covering edge cases for this fix`,
+      `Review this fix for race conditions and null-safety`,
+      `Optimize the fixed implementation for lower latency`,
+    ]);
+  }
+  if (intent === 'CODE_REVIEW') {
+    return Object.freeze([
+      `Refactor the reviewed code to resolve all security findings`,
+      `Write unit tests for the critical paths identified in this review`,
+      `Optimize performance hotspots in this implementation`,
+    ]);
+  }
+  if (intent === 'OPTIMIZATION') {
+    return Object.freeze([
+      `Write a micro-benchmark harness comparing before and after`,
+      `Review the optimized code for readability and edge cases`,
+      `Explain the memory allocation trade-offs of this optimization`,
+    ]);
+  }
+
+  return Object.freeze([
+    `Write comprehensive unit tests for ${cleanTopic}`,
+    `Review ${cleanTopic} for edge cases and security hardening`,
+    `Optimize ${cleanTopic} for high-throughput workloads`,
+  ]);
 }
 
 function makeManifestFile(
@@ -143,6 +315,21 @@ button.eq { background: #10b981; border-color: #059669; color: #052e16; font-wei
     js = `let expr = '';
 const display = document.getElementById('display');
 const historyLine = document.getElementById('history-line');
+function evaluateExpr() {
+  if (!expr) return;
+  try {
+    historyLine.textContent = expr + ' =';
+    const safe = expr.replace(/[^0-9+\\-*/.()]/g, '');
+    const res = Function('"use strict"; return (' + safe + ')')();
+    if (!Number.isFinite(res)) throw new Error('Invalid');
+    expr = String(Number(res.toFixed(6)));
+    display.textContent = expr;
+  } catch {
+    display.textContent = 'Error';
+    expr = '';
+  }
+}
+
 document.getElementById('keypad').addEventListener('click', (e) => {
   const btn = e.target.closest('button');
   if (!btn) return;
@@ -161,17 +348,25 @@ document.getElementById('keypad').addEventListener('click', (e) => {
   } else if (act === 'pct' && expr) {
     expr = String(Number(expr) / 100);
     display.textContent = expr;
-  } else if (act === 'eq' && expr) {
-    try {
-      historyLine.textContent = expr + ' =';
-      const safe = expr.replace(/[^0-9+\\-*/.()]/g, '');
-      const res = Function('"use strict"; return (' + safe + ')')();
-      expr = String(Number(res.toFixed(6)));
-      display.textContent = expr;
-    } catch {
-      display.textContent = 'Error';
-      expr = '';
-    }
+  } else if (act === 'eq') {
+    evaluateExpr();
+  }
+});
+
+window.addEventListener('keydown', (e) => {
+  if (/^[0-9+\\-*/.]$/.test(e.key)) {
+    expr += e.key;
+    display.textContent = expr;
+  } else if (e.key === 'Enter' || e.key === '=') {
+    e.preventDefault();
+    evaluateExpr();
+  } else if (e.key === 'Backspace') {
+    expr = expr.slice(0, -1);
+    display.textContent = expr || '0';
+  } else if (e.key === 'Escape') {
+    expr = '';
+    display.textContent = '0';
+    historyLine.textContent = '0';
   }
 });`;
   } else if (lower.includes('netflix') || lower.includes('movie') || lower.includes('stream')) {
@@ -391,6 +586,7 @@ export function buildNonGenerationCodingMarkdown(
     CODE_EXPLANATION: 'Technical Walkthrough & Concept Breakdown',
     DEBUGGING: 'Root-Cause Analysis & Bug Resolution',
     OPTIMIZATION: 'Performance & Complexity Optimization',
+    CODE_SNIPPET: 'Production Code Implementation',
   };
 
   return [

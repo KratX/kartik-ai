@@ -51,7 +51,10 @@ import {
   type PptPresentationGenerationResult,
   type PptPresentationProvider,
 } from '../agents/ppt/index.js';
-import { buildRichCodingTemplateBundle } from '../agents/coding/index.js';
+import {
+  buildRichCodingTemplateBundle,
+  sanitizeGeneratedCodeBundle,
+} from '../agents/coding/index.js';
 import { computeDeterministicEmbedding } from './mock-providers.js';
 import {
   stripMarkdownJsonFences,
@@ -528,41 +531,19 @@ export class LiveGeminiCodingModelProvider implements CodingModelProvider {
         js?: string;
       };
 
-      const title = typeof parsed.title === 'string' ? parsed.title.trim() : '';
-      const html = typeof parsed.html === 'string' ? parsed.html.trim() : '';
-      const css =
-        typeof parsed.css === 'string' && parsed.css.trim().length > 0
-          ? parsed.css
-          : 'body { margin: 0; font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; }\n';
-      const js =
-        typeof parsed.js === 'string' && parsed.js.trim().length > 0
-          ? parsed.js
-          : 'console.info("Kartik.ai sandbox app initialized");\n';
+      const sanitized = sanitizeGeneratedCodeBundle({
+        title: typeof parsed.title === 'string' ? parsed.title : '',
+        summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+        html: typeof parsed.html === 'string' ? parsed.html : '',
+        css: typeof parsed.css === 'string' ? parsed.css : '',
+        js: typeof parsed.js === 'string' ? parsed.js : '',
+      });
 
-      if (title && html) {
-        const mkFile = (path: string, mimeType: string, content: string) => ({
-          path,
-          mimeType,
-          sizeBytes: Buffer.byteLength(content, 'utf8'),
-          sha256: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
-          content,
-        });
-        const files = [
-          mkFile('index.html', 'text/html', html),
-          mkFile('styles.css', 'text/css', css),
-          mkFile('app.js', 'text/javascript', js),
-        ];
-        const rawManifestJson = JSON.stringify({
-          title: title.slice(0, 80),
-          entryFile: 'index.html',
-          files,
-        });
+      if (sanitized) {
         return {
-          summary:
-            (typeof parsed.summary === 'string' && parsed.summary.trim()) ||
-            `Generated interactive **${title}** project (\`index.html\`, \`styles.css\`, \`app.js\`).`,
-          rawManifestJson,
-          tokensUsed: Math.max(120, Math.ceil(rawManifestJson.length / 4)),
+          summary: sanitized.summary,
+          rawManifestJson: sanitized.rawManifestJson,
+          tokensUsed: Math.max(120, Math.ceil(sanitized.rawManifestJson.length / 4)),
         };
       }
     } catch {
@@ -579,13 +560,24 @@ export class LiveGeminiCodingModelProvider implements CodingModelProvider {
     readonly rawManifestJson: string;
     readonly tokensUsed: number;
   }> {
-    const codingPrompt = `Build a complete, self-contained, interactive dark-mode web application for: "${input.prompt}".
+    const codingSystemInstruction = [
+      'You are Kartik.ai Senior Frontend & UI Systems Engineer.',
+      'Build complete, production-quality, interactive vanilla HTML5 + CSS3 + ES2022 JavaScript web apps that run inside a strict zero-network browser sandbox (`sandbox="allow-scripts"`, `connect-src \'none\'`).',
+      'HARD CONSTRAINTS:',
+      '1. Zero external CDNs, fonts, icons, images, or fetch() calls — everything must be 100% self-contained (use inline SVG icons if needed).',
+      '2. Wire every visible button, filter, form, keyboard shortcut, and counter to real working state with meaningful initial seed data.',
+      '3. Never use window.alert(), window.prompt(), or window.confirm(). Always guard any localStorage access with try/catch or keep state in memory.',
+      '4. Use a refined dark-mode visual hierarchy (#090d16 canvas, #111827 cards, crisp 1px borders, readable contrast, responsive layout from 390px mobile to desktop, accessible semantic HTML).',
+      '5. Do NOT include <link rel="stylesheet" href="styles.css"> or <script src="app.js"> — styles.css and app.js are injected automatically.',
+    ].join(' ');
+
+    const codingPrompt = `Build a complete, self-contained, interactive web application for: "${input.prompt}".
 Return ONLY a valid JSON object with exact keys:
-- title: short project title
-- summary: 2-sentence Markdown overview of what was built
-- html: complete index.html markup (no external CDN scripts required)
-- css: modern dark-mode CSS styles
-- js: interactive vanilla JavaScript wiring all buttons, state, and interactions`;
+- title: short crisp project title (max 60 chars)
+- summary: concise 2–3 sentence Markdown overview of features and interactive controls built
+- html: complete semantic index.html markup (no external scripts/stylesheets)
+- css: complete responsive dark-mode CSS3 styles
+- js: clean, bug-free vanilla JavaScript wiring all controls, state updates, and keyboard interactions`;
 
     const ai = await createServerGeminiClient(this.apiKey);
     if (ai) {
@@ -594,6 +586,7 @@ Return ONLY a valid JSON object with exact keys:
           model: DEFAULT_TEXT_MODEL,
           contents: codingPrompt,
           config: {
+            systemInstruction: codingSystemInstruction,
             maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 2_048),
             responseMimeType: 'application/json',
             responseSchema: {

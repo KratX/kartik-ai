@@ -133,6 +133,9 @@ export {
 export {
   CODING_INTENT_TYPES,
   classifyCodingIntent,
+  buildCodingSystemInstruction,
+  sanitizeGeneratedCodeBundle,
+  buildCodingFollowUps,
   buildRichCodingTemplateBundle,
   buildNonGenerationCodingMarkdown,
   type CodingIntentType,

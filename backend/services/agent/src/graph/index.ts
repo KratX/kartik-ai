@@ -33,6 +33,8 @@ import {
   type PptPresentationProvider,
 } from '../agents/ppt/index.js';
 import {
+  buildCodingFollowUps,
+  buildCodingSystemInstruction,
   buildNonGenerationCodingMarkdown,
   classifyCodingIntent,
 } from '../agents/coding/index.js';
@@ -462,7 +464,7 @@ export class AgentGraphExecutor {
           try {
             const codingReply = await this.deps.chatProvider.generateReply({
               prompt: trimmedPrompt,
-              systemInstruction: `You are Kartik.ai Senior Software Engineering & ${codingIntent.replace('_', ' ')} Specialist. Provide precise, concrete, production-ready technical analysis with syntax-highlighted fenced code blocks, root-cause diagnostics, and corrected code examples.`,
+              systemInstruction: buildCodingSystemInstruction(codingIntent),
               maxOutputTokens: this.deps.config.maxOutputTokens,
             });
             inlineMarkdown = codingReply.content.trim();
@@ -478,6 +480,7 @@ export class AgentGraphExecutor {
           requestId: request.requestId,
           agent: 'coding',
           replyContent: `${fallbackNotice}${inlineMarkdown}`,
+          followUpQueries: buildCodingFollowUps(trimmedPrompt, trimmedPrompt.slice(0, 48), codingIntent),
           usage: {
             promptTokens,
             completionTokens: Math.ceil(inlineMarkdown.length / 4),
@@ -602,6 +605,11 @@ export class AgentGraphExecutor {
         agent: 'coding',
         replyContent: `${fallbackNotice}${generated.summary}`,
         artifactIds: [artifactId],
+        followUpQueries: buildCodingFollowUps(
+          trimmedPrompt,
+          validatedManifest.title,
+          'CODE_GENERATION',
+        ),
         usage: {
           promptTokens,
           completionTokens: generated.tokensUsed,

@@ -11,7 +11,10 @@ export interface MessageListProps {
   readonly messages: readonly PlatformMessage[];
   readonly isLoading: boolean;
   readonly activeAgent?: SpecialistAgentName;
-  readonly onFollowUpSearch?: (query: string) => void;
+  readonly onFollowUpSearch?: (
+    query: string,
+    agent?: SpecialistAgentName,
+  ) => void;
   readonly onOpenCodeArtifact?: (artifact: ArtifactRecord) => void;
   readonly onOpenLightboxImage?: (image: {
     readonly title: string;

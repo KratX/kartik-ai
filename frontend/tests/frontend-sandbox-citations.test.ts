@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   SANDBOX_CSP_POLICY,
   buildSandboxedPreviewDocument,
+  buildStandaloneHtmlExport,
   formatGroundedCitations,
   sanitizeExternalCitationUrl,
   validateFrontendArtifactBundle,
@@ -159,4 +160,64 @@ describe('@kartik/frontend Sandboxed Code Preview & Grounded Citations (7.2.a)',
     assert.equal(presentation.badges[1]?.kind, 'blocked_unsafe');
     assert.equal(presentation.badges[1]?.safeHref, null);
   });
+
+  it('Fix #15: extracts clean HTML body, injects opaque-origin storage shim & scoped console bridge, and exports runnable standalone HTML', () => {
+    const bundle = {
+      artifactId: 'art_fix15_sandbox',
+      title: 'Timer <Pro>',
+      entryFile: 'index.html',
+      files: [
+        {
+          path: 'index.html',
+          content:
+            '<!doctype html><html><head><link rel="stylesheet" href="styles.css" /></head><body><main id="app"><h1>25:00</h1></main><script src="app.js"></script></body></html>',
+        },
+        {
+          path: 'styles.css',
+          content: 'body { color: #f8fafc; } /* </style> breakout */',
+        },
+        {
+          path: 'app.js',
+          content:
+            'localStorage.setItem("timer", "25:00"); console.log("ready", "</script>");',
+        },
+      ],
+    };
+
+    const preview = buildSandboxedPreviewDocument(bundle, {
+      bridgeToken: 'sbx_fix15_token',
+    });
+
+    // Security invariants remain locked
+    assert.equal(preview.iframeSandboxAttribute, 'allow-scripts');
+    assert.equal(preview.iframeSandboxAttribute.includes('allow-same-origin'), false);
+    assert.equal(preview.referrerPolicy, 'no-referrer');
+    assert.equal(preview.cspPolicy, SANDBOX_CSP_POLICY);
+    assert.ok(preview.srcDoc.includes("connect-src 'none'"));
+
+    // Clean body extraction: only ONE <!doctype html> at document start, no redundant local links
+    assert.equal(preview.srcDoc.match(/<!doctype html>/gi)?.length, 1);
+    assert.ok(!preview.srcDoc.includes('href="styles.css"'));
+    assert.ok(!preview.srcDoc.includes('src="app.js"'));
+    assert.ok(preview.srcDoc.includes('<main id="app"><h1>25:00</h1></main>'));
+
+    // Storage shim & scoped console bridge injected safely
+    assert.ok(preview.srcDoc.includes('kartik-sandbox'));
+    assert.ok(preview.srcDoc.includes('sbx_fix15_token'));
+    assert.ok(preview.srcDoc.includes('localStorage'));
+    assert.ok(preview.srcDoc.includes('<\\/script>'));
+    assert.ok(preview.srcDoc.includes('<\\/style>'));
+
+    // Standalone single-file HTML export is clean and runnable without bridge noise
+    const exportedHtml = buildStandaloneHtmlExport(bundle);
+    assert.match(exportedHtml, /^<!doctype html>/i);
+    assert.ok(exportedHtml.includes('<title>Timer &lt;Pro&gt;</title>'));
+    assert.ok(exportedHtml.includes('<main id="app"><h1>25:00</h1></main>'));
+    assert.ok(exportedHtml.includes('body { color: #f8fafc; }'));
+    assert.ok(exportedHtml.includes('localStorage.setItem("timer", "25:00")'));
+    assert.ok(!exportedHtml.includes('sbx_fix15_token'));
+    assert.ok(exportedHtml.includes('<\\/script>'));
+    assert.ok(exportedHtml.includes('<\\/style>'));
+  });
 });
+

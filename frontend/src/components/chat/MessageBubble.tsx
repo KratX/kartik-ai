@@ -60,7 +60,10 @@ function getDistinctCitationSnippet(citation: MessageCitation): string | null {
 export interface MessageBubbleProps {
   readonly message: PlatformMessage;
   readonly isLoading?: boolean;
-  readonly onFollowUpSearch?: (query: string) => void;
+  readonly onFollowUpSearch?: (
+    query: string,
+    agent?: PlatformMessage['agentUsed'],
+  ) => void;
   readonly onOpenCodeArtifact?: (artifact: ArtifactRecord) => void;
   readonly onOpenLightboxImage?: (image: {
     readonly title: string;
@@ -382,7 +385,9 @@ export function MessageBubble({
                   key={`${qIdx}-${query}`}
                   type="button"
                   disabled={isLoading || !onFollowUpSearch}
-                  onClick={() => onFollowUpSearch?.(query)}
+                  onClick={() =>
+                    onFollowUpSearch?.(query, message.agentUsed ?? 'search')
+                  }
                   className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-slate-900/65 hover:bg-slate-800/80 border border-slate-800 hover:border-sky-500/45 text-left text-xs text-slate-200 hover:text-sky-200 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed group"
                 >
                   <span className="line-clamp-1">{query}</span>

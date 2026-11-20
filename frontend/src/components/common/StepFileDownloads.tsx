@@ -17,6 +17,98 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-15',
+    title: 'Fix #15 — Coding Agent Overhaul (6-Intent Classifier, Zero-CDN Sanitizer, Live Editable Sandbox IDE, Console Capture & Standalone HTML Export)',
+    subtitle:
+      '15 files · Adds CODE_SNIPPET intent for backend/SQL/Python/CLI prompts (no fake web dashboards), dedicated system prompts per coding intent, zero-CDN/fence sanitizer for Gemini bundles, opaque-origin localStorage/sessionStorage shim + scoped postMessage console/error bridge inside CSP-locked sandbox="allow-scripts" preview, live editable code buffers with Apply & Run (Cmd/Ctrl+Enter) & Reset, Desktop/Tablet/Mobile viewport toggles, collapsible Sandbox Console with one-click "Fix with AI", standalone .html export, compact split-pane Nav layout, and contextual coding follow-ups',
+    zipFilename: 'fix-15-coding-agent-sandbox-ide-and-snippet-intent.zip',
+    zipHref: '/__downloads/fix-15-coding-agent-sandbox-ide-and-snippet-intent.zip',
+    commitMessage: `feat(coding,sandbox,frontend): overhaul Coding agent with 6-intent classifier, zero-CDN sanitizer, live editable sandbox IDE & console capture
+
+- Add CODE_SNIPPET intent to CODING_INTENT_TYPES in backend/services/agent/src/agents/coding/index.ts so algorithmic/backend/SQL/Python/Rust/Go/Bash prompts return clean syntax-highlighted Markdown instead of generating fake HTML web apps
+- Add tailored intent system instructions (buildCodingSystemInstruction), contextual engineering follow-ups (buildCodingFollowUps), and deterministic zero-CDN / Markdown-fence sanitizer (sanitizeGeneratedCodeBundle) wired into LiveGeminiCodingModelProvider (gemini-3.1-flash-lite, maxOutputTokens: 8192) and AgentGraphExecutor
+- Upgrade buildSandboxedPreviewDocument in frontend/src/features/sandbox/index.ts to extract clean <body> markup without nested <!doctype>, inject an in-memory localStorage/sessionStorage shim (preventing SecurityError inside opaque sandbox="allow-scripts" iframes), inject a scoped postMessage console/runtime-error bridge while preserving SANDBOX_CSP_POLICY, and export buildStandaloneHtmlExport()
+- Upgrade ArtifactPanel into an interactive Coding Sandbox IDE with Desktop/Tablet/Mobile responsive viewports, Expand width toggle, live editable code buffers per file with line count + dirty indicator + Apply & Run (Cmd/Ctrl+Enter) + Reset, collapsible Sandbox Console with captured log/warn/error entries + Clear + one-click "Fix with AI", and standalone .html + .json exports
+- Route coding follow-up chips back through the Coding agent (MessageBubble, MessageList, ChatArea, platform-api-runtime) and add Fix #15 backend & frontend sandbox regression tests`,
+    changedFiles: [
+      {
+        path: 'backend/services/agent/src/agents/coding/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/agents/coding/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'backend/services/agent/src/graph/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/graph/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/index.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'frontend/src/features/sandbox/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/features/sandbox/index.ts',
+      },
+      {
+        path: 'frontend/src/components/artifacts/ArtifactPanel.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/artifacts/ArtifactPanel.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageBubble.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageBubble.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageList.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageList.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/ChatArea.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ChatArea.tsx',
+      },
+      {
+        path: 'frontend/src/components/layout/Nav.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/layout/Nav.tsx',
+      },
+      {
+        path: 'frontend/src/App.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/App.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+      {
+        path: 'backend/services/agent/tests/live-providers-and-limits.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/tests/live-providers-and-limits.test.ts',
+      },
+      {
+        path: 'frontend/tests/frontend-sandbox-citations.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/tests/frontend-sandbox-citations.test.ts',
+      },
+    ],
+  },
+  {
     id: 'fix-14',
     title: 'Fix #14 — Web Search Agent Overhaul (Hybrid Retrieval, Inline Citations, Rich Source Cards, Real Visuals & Follow-Ups)',
     subtitle:

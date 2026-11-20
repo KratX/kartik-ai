@@ -147,12 +147,101 @@ export function validateFrontendArtifactBundle(
   return bundle;
 }
 
+export interface SandboxBuildOptions {
+  readonly bridgeToken?: string;
+}
+
+export interface SandboxConsoleBridgeMessage {
+  readonly source: 'kartik-sandbox';
+  readonly token: string;
+  readonly level: 'log' | 'info' | 'warn' | 'error';
+  readonly message: string;
+  readonly timestamp: string;
+}
+
+function extractCleanHtmlBody(rawHtml: string): string {
+  const bodyMatch = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(rawHtml);
+  const inner = bodyMatch ? bodyMatch[1]! : rawHtml;
+  return inner
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<meta\b[^>]*>/gi, '')
+    .replace(/<link\b[^>]*>/gi, '')
+    .trim();
+}
+
+function buildSandboxBootstrapScript(bridgeToken?: string): string {
+  const storageShim = [
+    '(function(){',
+    '  function makeMemStorage(){',
+    '    var store = Object.create(null);',
+    '    return {',
+    '      getItem: function(k){ return Object.prototype.hasOwnProperty.call(store, String(k)) ? store[String(k)] : null; },',
+    '      setItem: function(k, v){ store[String(k)] = String(v); },',
+    '      removeItem: function(k){ delete store[String(k)]; },',
+    '      clear: function(){ store = Object.create(null); },',
+    '      key: function(i){ return Object.keys(store)[i] || null; },',
+    '      get length(){ return Object.keys(store).length; }',
+    '    };',
+    '  }',
+    '  try { window.localStorage.getItem("__kartik_probe__"); } catch (_) {',
+    '    try { Object.defineProperty(window, "localStorage", { value: makeMemStorage(), configurable: true }); } catch (__) {}',
+    '  }',
+    '  try { window.sessionStorage.getItem("__kartik_probe__"); } catch (_) {',
+    '    try { Object.defineProperty(window, "sessionStorage", { value: makeMemStorage(), configurable: true }); } catch (__) {}',
+    '  }',
+    '})();',
+  ].join('\n');
+
+  if (!bridgeToken) {
+    return storageShim;
+  }
+
+  const safeToken = JSON.stringify(bridgeToken.slice(0, 64));
+  const consoleBridge = [
+    '(function(){',
+    `  var TOKEN = ${safeToken};`,
+    '  function fmt(args){',
+    '    return Array.prototype.slice.call(args).map(function(a){',
+    '      if (typeof a === "string") return a;',
+    '      if (a instanceof Error) return a.stack || a.message || String(a);',
+    '      try { return JSON.stringify(a); } catch (_) { return String(a); }',
+    '    }).join(" ").slice(0, 800);',
+    '  }',
+    '  function emit(level, msg){',
+    '    try {',
+    '      window.parent.postMessage({ source: "kartik-sandbox", token: TOKEN, level: level, message: String(msg).slice(0, 800), timestamp: new Date().toISOString().slice(11, 19) }, "*");',
+    '    } catch (_) {}',
+    '  }',
+    '  ["log", "info", "warn", "error"].forEach(function(lvl){',
+    '    var orig = console[lvl];',
+    '    console[lvl] = function(){',
+    '      emit(lvl, fmt(arguments));',
+    '      if (typeof orig === "function") { try { orig.apply(console, arguments); } catch (_) {} }',
+    '    };',
+    '  });',
+    '  window.addEventListener("error", function(ev){',
+    '    var detail = ev && ev.message ? ev.message : "Uncaught runtime error";',
+    '    if (ev && ev.lineno) detail += " (line " + ev.lineno + ")";',
+    '    emit("error", detail);',
+    '  });',
+    '  window.addEventListener("unhandledrejection", function(ev){',
+    '    var reason = ev && ev.reason;',
+    '    var msg = reason instanceof Error ? (reason.message || String(reason)) : String(reason || "Unhandled promise rejection");',
+    '    emit("error", "UnhandledRejection: " + msg);',
+    '  });',
+    '})();',
+  ].join('\n');
+
+  return `${storageShim}\n${consoleBridge}`;
+}
+
 /**
  * Assembles a self-contained, CSP-locked `srcDoc` and `<iframe sandbox="allow-scripts">`
  * descriptor for previewing generated code in an isolated opaque origin (Invariant #11 & §11).
  */
 export function buildSandboxedPreviewDocument(
   rawBundle: FrontendArtifactBundle,
+  options?: SandboxBuildOptions,
 ): SandboxedPreviewDescriptor {
   const bundle = validateFrontendArtifactBundle(rawBundle);
 
@@ -174,15 +263,15 @@ export function buildSandboxedPreviewDocument(
       // Neutralize any </script> breakout inside script files
       jsBlocks.push(file.content.replace(/<\/script/gi, '<\\/script'));
     } else if (lower.endsWith('.html') && file.path === bundle.entryFile) {
-      // Strip any untrusted <script src="..."> or <meta http-equiv="refresh"> from HTML entry
-      htmlBody = file.content
-        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
-        .replace(/<meta\b[^>]*>/gi, '');
+      // Extract clean <body> inner markup and strip untrusted scripts/meta/external links
+      const extracted = extractCleanHtmlBody(file.content);
+      htmlBody = extracted || '<div id="app"></div>';
     }
   }
 
   const safeTitle = escapeHtmlEntities(bundle.title || 'Sandboxed Code Preview');
   const combinedCss = cssBlocks.join('\n');
+  const bootstrapJs = buildSandboxBootstrapScript(options?.bridgeToken);
   const combinedJs = jsBlocks.join('\n;\n');
 
   const srcDoc = [
@@ -190,12 +279,14 @@ export function buildSandboxedPreviewDocument(
     '<html lang="en">',
     '<head>',
     '<meta charset="utf-8" />',
+    '<meta name="viewport" content="width=device-width, initial-scale=1" />',
     `<meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP_POLICY}" />`,
     `<title>${safeTitle}</title>`,
     combinedCss ? `<style>\n${combinedCss}\n</style>` : '',
     '</head>',
     '<body>',
     htmlBody,
+    `<script>\n${bootstrapJs}\n</script>`,
     combinedJs ? `<script>\n${combinedJs}\n</script>` : '',
     '</body>',
     '</html>',
@@ -212,4 +303,56 @@ export function buildSandboxedPreviewDocument(
     srcDoc,
     compiledFileCount: bundle.files.length,
   });
+}
+
+/**
+ * Compiles a validated multi-file coding bundle into a clean, self-contained single-file `.html`
+ * document suitable for direct local download and offline browser execution.
+ */
+export function buildStandaloneHtmlExport(
+  rawBundle: FrontendArtifactBundle,
+): string {
+  const bundle = validateFrontendArtifactBundle(rawBundle);
+  const cssBlocks: string[] = [];
+  const jsBlocks: string[] = [];
+  let htmlBody = '<div id="app"></div>';
+
+  for (const file of bundle.files) {
+    const lower = file.path.toLowerCase();
+    if (lower.endsWith('.css')) {
+      cssBlocks.push(file.content.replace(/<\/style/gi, '<\\/style'));
+    } else if (
+      lower.endsWith('.js') ||
+      lower.endsWith('.ts') ||
+      lower.endsWith('.tsx') ||
+      lower.endsWith('.jsx')
+    ) {
+      jsBlocks.push(file.content.replace(/<\/script/gi, '<\\/script'));
+    } else if (lower.endsWith('.html') && file.path === bundle.entryFile) {
+      const extracted = extractCleanHtmlBody(file.content);
+      htmlBody = extracted || '<div id="app"></div>';
+    }
+  }
+
+  const safeTitle = escapeHtmlEntities(bundle.title || 'Kartik.ai Web App');
+  const combinedCss = cssBlocks.join('\n');
+  const combinedJs = jsBlocks.join('\n;\n');
+
+  return [
+    '<!DOCTYPE html>',
+    '<html lang="en">',
+    '<head>',
+    '  <meta charset="utf-8" />',
+    '  <meta name="viewport" content="width=device-width, initial-scale=1" />',
+    `  <title>${safeTitle}</title>`,
+    combinedCss ? `  <style>\n${combinedCss}\n  </style>` : '',
+    '</head>',
+    '<body>',
+    htmlBody,
+    combinedJs ? `<script>\n${combinedJs}\n</script>` : '',
+    '</body>',
+    '</html>',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }

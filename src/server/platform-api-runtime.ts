@@ -736,7 +736,7 @@ export class KartikPlatformRuntime {
           '| :--- | :--- | :--- |',
           '| **Chat (`chat`)** | Multi-turn technical synthesis, Markdown tables & architecture reasoning | `1 credit` · `20 req/min` |',
           '| **Web Search (`search`)** | Hybrid live Google Search + multi-source web reader with clickable `[1]` citations, rich source cards & follow-up research | `2 credits` · `5 req/min` |',
-          '| **Coding (`coding`)** | Two-stage classifier: builds 3-file (`index.html`, `styles.css`, `app.js`) live sandboxed apps OR inline code reviews | `5 credits` · `5 req/min` |',
+          '| **Coding (`coding`)** | 6-intent classifier: builds zero-CDN 3-file (`index.html`, `styles.css`, `app.js`) live editable sandbox apps with console capture & `.html` export, OR inline snippets/reviews/debugging | `5 credits` · `5 req/min` |',
           '| **PDF Generator (`pdf`)** | Compiles real downloadable **`%PDF-1.4`** multi-page binary reports with page numbers & footer | `5 credits` · `5 req/min` |',
           '| **PPT Generator (`ppt`)** | Compiles real downloadable **OpenXML `.pptx`** slide decks + **Interactive 16:9 Slide Deck Preview** in chat | `8 credits` · `5 req/min` |',
           '| **PDF RAG (`rag`)** | Extracts multi-page text from uploaded `.pdf` files, chunks, embeds (`768-dim`), and cites `[Document, p. N]` | `2 credits` · `5 req/min` |',
@@ -1385,7 +1385,7 @@ export class KartikPlatformRuntime {
           ? execResult.searchImages
           : undefined,
       followUpQueries:
-        execResult.agent === 'search' && (execResult.followUpQueries?.length ?? 0) > 0
+        (execResult.followUpQueries?.length ?? 0) > 0
           ? execResult.followUpQueries
           : undefined,
       artifactIds: execResult.artifactIds ?? [],

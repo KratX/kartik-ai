@@ -143,7 +143,9 @@ export function ChatArea({
             messages={messages}
             isLoading={isLoading}
             activeAgent={activeAgent}
-            onFollowUpSearch={(query) => onQuickPromptSelect?.(query, 'search')}
+            onFollowUpSearch={(query, agent) =>
+              onQuickPromptSelect?.(query, agent ?? 'search')
+            }
             onOpenCodeArtifact={onOpenCodeArtifact}
             onOpenLightboxImage={(img) => setLightboxImage(img)}
           />

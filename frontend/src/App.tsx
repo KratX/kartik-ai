@@ -830,7 +830,11 @@ export function App() {
         <ArtifactPanel
           artifact={activeCodeArtifact}
           isOpen={isArtifactPanelOpen && Boolean(activeCodeArtifact)}
+          isTurnLoading={isTurnLoading}
           onClose={() => setIsArtifactPanelOpen(false)}
+          onAskAiToFix={(fixPrompt) =>
+            void handleQuickPromptSelect(fixPrompt, 'coding')
+          }
         />
       </div>
 

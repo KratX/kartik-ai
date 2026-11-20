@@ -6,6 +6,8 @@ import {
   AGENT_RATE_LIMITS_PER_MINUTE,
   AgentGraphExecutor,
   AgentSlidingWindowRateLimiter,
+  buildCodingFollowUps,
+  buildCodingSystemInstruction,
   buildPdfBinaryBuffer,
   classifyCodingIntent,
   collectRealSearchImages,
@@ -31,6 +33,7 @@ import {
   MOCK_PNG_BYTES,
   normalizeInlineCitations,
   parseAnswerAndFollowUps,
+  sanitizeGeneratedCodeBundle,
 } from '../src/index.js';
 
 const { publicKey } = crypto.generateKeyPairSync('ed25519');
@@ -1114,5 +1117,152 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
       else process.env.GEMINI_API_KEY = prevGeminiKey;
     }
   });
+
+  it('Fix #15: classifies CODE_SNIPPET vs CODE_GENERATION cleanly, sanitizes external CDNs/fences, and attaches coding follow-ups without fake web artifacts', async () => {
+    // 1. 6-intent classifier routes algorithmic/backend/SQL/CLI prompts to CODE_SNIPPET
+    assert.equal(
+      classifyCodingIntent('Write a Python function to merge K sorted linked lists in O(N log K)'),
+      'CODE_SNIPPET',
+    );
+    assert.equal(
+      classifyCodingIntent('Write a PostgreSQL query for 7-day rolling user retention using window functions'),
+      'CODE_SNIPPET',
+    );
+    assert.equal(
+      classifyCodingIntent('Implement a bash script to rotate nginx logs safely'),
+      'CODE_SNIPPET',
+    );
+    assert.equal(
+      classifyCodingIntent('Build an interactive Pomodoro timer web app with dark mode'),
+      'CODE_GENERATION',
+    );
+
+    // 2. Intent-specific system instructions differ by task
+    const reviewPrompt = buildCodingSystemInstruction('CODE_REVIEW');
+    const debugPrompt = buildCodingSystemInstruction('DEBUGGING');
+    const snippetPrompt = buildCodingSystemInstruction('CODE_SNIPPET');
+    assert.ok(reviewPrompt.includes('Organize findings by severity'));
+    assert.ok(debugPrompt.includes('exact root cause'));
+    assert.ok(snippetPrompt.includes('production-ready code'));
+
+    // 3. Zero-CDN & Markdown fence sanitizer preserves valid inline code and strips external scripts/links/@import
+    const dirtyBundle = sanitizeGeneratedCodeBundle({
+      title: 'Dirty CDN App',
+      summary: 'Contains fences and external CDN tags that CSP would block.',
+      html: [
+        '```html',
+        '<!doctype html><html><head>',
+        '<link rel="stylesheet" href="https://cdn.tailwindcss.com/tailwind.css" />',
+        '<link rel="stylesheet" href="styles.css" />',
+        '<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>',
+        '</head><body><main id="app"><h1>Clean Sandbox</h1></main><script src="./app.js"></script></body></html>',
+        '```',
+      ].join('\n'),
+      css: [
+        '```css',
+        '@import url("https://fonts.googleapis.com/css2?family=Inter&display=swap");',
+        'body { background: #0f172a; color: #f8fafc; }',
+        '```',
+      ].join('\n'),
+      js: [
+        '```javascript',
+        'const heading = document.querySelector("h1");',
+        'if (heading) heading.dataset.ready = "true";',
+        '```',
+      ].join('\n'),
+    });
+
+    assert.ok(dirtyBundle);
+    assert.equal(dirtyBundle.files.length, 3);
+    const htmlFile = dirtyBundle.files.find((f) => f.path === 'index.html');
+    const cssFile = dirtyBundle.files.find((f) => f.path === 'styles.css');
+    const jsFile = dirtyBundle.files.find((f) => f.path === 'app.js');
+    assert.ok(htmlFile && cssFile && jsFile);
+    assert.ok(!htmlFile.content.includes('```'));
+    assert.ok(!htmlFile.content.includes('cdn.tailwindcss.com'));
+    assert.ok(!htmlFile.content.includes('unpkg.com'));
+    assert.ok(!htmlFile.content.includes('href="styles.css"'));
+    assert.ok(!htmlFile.content.includes('src="./app.js"'));
+    assert.ok(htmlFile.content.includes('<main id="app"><h1>Clean Sandbox</h1></main>'));
+    assert.ok(!cssFile.content.includes('fonts.googleapis.com'));
+    assert.ok(cssFile.content.includes('background: #0f172a'));
+    assert.ok(!jsFile.content.includes('```'));
+    assert.equal(htmlFile.sizeBytes, Buffer.byteLength(htmlFile.content, 'utf8'));
+
+    // Bare body fragment auto-wraps in a full HTML5 shell
+    const wrappedBundle = sanitizeGeneratedCodeBundle({
+      title: 'Fragment App',
+      summary: 'Bare fragment',
+      html: '<div id="counter">0</div>',
+      css: '',
+      js: '',
+    });
+    assert.ok(wrappedBundle);
+    const wrappedHtml = wrappedBundle.files.find((f) => f.path === 'index.html');
+    assert.ok(wrappedHtml?.content.startsWith('<!doctype html>'));
+    assert.ok(wrappedHtml?.content.includes('<div id="counter">0</div>'));
+    assert.ok(wrappedBundle.files.every((f) => f.sizeBytes > 0 && f.sha256.length === 64));
+
+    // 4. Contextual follow-ups helper returns 3 distinct engineering prompts
+    const genFollowUps = buildCodingFollowUps('Build a Pomodoro timer', 'Pomodoro Timer', 'CODE_GENERATION');
+    assert.equal(genFollowUps.length, 3);
+    assert.ok(genFollowUps.every((q) => q.length > 10));
+
+    // 5. End-to-end AgentGraphExecutor test: CODE_SNIPPET skips web artifact creation & attaches follow-ups
+    const config = createTestConfig();
+    const objectStorage = new InMemoryObjectStorage();
+    const repository = new InMemoryAgentRepository();
+    const vectorStore = new InMemoryVectorStore();
+    const budgetGuard = new DailyLiveBudgetGuard({
+      store: new InMemoryDailyBudgetStore(),
+      dailyLimit: 25,
+      mockAiDefault: true,
+    });
+    const executor = new AgentGraphExecutor({
+      config,
+      budgetGuard,
+      chatProvider: new LiveGeminiChatModelProvider(),
+      codingProvider: new LiveGeminiCodingModelProvider(),
+      searchProvider: new LiveGeminiSearchProvider(),
+      embeddingProvider: new LiveGeminiEmbeddingProvider(),
+      imageProvider: new LiveGeminiImageGenerationProvider(),
+      visionProvider: new LiveGeminiVisionProvider(),
+      pdfProvider: new LiveGeminiPdfDocumentProvider(),
+      pptProvider: new LiveGeminiPptPresentationProvider(),
+      vectorStore,
+      objectStorage,
+      metadataStore: repository,
+    });
+
+    const snippetTurn = await executor.execute({
+      requestId: 'req_fix15_snippet',
+      traceId: 'trc_fix15_snippet',
+      userId: 'usr_fix15',
+      conversationId: 'conv_fix15_snippet',
+      messageId: 'msg_fix15_snippet',
+      prompt: 'Write a Python function to merge K sorted linked lists using heapq',
+      preferredAgent: 'coding',
+    });
+
+    assert.equal(snippetTurn.agent, 'coding');
+    assert.equal(snippetTurn.artifactIds, undefined);
+    assert.equal(snippetTurn.followUpQueries?.length, 3);
+    assert.ok(snippetTurn.replyContent.includes('CODE_SNIPPET'));
+
+    const appTurn = await executor.execute({
+      requestId: 'req_fix15_app',
+      traceId: 'trc_fix15_app',
+      userId: 'usr_fix15',
+      conversationId: 'conv_fix15_app',
+      messageId: 'msg_fix15_app',
+      prompt: 'Build an interactive calculator web app',
+      preferredAgent: 'coding',
+    });
+
+    assert.equal(appTurn.agent, 'coding');
+    assert.equal(appTurn.artifactIds?.length, 1);
+    assert.equal(appTurn.followUpQueries?.length, 3);
+  });
 });
+
 
