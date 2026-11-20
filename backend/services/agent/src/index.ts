@@ -106,6 +106,8 @@ export {
   MAX_PPT_TITLE_CHARS,
   MAX_PPT_SLIDES,
   PDF_DOCUMENT_TYPES,
+  PPT_DECK_THEMES,
+  PPT_SLIDE_LAYOUTS,
   stripMarkdownJsonFences,
   validatePdfDocumentSpec,
   validatePptPresentationSpec,
@@ -114,6 +116,11 @@ export {
   type PdfTableSpec,
   type PdfSectionSpec,
   type PdfDocumentSpec,
+  type PptDeckTheme,
+  type PptSlideLayout,
+  type PptMetricSpec,
+  type PptColumnSpec,
+  type PptProcessStepSpec,
   type PptSlideSpec,
   type PptPresentationSpec,
 } from './schemas/index.js';
@@ -131,7 +138,10 @@ export {
 } from './agents/pdf/index.js';
 
 export {
+  buildPptFollowUps,
+  buildPptSystemInstruction,
   buildPptxBinaryBuffer,
+  classifyPptDeckTheme,
   formatPptSummaryMarkdown,
   MockPptPresentationProvider,
   type PptPresentationGenerationResult,

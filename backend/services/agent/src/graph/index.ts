@@ -30,6 +30,7 @@ import {
   type PdfDocumentProvider,
 } from '../agents/pdf/index.js';
 import {
+  buildPptFollowUps,
   MockPptPresentationProvider,
   type PptPresentationProvider,
 } from '../agents/ppt/index.js';
@@ -778,6 +779,7 @@ export class AgentGraphExecutor {
 
       const deckJson = JSON.stringify({
         slideCount: generatedPpt.slideCount,
+        theme: generatedPpt.spec.theme ?? 'technical_architecture',
         spec: generatedPpt.spec,
       });
       const deckSha = crypto.createHash('sha256').update(deckJson, 'utf8').digest('hex');
@@ -813,6 +815,7 @@ export class AgentGraphExecutor {
         agent: 'ppt',
         replyContent: `${fallbackNotice}${generatedPpt.summaryMarkdown}`,
         artifactIds: [artifactId],
+        followUpQueries: buildPptFollowUps(generatedPpt.spec, trimmedPrompt),
         usage: {
           promptTokens,
           completionTokens: generatedPpt.tokensUsed,

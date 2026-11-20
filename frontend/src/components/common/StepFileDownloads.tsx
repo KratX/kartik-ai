@@ -17,6 +17,78 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-17',
+    title: 'Fix #17 — PPT Generator Agent Overhaul (6 Keynote Themes, 5 Visual Slide Layouts, Full OpenXML SlideMaster/Theme/Speaker Notes & 16:9 Presentation Studio)',
+    subtitle:
+      '11 files · Overhauls PPT Generator with 6 presentation archetypes (pitch_deck, technical_architecture, product_launch, executive_briefing, workshop_training, case_study), 5 visual layouts (metrics KPI grid, two_column comparison, process step flow, spotlight thesis, editorial bullets), full OpenXML .pptx archive (docProps/core+app, ppt/theme/theme1.xml, slideMaster1.xml, slideLayout1.xml, styled DrawingML shapes, and real ppt/notesSlides/notesSlideN.xml speaker notes), upgraded Gemini 3.1 Flash-Lite schema + contextual PPT follow-ups, fixes the 10-slide double-wrapping parser bug, and upgrades SlideDeckPreview into an interactive 16:9 Stage/Grid Presentation Studio with filmstrip, keyboard nav, Speaker Notes drawer & Copy MD',
+    zipFilename: 'fix-17-ppt-generator-keynote-engine-and-presentation-studio.zip',
+    zipHref: '/__downloads/fix-17-ppt-generator-keynote-engine-and-presentation-studio.zip',
+    commitMessage: `feat(ppt,agent,frontend): overhaul PPT Generator with 6 themes, 5 visual layouts, full OpenXML SlideMaster/Theme/Notes & 16:9 Presentation Studio
+
+- Extend PptPresentationSpec & PptSlideSpec in backend/services/agent/src/schemas/index.ts with validated theme, layout (bullets/metrics/two_column/process/spotlight), kicker, metrics, columns, steps, callout, and speakerNotes
+- Overhaul buildPptxBinaryBuffer in backend/services/agent/src/agents/ppt/index.ts with 6 deck theme palettes (classifyPptDeckTheme), tailored editorial system prompts (buildPptSystemInstruction), contextual follow-ups (buildPptFollowUps), full OpenXML package (docProps/core+app, theme1.xml, slideMaster1.xml, slideLayout1.xml, multi-shape DrawingML slide layouts, and real PowerPoint notesSlides/notesSlideN.xml)
+- Upgrade LiveGeminiPptPresentationProvider (gemini-3.1-flash-lite, maxOutputTokens: 8192) and AgentGraphExecutor to generate layout-varied decks with speaker notes and attach 3 contextual PPT follow-ups
+- Fix 10-slide double-wrapping bug in parsePptArtifactSlideDeck, add pptDeckSpecToMarkdown exporter, and upgrade SlideDeckPreview into an interactive 16:9 Presentation Studio (Stage View, Grid Overview, Speaker Notes drawer, interactive filmstrip, keyboard navigation, Copy MD, Download .PPTX)
+- Add Fix #17 backend & frontend PPT regression tests`,
+    changedFiles: [
+      {
+        path: 'backend/services/agent/src/schemas/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/schemas/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/agents/ppt/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/agents/ppt/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'backend/services/agent/src/graph/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/graph/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/index.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'frontend/src/components/slide-deck-and-markdown.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/slide-deck-and-markdown.ts',
+      },
+      {
+        path: 'frontend/src/components/chat/SlideDeckPreview.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/SlideDeckPreview.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+      {
+        path: 'backend/services/agent/tests/pdf-ppt-generators.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/tests/pdf-ppt-generators.test.ts',
+      },
+      {
+        path: 'frontend/tests/slide-deck-and-markdown.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/tests/slide-deck-and-markdown.test.ts',
+      },
+    ],
+  },
+  {
     id: 'fix-16',
     title: 'Fix #16 — PDF Generator Agent Overhaul (6 Editorial Archetypes, Executive Masthead, KPI Grid, Vector Tables, Callouts & Interactive In-Chat Reader/A4 Print Sheets)',
     subtitle:

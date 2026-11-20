@@ -5,25 +5,220 @@
  * and Binary Artifact Download URLs (Micro-step 9.4.a).
  */
 
+export type ParsedPptDeckTheme =
+  | 'pitch_deck'
+  | 'technical_architecture'
+  | 'product_launch'
+  | 'executive_briefing'
+  | 'workshop_training'
+  | 'case_study';
+
+export type ParsedPptSlideLayout =
+  | 'bullets'
+  | 'metrics'
+  | 'two_column'
+  | 'process'
+  | 'spotlight';
+
+export interface ParsedPptMetric {
+  readonly label: string;
+  readonly value: string;
+  readonly delta?: string;
+}
+
+export interface ParsedPptColumn {
+  readonly heading: string;
+  readonly points: readonly string[];
+}
+
+export interface ParsedPptProcessStep {
+  readonly step: string;
+  readonly title: string;
+  readonly detail: string;
+}
+
 export interface InteractiveSlideViewModel {
   readonly slideNumber: number;
   readonly totalSlides: number;
   readonly kind: 'cover' | 'content' | 'closing';
+  readonly layout: ParsedPptSlideLayout;
+  readonly kicker?: string;
   readonly title: string;
   readonly subtitle: string;
   readonly bullets: readonly string[];
+  readonly metrics?: readonly ParsedPptMetric[];
+  readonly columns?: readonly ParsedPptColumn[];
+  readonly steps?: readonly ParsedPptProcessStep[];
+  readonly callout?: string;
+  readonly speakerNotes?: string;
   readonly footer: string;
 }
 
 export interface ParsedSlideDeckViewModel {
   readonly deckTitle: string;
   readonly deckSubtitle: string;
+  readonly theme: ParsedPptDeckTheme;
+  readonly author?: string;
+  readonly generatedDate?: string;
   readonly slides: readonly InteractiveSlideViewModel[];
+}
+
+const VALID_PPT_THEMES: ReadonlySet<string> = new Set([
+  'pitch_deck',
+  'technical_architecture',
+  'product_launch',
+  'executive_briefing',
+  'workshop_training',
+  'case_study',
+]);
+
+const VALID_PPT_LAYOUTS: ReadonlySet<string> = new Set([
+  'bullets',
+  'metrics',
+  'two_column',
+  'process',
+  'spotlight',
+]);
+
+interface RawSlideInput {
+  readonly kind?: string;
+  readonly layout?: string;
+  readonly kicker?: string;
+  readonly title?: string;
+  readonly subtitle?: string;
+  readonly bullets?: unknown[];
+  readonly metrics?: Array<{ label?: string; value?: string; delta?: string }>;
+  readonly columns?: Array<{ heading?: string; points?: unknown[]; bullets?: unknown[] }>;
+  readonly steps?: Array<{ step?: string; title?: string; detail?: string; description?: string }>;
+  readonly callout?: string;
+  readonly speakerNotes?: string;
+}
+
+function normalizeParsedSlideFields(s: RawSlideInput): {
+  readonly layout: ParsedPptSlideLayout;
+  readonly kicker?: string;
+  readonly title: string;
+  readonly subtitle: string;
+  readonly bullets: readonly string[];
+  readonly metrics?: readonly ParsedPptMetric[];
+  readonly columns?: readonly ParsedPptColumn[];
+  readonly steps?: readonly ParsedPptProcessStep[];
+  readonly callout?: string;
+  readonly speakerNotes?: string;
+} {
+  const bullets = Array.isArray(s.bullets)
+    ? s.bullets.map((b) => String(b).trim()).filter(Boolean)
+    : [];
+
+  const metrics: ParsedPptMetric[] | undefined = Array.isArray(s.metrics)
+    ? s.metrics
+        .filter(
+          (m) =>
+            m &&
+            typeof m.label === 'string' &&
+            m.label.trim() &&
+            typeof m.value === 'string' &&
+            m.value.trim(),
+        )
+        .slice(0, 4)
+        .map((m) =>
+          Object.freeze({
+            label: String(m.label).trim(),
+            value: String(m.value).trim(),
+            ...(typeof m.delta === 'string' && m.delta.trim()
+              ? { delta: m.delta.trim() }
+              : {}),
+          }),
+        )
+    : undefined;
+
+  const columns: ParsedPptColumn[] | undefined = Array.isArray(s.columns)
+    ? s.columns
+        .slice(0, 2)
+        .map((c) => {
+          const pts = Array.isArray(c?.points)
+            ? c.points
+            : Array.isArray(c?.bullets)
+              ? c.bullets
+              : [];
+          const cleanPts = pts.map((p) => String(p).trim()).filter(Boolean);
+          const heading = typeof c?.heading === 'string' ? c.heading.trim() : '';
+          return heading && cleanPts.length > 0
+            ? Object.freeze({ heading, points: Object.freeze(cleanPts) })
+            : null;
+        })
+        .filter((c): c is ParsedPptColumn => c !== null)
+    : undefined;
+
+  const steps: ParsedPptProcessStep[] | undefined = Array.isArray(s.steps)
+    ? s.steps
+        .slice(0, 4)
+        .map((st, idx) => {
+          const stTitle = typeof st?.title === 'string' ? st.title.trim() : '';
+          const stDetail =
+            typeof st?.detail === 'string'
+              ? st.detail.trim()
+              : typeof st?.description === 'string'
+                ? st.description.trim()
+                : '';
+          const stNum =
+            typeof st?.step === 'string' && st.step.trim()
+              ? st.step.trim()
+              : String(idx + 1).padStart(2, '0');
+          return stTitle && stDetail
+            ? Object.freeze({ step: stNum, title: stTitle, detail: stDetail })
+            : null;
+        })
+        .filter((st): st is ParsedPptProcessStep => st !== null)
+    : undefined;
+
+  const callout =
+    typeof s.callout === 'string' && s.callout.trim() ? s.callout.trim() : undefined;
+  const kicker =
+    typeof s.kicker === 'string' && s.kicker.trim() ? s.kicker.trim() : undefined;
+  const speakerNotes =
+    typeof s.speakerNotes === 'string' && s.speakerNotes.trim()
+      ? s.speakerNotes.trim()
+      : undefined;
+
+  const validMetrics = metrics && metrics.length >= 2 ? Object.freeze(metrics) : undefined;
+  const validColumns = columns && columns.length === 2 ? Object.freeze(columns) : undefined;
+  const validSteps = steps && steps.length >= 2 ? Object.freeze(steps) : undefined;
+
+  let layout: ParsedPptSlideLayout =
+    typeof s.layout === 'string' && VALID_PPT_LAYOUTS.has(s.layout)
+      ? (s.layout as ParsedPptSlideLayout)
+      : 'bullets';
+
+  if (layout === 'metrics' && !validMetrics) layout = 'bullets';
+  if (layout === 'two_column' && !validColumns) layout = 'bullets';
+  if (layout === 'process' && !validSteps) layout = 'bullets';
+  if (layout === 'spotlight' && !callout) layout = 'bullets';
+  if (layout === 'bullets') {
+    if (validMetrics && !s.layout) layout = 'metrics';
+    else if (validColumns && !s.layout) layout = 'two_column';
+    else if (validSteps && !s.layout) layout = 'process';
+  }
+
+  return {
+    layout,
+    ...(kicker ? { kicker } : {}),
+    title: typeof s.title === 'string' ? s.title.trim() : '',
+    subtitle: typeof s.subtitle === 'string' ? s.subtitle.trim() : '',
+    bullets: Object.freeze(bullets),
+    ...(validMetrics ? { metrics: validMetrics } : {}),
+    ...(validColumns ? { columns: validColumns } : {}),
+    ...(validSteps ? { steps: validSteps } : {}),
+    ...(callout ? { callout } : {}),
+    ...(speakerNotes ? { speakerNotes } : {}),
+  };
 }
 
 /**
  * Parses the `slides-spec.json` manifest content of a `ppt_presentation` artifact into an
- * 8-slide 16:9 interactive deck (Cover + 6 Content Slides + Closing Thank You Slide).
+ * 8-slide 16:9 interactive deck (Cover + Content Slides + Closing Slide).
+ * Handles both already-wrapped backend specs (`kind: 'cover' | 'content' | 'thank_you'`)
+ * without double-wrapping AND legacy content-only slide arrays.
  */
 export function parsePptArtifactSlideDeck(
   rawSpecJson: string | undefined,
@@ -31,28 +226,34 @@ export function parsePptArtifactSlideDeck(
 ): ParsedSlideDeckViewModel {
   let title = fallbackTitle;
   let subtitle = 'Executive & Technical Briefing';
+  let theme: ParsedPptDeckTheme = 'technical_architecture';
+  let author: string | undefined;
+  let generatedDate: string | undefined;
   let footer = 'Generated by Kartik.ai';
-  let contentSlides: Array<{
-    title: string;
-    subtitle?: string;
-    bullets: string[];
-  }> = [];
+  let coverSlideInput: RawSlideInput | undefined;
+  let closingSlideInput: RawSlideInput | undefined;
+  let contentSlides: Array<ReturnType<typeof normalizeParsedSlideFields>> = [];
 
   if (rawSpecJson && rawSpecJson.trim().length > 0) {
     try {
       const parsed = JSON.parse(rawSpecJson) as {
+        theme?: string;
         spec?: {
           title?: string;
           subtitle?: string;
+          theme?: string;
+          author?: string;
+          generatedDate?: string;
           footer?: string;
-          slides?: Array<{
-            title?: string;
-            subtitle?: string;
-            bullets?: string[];
-          }>;
+          slides?: RawSlideInput[];
         };
       };
       const spec = parsed.spec;
+      const rawTheme = spec?.theme ?? parsed.theme;
+      if (typeof rawTheme === 'string' && VALID_PPT_THEMES.has(rawTheme)) {
+        theme = rawTheme as ParsedPptDeckTheme;
+      }
+
       if (spec) {
         if (typeof spec.title === 'string' && spec.title.trim()) {
           title = spec.title.trim();
@@ -60,19 +261,30 @@ export function parsePptArtifactSlideDeck(
         if (typeof spec.subtitle === 'string' && spec.subtitle.trim()) {
           subtitle = spec.subtitle.trim();
         }
+        if (typeof spec.author === 'string' && spec.author.trim()) {
+          author = spec.author.trim();
+        }
+        if (typeof spec.generatedDate === 'string' && spec.generatedDate.trim()) {
+          generatedDate = spec.generatedDate.trim();
+        }
         if (typeof spec.footer === 'string' && spec.footer.trim()) {
           footer = spec.footer.trim();
         }
         if (Array.isArray(spec.slides)) {
-          contentSlides = spec.slides
-            .filter((s) => s && typeof s.title === 'string')
-            .map((s) => ({
-              title: String(s.title).trim(),
-              subtitle: typeof s.subtitle === 'string' ? s.subtitle.trim() : '',
-              bullets: Array.isArray(s.bullets)
-                ? s.bullets.map((b) => String(b).trim()).filter(Boolean)
-                : [],
-            }));
+          for (const rawSlide of spec.slides) {
+            if (!rawSlide || typeof rawSlide !== 'object') continue;
+            if (rawSlide.kind === 'cover') {
+              coverSlideInput = rawSlide;
+              continue;
+            }
+            if (rawSlide.kind === 'thank_you' || rawSlide.kind === 'closing') {
+              closingSlideInput = rawSlide;
+              continue;
+            }
+            if (typeof rawSlide.title === 'string' && rawSlide.title.trim()) {
+              contentSlides.push(normalizeParsedSlideFields(rawSlide));
+            }
+          }
         }
       }
     } catch {
@@ -82,7 +294,8 @@ export function parsePptArtifactSlideDeck(
 
   if (contentSlides.length === 0) {
     contentSlides = [
-      {
+      normalizeParsedSlideFields({
+        layout: 'bullets',
         title: 'Executive Overview',
         subtitle: 'Core Objectives & Scope',
         bullets: [
@@ -90,56 +303,150 @@ export function parsePptArtifactSlideDeck(
           'Strict PostgreSQL schema isolation & Ed25519 user assertions',
           'Zero double-charge idempotency guarantees',
         ],
-      },
+      }),
     ];
   }
 
   const totalSlides = contentSlides.length + 2;
   const slides: InteractiveSlideViewModel[] = [];
 
-  // Slide 1: Cover
-  slides.push({
-    slideNumber: 1,
-    totalSlides,
-    kind: 'cover',
-    title,
-    subtitle,
-    bullets: [`${contentSlides.length} Technical & Executive Modules`, footer],
-    footer,
-  });
-
-  // Slides 2..N-1: Content Slides
-  contentSlides.forEach((s, idx) => {
-    slides.push({
-      slideNumber: idx + 2,
+  const coverNorm = coverSlideInput ? normalizeParsedSlideFields(coverSlideInput) : null;
+  slides.push(
+    Object.freeze({
+      slideNumber: 1,
       totalSlides,
-      kind: 'content',
-      title: s.title,
-      subtitle: s.subtitle || `Module ${idx + 1} of ${contentSlides.length}`,
-      bullets: s.bullets,
+      kind: 'cover',
+      layout: 'bullets',
+      title: coverNorm?.title || title,
+      subtitle: coverNorm?.subtitle || subtitle,
+      bullets: Object.freeze(
+        coverNorm && coverNorm.bullets.length > 0
+          ? [...coverNorm.bullets]
+          : [`${contentSlides.length} Structured Presentation Modules`, footer],
+      ),
+      ...(coverNorm?.speakerNotes ? { speakerNotes: coverNorm.speakerNotes } : {}),
       footer,
-    });
+    }),
+  );
+
+  contentSlides.forEach((s, idx) => {
+    slides.push(
+      Object.freeze({
+        slideNumber: idx + 2,
+        totalSlides,
+        kind: 'content',
+        layout: s.layout,
+        ...(s.kicker ? { kicker: s.kicker } : {}),
+        title: s.title,
+        subtitle: s.subtitle || `Module ${idx + 1} of ${contentSlides.length}`,
+        bullets: s.bullets,
+        ...(s.metrics ? { metrics: s.metrics } : {}),
+        ...(s.columns ? { columns: s.columns } : {}),
+        ...(s.steps ? { steps: s.steps } : {}),
+        ...(s.callout ? { callout: s.callout } : {}),
+        ...(s.speakerNotes ? { speakerNotes: s.speakerNotes } : {}),
+        footer,
+      }),
+    );
   });
 
-  // Final Slide: Closing Thank You Slide
-  slides.push({
-    slideNumber: totalSlides,
-    totalSlides,
-    kind: 'closing',
-    title: 'Thank You & Q&A',
-    subtitle: title,
-    bullets: [
-      'Download the OpenXML .pptx file to edit in PowerPoint, Keynote, or Google Slides',
+  const closingNorm = closingSlideInput
+    ? normalizeParsedSlideFields(closingSlideInput)
+    : null;
+  slides.push(
+    Object.freeze({
+      slideNumber: totalSlides,
+      totalSlides,
+      kind: 'closing',
+      layout: 'bullets',
+      title: closingNorm?.title || 'Thank You & Q&A',
+      subtitle: closingNorm?.subtitle || title,
+      bullets: Object.freeze(
+        closingNorm && closingNorm.bullets.length > 0
+          ? [...closingNorm.bullets]
+          : [
+              'Download the OpenXML .pptx file to edit in PowerPoint, Keynote, or Google Slides',
+              footer,
+            ],
+      ),
+      ...(closingNorm?.speakerNotes ? { speakerNotes: closingNorm.speakerNotes } : {}),
       footer,
-    ],
-    footer,
-  });
+    }),
+  );
 
   return Object.freeze({
     deckTitle: title,
     deckSubtitle: subtitle,
+    theme,
+    ...(author ? { author } : {}),
+    ...(generatedDate ? { generatedDate } : {}),
     slides: Object.freeze(slides),
   });
+}
+
+/**
+ * Exports a parsed presentation deck (including layouts, KPIs, comparisons, process steps,
+ * callouts, and speaker notes) to clean GitHub-Flavored Markdown.
+ */
+export function pptDeckSpecToMarkdown(deck: ParsedSlideDeckViewModel): string {
+  const lines: string[] = [`# ${deck.deckTitle}`, `*${deck.deckSubtitle}*`, ''];
+  const meta = [deck.author, deck.generatedDate, `${deck.slides.length} slides (16:9)`]
+    .filter(Boolean)
+    .join(' · ');
+  if (meta) {
+    lines.push(`> ${meta}`, '');
+  }
+
+  for (const slide of deck.slides) {
+    lines.push(`## Slide ${slide.slideNumber}: ${slide.title}`);
+    if (slide.subtitle) {
+      lines.push(`*${slide.subtitle}*`);
+    }
+    lines.push('');
+
+    if (slide.metrics && slide.metrics.length > 0) {
+      lines.push('| Metric | Value | Note |');
+      lines.push('| --- | --- | --- |');
+      for (const m of slide.metrics) {
+        lines.push(`| ${m.label} | **${m.value}** | ${m.delta ?? ''} |`);
+      }
+      lines.push('');
+    }
+
+    if (slide.columns && slide.columns.length === 2) {
+      for (const col of slide.columns) {
+        lines.push(`### ${col.heading}`);
+        for (const pt of col.points) {
+          lines.push(`- ${pt}`);
+        }
+        lines.push('');
+      }
+    }
+
+    if (slide.steps && slide.steps.length > 0) {
+      for (const st of slide.steps) {
+        lines.push(`- **Step ${st.step} — ${st.title}:** ${st.detail}`);
+      }
+      lines.push('');
+    }
+
+    if (slide.bullets.length > 0 && !slide.columns && !slide.steps) {
+      for (const b of slide.bullets) {
+        lines.push(`- ${b}`);
+      }
+      lines.push('');
+    }
+
+    if (slide.callout) {
+      lines.push(`> **Takeaway:** ${slide.callout}`, '');
+    }
+
+    if (slide.speakerNotes) {
+      lines.push(`*Speaker Notes:* ${slide.speakerNotes}`, '');
+    }
+  }
+
+  return lines.join('\n').trim();
 }
 
 export type MarkdownBlock =

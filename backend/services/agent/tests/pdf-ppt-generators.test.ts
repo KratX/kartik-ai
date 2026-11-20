@@ -18,8 +18,11 @@ import {
   buildPdfBinaryBuffer,
   buildPdfFollowUps,
   buildPdfSystemInstruction,
+  buildPptFollowUps,
+  buildPptSystemInstruction,
   buildPptxBinaryBuffer,
   classifyPdfDocumentType,
+  classifyPptDeckTheme,
   loadAgentConfig,
   routePromptToSpecialist,
   transliterateForPdf,
@@ -251,8 +254,9 @@ describe('@kartik/agent — Phase 10 PDF & PPTX Generators & Schemas (Micro-step
       prompt: 'Create a PPT presentation on LangGraph Multi-Agent Systems',
     });
     assert.deepEqual(pptReplay.artifactIds, pptRes.artifactIds);
-    // Fix #16: PDF turns attach 3 contextual follow-up queries
+    // Fix #16 & Fix #17: PDF and PPT turns attach 3 contextual follow-up queries
     assert.equal(pdfRes.followUpQueries?.length, 3);
+    assert.equal(pptRes.followUpQueries?.length, 3);
   });
 
   it('Fix #16: classifies 6 PDF archetypes, transliterates Unicode, renders executive masthead/KPIs/tables/callouts with /Info metadata', () => {
@@ -357,6 +361,78 @@ describe('@kartik/agent — Phase 10 PDF & PPTX Generators & Schemas (Micro-step
     assert.ok(ascii.trimEnd().endsWith('%%EOF'));
 
     const followUps = buildPdfFollowUps(richSpec, 'proposal');
+    assert.equal(followUps.length, 3);
+  });
+
+  it('Fix #17: classifies 6 PPT themes, validates 5 visual slide layouts, compiles OpenXML SlideMaster/Theme/NotesSlides, and builds contextual follow-ups', async () => {
+    assert.equal(
+      classifyPptDeckTheme('Create a Series A investor pitch deck for an AI fintech startup'),
+      'pitch_deck',
+    );
+    assert.equal(
+      classifyPptDeckTheme('Build a product launch keynote unveiling v3 workflow automation'),
+      'product_launch',
+    );
+    assert.equal(
+      classifyPptDeckTheme('Prepare a Q4 executive board review and financial strategy deck'),
+      'executive_briefing',
+    );
+    assert.equal(
+      classifyPptDeckTheme('Create an engineering onboarding workshop and training curriculum'),
+      'workshop_training',
+    );
+    assert.equal(
+      classifyPptDeckTheme('Build a customer case study and latency benchmark deck'),
+      'case_study',
+    );
+    assert.equal(
+      classifyPptDeckTheme('Design a distributed microservices architecture deck'),
+      'technical_architecture',
+    );
+
+    const sysPrompt = buildPptSystemInstruction('pitch_deck', '2026-11-20');
+    assert.ok(sysPrompt.includes('2026-11-20'));
+    assert.ok(sysPrompt.includes('Investor Pitch Deck'));
+    assert.ok(sysPrompt.includes('speakerNotes'));
+
+    const mockProvider = new MockPptPresentationProvider();
+    const generated = await mockProvider.generatePptPresentation({
+      prompt: 'Create a Series A investor pitch deck for Distributed AI Mesh',
+      maxOutputTokens: 8192,
+    });
+
+    assert.equal(generated.spec.theme, 'pitch_deck');
+    assert.equal(generated.slideCount, 8);
+    assert.equal(generated.spec.slides[0]?.kind, 'cover');
+    assert.equal(generated.spec.slides[7]?.kind, 'thank_you');
+
+    const layouts = new Set(
+      generated.spec.slides
+        .filter((s) => s.kind === 'content')
+        .map((s) => s.layout),
+    );
+    assert.ok(layouts.has('spotlight'));
+    assert.ok(layouts.has('metrics'));
+    assert.ok(layouts.has('two_column'));
+    assert.ok(layouts.has('process'));
+    assert.ok(layouts.has('bullets'));
+
+    // Verify full OpenXML structure (Theme, SlideMaster, SlideLayout, Core/App Props, NotesSlides)
+    const zipText = Buffer.from(generated.pptxBytes).toString('utf8');
+    assert.ok(zipText.includes('docProps/core.xml'));
+    assert.ok(zipText.includes('docProps/app.xml'));
+    assert.ok(zipText.includes('ppt/theme/theme1.xml'));
+    assert.ok(zipText.includes('ppt/slideMasters/slideMaster1.xml'));
+    assert.ok(zipText.includes('ppt/slideLayouts/slideLayout1.xml'));
+    assert.ok(zipText.includes('ppt/slides/_rels/slide1.xml.rels'));
+    assert.ok(zipText.includes('ppt/notesSlides/notesSlide1.xml'));
+    assert.ok(zipText.includes('ppt/notesSlides/notesSlide8.xml'));
+    assert.ok(zipText.includes('MetricCard_1'));
+    assert.ok(zipText.includes('ColumnCard_1'));
+    assert.ok(zipText.includes('StepCard_1'));
+    assert.ok(zipText.includes('SpotlightThesis'));
+
+    const followUps = buildPptFollowUps(generated.spec, 'pitch deck');
     assert.equal(followUps.length, 3);
   });
 });
