@@ -2,8 +2,10 @@ import crypto from 'node:crypto';
 import { AppError } from '@kartik/shared/errors';
 import {
   assertAgentName,
+  isLiveWebSearchPrompt,
   type AgentExecuteRequest,
   type AgentExecuteResponse,
+  type SearchImageGalleryItem,
   type SpecialistAgentName,
 } from '@kartik/shared/contracts';
 import { validateArtifactManifest } from '@kartik/shared/validation';
@@ -36,6 +38,12 @@ import {
 } from '../agents/coding/index.js';
 import type { DailyLiveBudgetGuard } from '../services/budget-guard.js';
 import type { AgentSlidingWindowRateLimiter } from '../services/agent-rate-limiter.js';
+import {
+  buildDeterministicFollowUps,
+  extractCleanDomain,
+  normalizeInlineCitations,
+  parseAnswerAndFollowUps,
+} from '../services/web-search-engine.js';
 
 export interface AgentMetadataStore {
   getFileById(userId: string, fileId: string): Promise<UploadedFileRecord | null>;
@@ -88,11 +96,14 @@ export function routePromptToSpecialist(input: {
   if (/\b(generate a pdf|create a pdf|pdf report|export pdf|write a pdf)\b/.test(lower)) {
     return 'pdf';
   }
-  if (/\b(build an app|write code|create a component|html|typescript|react|sandbox|calculator)\b/.test(lower)) {
+  if (/\b(build an app|write code|create a component|react component|html|sandbox|calculator|debug this|refactor)\b/.test(lower)) {
     return 'coding';
   }
-  if (/\b(search the web|latest news|current price|cite sources|look up online|web search)\b/.test(lower)) {
+  if (isLiveWebSearchPrompt(input.prompt)) {
     return 'search';
+  }
+  if (/\b(typescript|react)\b/.test(lower)) {
+    return 'coding';
   }
   if (/\b(in the uploaded pdf|according to the document|page number|uploaded file)\b/.test(lower)) {
     return 'rag';
@@ -228,12 +239,40 @@ export class AgentGraphExecutor {
     }
 
     if (specialist === 'search') {
-      let results;
+      let results: readonly {
+        readonly title: string;
+        readonly url: string;
+        readonly snippet: string;
+        readonly domain?: string;
+        readonly publishedAt?: string;
+        readonly imageUrl?: string;
+        readonly sourceType?: 'web' | 'news' | 'encyclopedia' | 'technical';
+      }[];
+      let synthesisText = '';
+      let searchImages: readonly SearchImageGalleryItem[] = [];
+      let followUpQueries: readonly string[] = [];
+
       try {
-        results = await this.deps.searchProvider.searchWeb({
-          query: trimmedPrompt,
-          maxResults: 4,
-        });
+        if (typeof this.deps.searchProvider.executeSearch === 'function') {
+          const bundle = await this.deps.searchProvider.executeSearch({
+            query: trimmedPrompt,
+            maxResults: 6,
+            maxOutputTokens: this.deps.config.maxOutputTokens,
+          });
+          results = bundle.results;
+          synthesisText = (bundle.synthesizedAnswer ?? '').trim();
+          searchImages = bundle.searchImages;
+          followUpQueries = bundle.followUpQueries;
+        } else {
+          results = await this.deps.searchProvider.searchWeb({
+            query: trimmedPrompt,
+            maxResults: 6,
+          });
+          synthesisText =
+            typeof this.deps.searchProvider.lastSynthesizedAnswer === 'string'
+              ? this.deps.searchProvider.lastSynthesizedAnswer.trim()
+              : '';
+        }
       } catch {
         // §10: "If search fails, say the lookup failed — never invent sources."
         return {
@@ -242,6 +281,8 @@ export class AgentGraphExecutor {
           agent: 'search',
           replyContent: `${fallbackNotice}Web search lookup failed due to an upstream search provider error. No external sources were fabricated.`,
           citations: [],
+          searchImages: [],
+          followUpQueries: [],
           usage: {
             promptTokens,
             completionTokens: 24,
@@ -258,42 +299,55 @@ export class AgentGraphExecutor {
         sourceId: `src_${idx + 1}`,
         title: item.title,
         urlOrPage: item.url,
+        domain: item.domain ?? extractCleanDomain(item.url, item.title),
+        snippet: item.snippet,
+        publishedAt: item.publishedAt,
+        sourceType: item.sourceType ?? 'web',
       }));
 
-      const citedLines = results
-        .map((r, idx) => `- [src_${idx + 1}] **${r.title}** (${r.url}): ${r.snippet}`)
+      const citedContextLines = results
+        .map((r, idx) => `[${idx + 1}] ${r.title} (${r.url}): ${r.snippet}`)
         .join('\n');
-
-      let synthesisText =
-        typeof this.deps.searchProvider.lastSynthesizedAnswer === 'string' &&
-        this.deps.searchProvider.lastSynthesizedAnswer.trim().length > 0
-          ? this.deps.searchProvider.lastSynthesizedAnswer.trim()
-          : '';
 
       if (!synthesisText && results.length > 0 && budgetDecision.allowLive && !this.deps.config.mockAi) {
         try {
           const synthReply = await this.deps.chatProvider.generateReply({
-            prompt: `User question: "${trimmedPrompt}"\n\nCited web search results:\n${citedLines}\n\nSynthesize a clear, direct, accurate Markdown answer grounded in these cited sources. Reference sources inline as [src_1], [src_2], etc.`,
+            prompt: `User question: "${trimmedPrompt}"\n\nCited web search results:\n${citedContextLines}\n\nSynthesize a clear, direct, accurate Markdown answer grounded in these cited sources. Cite sources inline as [1], [2], etc. Do not append a raw URL list.\n\nEnd with:\nFOLLOW_UP_QUESTIONS:\n- <follow-up 1>\n- <follow-up 2>\n- <follow-up 3>`,
             systemInstruction:
-              'You are Kartik.ai Web Search Synthesis Agent. Answer directly and accurately using the provided search results and cite [src_N] inline.',
+              'You are Kartik.ai Web Search Synthesis Agent. Answer directly and accurately using the provided search results and cite [1], [2] inline.',
             maxOutputTokens: this.deps.config.maxOutputTokens,
           });
           if (synthReply.content.trim().length > 0) {
-            synthesisText = synthReply.content.trim();
+            const parsed = parseAnswerAndFollowUps(synthReply.content, trimmedPrompt, results);
+            synthesisText = parsed.answer;
+            if (followUpQueries.length === 0) {
+              followUpQueries = parsed.followUpQueries;
+            }
           }
         } catch {
-          // Fall back to summary sentence if synthesis call fails
+          // Fall back to structured summary if synthesis call fails
         }
       }
 
       if (!synthesisText && results.length > 0) {
-        synthesisText = `Synthesized from ${results.length} cited source(s) for "${trimmedPrompt.slice(0, 80)}".`;
+        const snippetBullets = results
+          .slice(0, 4)
+          .map((r, idx) => `- **${r.title}** [${idx + 1}]: ${r.snippet}`)
+          .join('\n');
+        synthesisText = `Summary grounded in ${results.length} retrieved web source(s) for **"${trimmedPrompt.slice(0, 80)}"**:\n\n${snippetBullets}`;
+      }
+
+      if (results.length > 0) {
+        synthesisText = normalizeInlineCitations(synthesisText, results.length);
+        if (followUpQueries.length === 0) {
+          followUpQueries = buildDeterministicFollowUps(trimmedPrompt, results);
+        }
       }
 
       const replyContent =
         results.length === 0
           ? `${fallbackNotice}No verified web search results were found for your query.`
-          : `${fallbackNotice}### Synthesis\n${synthesisText}\n\n### Cited Source Material\n${citedLines}`;
+          : `${fallbackNotice}${synthesisText}`;
 
       return {
         executionId,
@@ -301,6 +355,8 @@ export class AgentGraphExecutor {
         agent: 'search',
         replyContent,
         citations,
+        searchImages,
+        followUpQueries,
         usage: {
           promptTokens,
           completionTokens: Math.ceil(replyContent.length / 4),

@@ -305,6 +305,77 @@ export function tokenizeMarkdownBlocks(markdown: string): readonly MarkdownBlock
   return Object.freeze(blocks);
 }
 
+export type MarkdownInlineToken =
+  | { readonly type: 'text'; readonly text: string }
+  | { readonly type: 'code'; readonly text: string }
+  | { readonly type: 'bold'; readonly text: string }
+  | { readonly type: 'italic'; readonly text: string }
+  | { readonly type: 'link'; readonly label: string; readonly url: string }
+  | { readonly type: 'citation'; readonly index: number; readonly raw: string };
+
+const INLINE_TOKEN_PATTERN =
+  /(`[^`]+`|\*\*[^*]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|\[(?:src_)?\d+(?:\s*,\s*(?:src_)?\d+)*\])/g;
+
+/**
+ * Pure, XSS-safe inline Markdown tokenizer supporting inline code, bold, italic,
+ * `http(s)` links, and numeric citation markers (`[1]`, `[src_1]`, `[1, 2]`).
+ */
+export function tokenizeInlineMarkdown(text: string): readonly MarkdownInlineToken[] {
+  if (!text) {
+    return Object.freeze([]);
+  }
+
+  const parts = text.split(INLINE_TOKEN_PATTERN);
+  const tokens: MarkdownInlineToken[] = [];
+
+  for (const part of parts) {
+    if (!part) continue;
+
+    if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+      tokens.push({ type: 'code', text: part.slice(1, -1) });
+      continue;
+    }
+
+    if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
+      tokens.push({ type: 'bold', text: part.slice(2, -2) });
+      continue;
+    }
+
+    if (part.startsWith('*') && part.endsWith('*') && part.length >= 2) {
+      tokens.push({ type: 'italic', text: part.slice(1, -1) });
+      continue;
+    }
+
+    const linkMatch = /^\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(part);
+    if (linkMatch) {
+      tokens.push({
+        type: 'link',
+        label: linkMatch[1]!,
+        url: linkMatch[2]!,
+      });
+      continue;
+    }
+
+    const citationMatch = /^\[((?:src_)?\d+(?:\s*,\s*(?:src_)?\d+)*)\]$/.exec(part);
+    if (citationMatch) {
+      const nums = citationMatch[1]!
+        .split(',')
+        .map((chunk) => Number.parseInt(chunk.replace(/^src_/i, '').trim(), 10))
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 99);
+      if (nums.length > 0) {
+        for (const num of nums) {
+          tokens.push({ type: 'citation', index: num, raw: `[${num}]` });
+        }
+        continue;
+      }
+    }
+
+    tokens.push({ type: 'text', text: part });
+  }
+
+  return Object.freeze(tokens);
+}
+
 /**
  * Builds the canonical direct binary download path for a generated PDF, PPTX, or PNG artifact.
  */
@@ -337,7 +408,7 @@ export const AGENT_SELECTOR_PILLS: readonly AgentSelectorPillSpec[] = Object.fre
     id: 'search',
     label: 'Web Search',
     creditCostLabel: '2 cr',
-    placeholder: 'Search the web with live citations & 4-image visual gallery...',
+    placeholder: 'Search the live web with inline citations, source cards & follow-ups...',
   },
   {
     id: 'coding',

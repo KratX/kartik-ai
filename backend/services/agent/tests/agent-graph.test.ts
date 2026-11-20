@@ -157,6 +157,32 @@ describe('@kartik/agent Router, Specialist Graph & Daily Redis Budget Guard (5.2
       }),
       'vision',
     );
+
+    // Fix #14: Expanded live-query auto-routing to Web Search
+    assert.equal(
+      routePromptToSpecialist({ prompt: 'Who won the latest Champions League match?' }),
+      'search',
+    );
+    assert.equal(
+      routePromptToSpecialist({ prompt: 'What is the weather in Tokyo right now?' }),
+      'search',
+    );
+    assert.equal(
+      routePromptToSpecialist({ prompt: 'PostgreSQL 18 release date and key features' }),
+      'search',
+    );
+    assert.equal(
+      routePromptToSpecialist({ prompt: 'NVIDIA stock price today' }),
+      'search',
+    );
+    assert.equal(
+      routePromptToSpecialist({ prompt: 'Compare React 19 vs Vue 3 benchmarks 2026' }),
+      'search',
+    );
+    assert.equal(
+      routePromptToSpecialist({ prompt: 'Explain how binary search works in computer science' }),
+      'chat',
+    );
   });
 
   it('enforces daily Redis budget counter (quota:{userId}:{day}) and degrades gracefully to mock mode on exhaustion (§12)', async () => {

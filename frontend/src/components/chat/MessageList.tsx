@@ -11,6 +11,7 @@ export interface MessageListProps {
   readonly messages: readonly PlatformMessage[];
   readonly isLoading: boolean;
   readonly activeAgent?: SpecialistAgentName;
+  readonly onFollowUpSearch?: (query: string) => void;
   readonly onOpenCodeArtifact?: (artifact: ArtifactRecord) => void;
   readonly onOpenLightboxImage?: (image: {
     readonly title: string;
@@ -23,6 +24,7 @@ export function MessageList({
   messages,
   isLoading,
   activeAgent,
+  onFollowUpSearch,
   onOpenCodeArtifact,
   onOpenLightboxImage,
 }: MessageListProps) {
@@ -38,6 +40,8 @@ export function MessageList({
         <MessageBubble
           key={msg.messageId}
           message={msg}
+          isLoading={isLoading}
+          onFollowUpSearch={onFollowUpSearch}
           onOpenCodeArtifact={onOpenCodeArtifact}
           onOpenLightboxImage={onOpenLightboxImage}
         />

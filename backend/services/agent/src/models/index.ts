@@ -1,8 +1,12 @@
 import type { SqlMigrationFile } from '@kartik/shared/database';
 import type {
+  AgentCitation,
   AgentName,
   ArtifactManifestFile,
+  SearchImageGalleryItem,
 } from '@kartik/shared/contracts';
+
+export type { AgentCitation, SearchImageGalleryItem };
 
 export type UploadedFileStatus = 'ready' | 'processing' | 'failed' | 'deleted';
 
@@ -22,12 +26,6 @@ export interface UploadedFileRecord {
 
 export interface CodingArtifactFile extends ArtifactManifestFile {
   readonly content: string;
-}
-
-export interface AgentCitation {
-  readonly sourceId: string;
-  readonly title: string;
-  readonly urlOrPage: string;
 }
 
 export type ArtifactType =
@@ -105,11 +103,28 @@ export interface SearchResultItem {
   readonly title: string;
   readonly url: string;
   readonly snippet: string;
+  readonly domain?: string;
+  readonly publishedAt?: string;
+  readonly imageUrl?: string;
+  readonly sourceType?: 'web' | 'news' | 'encyclopedia' | 'technical';
+}
+
+export interface SearchExecutionBundle {
+  readonly results: readonly SearchResultItem[];
+  readonly synthesizedAnswer: string | null;
+  readonly searchImages: readonly SearchImageGalleryItem[];
+  readonly followUpQueries: readonly string[];
+  readonly searchQueries?: readonly string[];
 }
 
 export interface SearchProvider {
   readonly providerName: string;
   readonly lastSynthesizedAnswer?: string | null;
+  executeSearch?(input: {
+    readonly query: string;
+    readonly maxResults?: number;
+    readonly maxOutputTokens?: number;
+  }): Promise<SearchExecutionBundle>;
   searchWeb(input: {
     readonly query: string;
     readonly maxResults?: number;

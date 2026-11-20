@@ -87,6 +87,17 @@ export interface MessageCitation {
   readonly sourceId: string;
   readonly title: string;
   readonly urlOrPage: string;
+  readonly domain?: string;
+  readonly snippet?: string;
+  readonly publishedAt?: string;
+  readonly sourceType?:
+    | 'gemini_grounding'
+    | 'news'
+    | 'encyclopedia'
+    | 'technical'
+    | 'community'
+    | 'web'
+    | 'document';
 }
 
 export interface ChatMessageItem {
@@ -202,7 +213,7 @@ export interface SearchImageGalleryItem {
   readonly title: string;
   readonly imageUrl: string;
   readonly sourceUrl: string;
-  readonly domain: string;
+  readonly domain?: string;
 }
 
 export interface PlatformUser {
@@ -224,6 +235,7 @@ export interface PlatformMessage {
   readonly idempotentReplay?: boolean;
   readonly citations?: readonly MessageCitation[];
   readonly searchImages?: readonly SearchImageGalleryItem[];
+  readonly followUpQueries?: readonly string[];
   readonly artifactIds?: readonly string[];
   readonly artifacts?: readonly ArtifactRecord[];
   readonly attachedFiles?: readonly UploadedFileRecord[];

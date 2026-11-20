@@ -1,38 +1,96 @@
 import React, { useState } from 'react';
 import { Check, Copy, Terminal } from 'lucide-react';
 import {
+  tokenizeInlineMarkdown,
   tokenizeMarkdownBlocks,
   type MarkdownBlock,
 } from '../slide-deck-and-markdown.js';
+import type { MessageCitation } from '../../types/index.js';
 
-function renderInlineFormattedText(text: string): React.ReactNode[] {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g);
-  return parts.map((part, idx) => {
-    if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+function formatCitationTooltip(citation: MessageCitation, index: number): string {
+  const domainPart = citation.domain
+    ? ` (${citation.domain})`
+    : /^https?:\/\//i.test(citation.urlOrPage)
+      ? ''
+      : ` (${citation.urlOrPage})`;
+  return `[${index}] ${citation.title}${domainPart}`;
+}
+
+function renderInlineFormattedText(
+  text: string,
+  citations?: readonly MessageCitation[],
+  onCitationClick?: (citationZeroBasedIndex: number) => void,
+): React.ReactNode[] {
+  const tokens = tokenizeInlineMarkdown(text);
+  return tokens.map((token, idx) => {
+    if (token.type === 'code') {
       return (
         <code
           key={idx}
           className="px-1.5 py-0.5 mx-0.5 text-xs font-mono bg-slate-800/90 text-sky-300 border border-slate-700/70 rounded"
         >
-          {part.slice(1, -1)}
+          {token.text}
         </code>
       );
     }
-    if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
+
+    if (token.type === 'bold') {
       return (
         <strong key={idx} className="font-semibold text-slate-100">
-          {part.slice(2, -2)}
+          {token.text}
         </strong>
       );
     }
-    if (part.startsWith('*') && part.endsWith('*') && part.length >= 2) {
+
+    if (token.type === 'italic') {
       return (
         <em key={idx} className="italic text-slate-300">
-          {part.slice(1, -1)}
+          {token.text}
         </em>
       );
     }
-    return <React.Fragment key={idx}>{part}</React.Fragment>;
+
+    if (token.type === 'link') {
+      return (
+        <a
+          key={idx}
+          href={token.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sky-300 underline decoration-sky-500/50 underline-offset-2 hover:text-sky-200 transition-colors"
+        >
+          {token.label}
+        </a>
+      );
+    }
+
+    if (token.type === 'citation') {
+      const citationIdx = token.index - 1;
+      const matched =
+        citations && citationIdx >= 0 && citationIdx < citations.length
+          ? citations[citationIdx]
+          : undefined;
+
+      if (!matched) {
+        return <React.Fragment key={idx}>{token.raw}</React.Fragment>;
+      }
+
+      return (
+        <sup key={idx} className="ml-0.5 align-super">
+          <button
+            type="button"
+            onClick={() => onCitationClick?.(citationIdx)}
+            title={formatCitationTooltip(matched, token.index)}
+            aria-label={`Jump to source ${token.index}: ${matched.title}`}
+            className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-mono font-semibold tabular-nums rounded bg-sky-500/15 hover:bg-sky-500/30 text-sky-300 border border-sky-500/35 hover:border-sky-400/70 transition-colors cursor-pointer"
+          >
+            {token.index}
+          </button>
+        </sup>
+      );
+    }
+
+    return <React.Fragment key={idx}>{token.text}</React.Fragment>;
   });
 }
 
@@ -87,10 +145,18 @@ function CodeBlockCard({
 
 export interface MarkdownRendererProps {
   readonly content: string;
+  readonly citations?: readonly MessageCitation[];
+  readonly onCitationClick?: (citationZeroBasedIndex: number) => void;
 }
 
-export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+export function MarkdownRenderer({
+  content,
+  citations,
+  onCitationClick,
+}: MarkdownRendererProps) {
   const blocks: readonly MarkdownBlock[] = tokenizeMarkdownBlocks(content);
+  const inline = (text: string) =>
+    renderInlineFormattedText(text, citations, onCitationClick);
 
   return (
     <div className="space-y-3 text-sm text-slate-200 leading-relaxed">
@@ -104,7 +170,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
                 : 'text-sm font-semibold text-sky-300 mt-1.5';
           return (
             <div key={index} className={sizeClass}>
-              {renderInlineFormattedText(block.text)}
+              {inline(block.text)}
             </div>
           );
         }
@@ -130,7 +196,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
                   <tr className="bg-slate-900/90 border-b border-slate-800 text-slate-300">
                     {block.headers.map((header, hIdx) => (
                       <th key={hIdx} className="py-2.5 px-3 font-semibold">
-                        {renderInlineFormattedText(header)}
+                        {inline(header)}
                       </th>
                     ))}
                   </tr>
@@ -140,7 +206,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
                     <tr key={rIdx} className="hover:bg-slate-900/40">
                       {row.map((cell, cIdx) => (
                         <td key={cIdx} className="py-2 px-3 text-slate-300">
-                          {renderInlineFormattedText(cell)}
+                          {inline(cell)}
                         </td>
                       ))}
                     </tr>
@@ -157,7 +223,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
               key={index}
               className="pl-3.5 py-1 border-l-2 border-sky-500/60 bg-sky-500/5 text-slate-300 italic rounded-r"
             >
-              {renderInlineFormattedText(block.text)}
+              {inline(block.text)}
             </blockquote>
           );
         }
@@ -172,7 +238,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
               } text-slate-200`}
             >
               {block.items.map((item, iIdx) => (
-                <li key={iIdx}>{renderInlineFormattedText(item)}</li>
+                <li key={iIdx}>{inline(item)}</li>
               ))}
             </ListTag>
           );
@@ -180,7 +246,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
 
         return (
           <p key={index} className="text-slate-200">
-            {renderInlineFormattedText(block.text)}
+            {inline(block.text)}
           </p>
         );
       })}

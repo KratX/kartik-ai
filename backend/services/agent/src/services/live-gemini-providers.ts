@@ -17,10 +17,26 @@ import type {
   CodingModelProvider,
   EmbeddingProvider,
   ImageGenerationProvider,
+  SearchExecutionBundle,
+  SearchImageGalleryItem,
   SearchProvider,
   SearchResultItem,
   VisionProvider,
 } from '../models/index.js';
+import {
+  buildDeterministicFollowUps,
+  cleanPublicSearchQuery,
+  collectRealSearchImages,
+  extractCleanDomain,
+  fetchMultiSourceLiveWebResults,
+  fetchWikipediaExtractResults,
+  injectGroundingSupportCitations,
+  isSafePublicHttpUrl,
+  normalizeInlineCitations,
+  parseAnswerAndFollowUps,
+  readPublicPageSnippet,
+  type GeminiGroundingSupport,
+} from './web-search-engine.js';
 import {
   buildPdfBinaryBuffer,
   formatPdfSummaryMarkdown,
@@ -43,12 +59,7 @@ import {
   validatePptPresentationSpec,
 } from '../schemas/index.js';
 
-export interface SearchImageGalleryItem {
-  readonly id: string;
-  readonly title: string;
-  readonly imageUrl: string;
-  readonly sourceUrl: string;
-}
+export type { SearchImageGalleryItem };
 
 const SchemaValueType = {
   OBJECT: 'OBJECT',
@@ -83,6 +94,8 @@ interface GeminiGenerateContentResult {
     };
     readonly groundingMetadata?: {
       readonly groundingChunks?: ReadonlyArray<GeminiGroundingChunk>;
+      readonly groundingSupports?: ReadonlyArray<GeminiGroundingSupport>;
+      readonly webSearchQueries?: readonly string[];
     };
   }>;
 }
@@ -150,195 +163,6 @@ function extractConciseGeminiError(rawBody: string): string {
     // Non-JSON error body
   }
   return trimmed.replace(/\s+/g, ' ').slice(0, 140);
-}
-
-function decodeXmlEntities(text: string): string {
-  return text
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&#(\d+);/g, (_, code) => {
-      const n = Number(code);
-      return Number.isFinite(n) ? String.fromCharCode(n) : '';
-    })
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function extractXmlTag(block: string, tag: string): string {
-  const match = block.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, 'i'));
-  return match?.[1] ? decodeXmlEntities(match[1]) : '';
-}
-
-function isTimeSensitiveQuery(query: string): boolean {
-  return /\b(latest|today|now|news|recent|current|2025|2026|2027|price|release|launch|score|winner|won|update|breaking|announced|stock|weather)\b/i.test(
-    query,
-  );
-}
-
-async function fetchGoogleNewsRssResults(
-  query: string,
-  limit: number,
-  timeoutMs: number,
-): Promise<SearchResultItem[]> {
-  const q = encodeURIComponent(query.trim());
-  const url = `https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`;
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'KartikAI/1.0 (+https://kartik.ai)' },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) {
-    return [];
-  }
-  const xml = await res.text();
-  const items: SearchResultItem[] = [];
-  for (const match of xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)) {
-    const block = match[1] ?? '';
-    const title = extractXmlTag(block, 'title');
-    const link = extractXmlTag(block, 'link');
-    const pubDate = extractXmlTag(block, 'pubDate');
-    const source = extractXmlTag(block, 'source');
-    if (!title || !link || !/^https?:\/\//i.test(link)) {
-      continue;
-    }
-    const shortDate = pubDate
-      ? pubDate.replace(/^[A-Za-z]+,\s*/, '').replace(/\s+\d{2}:\d{2}:\d{2}\s+GMT$/i, '')
-      : '';
-    const meta = [source, shortDate].filter(Boolean).join(' · ');
-    const cleanHeadline = source && title.endsWith(` - ${source}`)
-      ? title.slice(0, -(` - ${source}`).length).trim()
-      : title;
-    items.push({
-      title: title.slice(0, 140),
-      url: link,
-      snippet: meta ? `${meta}: ${cleanHeadline}` : cleanHeadline,
-    });
-    if (items.length >= limit) {
-      break;
-    }
-  }
-  return items;
-}
-
-async function fetchWikipediaExtractResults(
-  query: string,
-  limit: number,
-  timeoutMs: number,
-): Promise<SearchResultItem[]> {
-  const q = encodeURIComponent(query.trim());
-  const url = `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${q}&gsrlimit=${limit}&prop=extracts|info&exintro=1&explaintext=1&exsentences=2&inprop=url&format=json`;
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'KartikAI/1.0 (+https://kartik.ai)' },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) {
-    return [];
-  }
-  const data = (await res.json()) as {
-    query?: {
-      pages?: Record<
-        string,
-        {
-          readonly index?: number;
-          readonly title?: string;
-          readonly fullurl?: string;
-          readonly extract?: string;
-        }
-      >;
-    };
-  };
-  const pages = Object.values(data.query?.pages ?? []).sort(
-    (a, b) => (a.index ?? 999) - (b.index ?? 999),
-  );
-  const items: SearchResultItem[] = [];
-  for (const page of pages) {
-    const title = (page.title ?? '').trim();
-    const pageUrl =
-      page.fullurl && /^https?:\/\//i.test(page.fullurl)
-        ? page.fullurl
-        : title
-          ? `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`
-          : '';
-    const extract = (page.extract ?? '').replace(/\s+/g, ' ').trim();
-    if (!title || !pageUrl || !extract) {
-      continue;
-    }
-    items.push({
-      title: `${title} — Wikipedia`,
-      url: pageUrl,
-      snippet: extract.slice(0, 320),
-    });
-    if (items.length >= limit) {
-      break;
-    }
-  }
-  return items;
-}
-
-function cleanPublicSearchQuery(rawQuery: string): string {
-  const stripped = rawQuery
-    .trim()
-    .replace(
-      /^(?:please\s+)?(?:(?:do\s+a\s+)?web\s*search|search(?:\s+the\s+web|\s+online|\s+google)?|google|look\s+up|find(?:\s+info|\s+information)?)\s+(?:for\s+|about\s+|on\s+)?/i,
-      '',
-    )
-    .trim();
-  return stripped.length >= 2 ? stripped : rawQuery.trim();
-}
-
-async function fetchLivePublicWebResults(
-  query: string,
-  maxItems: number,
-): Promise<SearchResultItem[]> {
-  const cleanedQuery = cleanPublicSearchQuery(query);
-  const perSourceLimit = Math.max(2, maxItems);
-  const timeoutMs = 6_000;
-  const [newsSettled, wikiSettled] = await Promise.allSettled([
-    fetchGoogleNewsRssResults(cleanedQuery, perSourceLimit, timeoutMs),
-    fetchWikipediaExtractResults(cleanedQuery, perSourceLimit, timeoutMs),
-  ]);
-
-  const newsItems = newsSettled.status === 'fulfilled' ? newsSettled.value : [];
-  const wikiItems = wikiSettled.status === 'fulfilled' ? wikiSettled.value : [];
-
-  const merged: SearchResultItem[] = [];
-  const seenUrls = new Set<string>();
-  const pushItem = (item: SearchResultItem | undefined) => {
-    if (!item || seenUrls.has(item.url) || merged.length >= maxItems) {
-      return;
-    }
-    seenUrls.add(item.url);
-    merged.push(item);
-  };
-
-  if (isTimeSensitiveQuery(query)) {
-    // Prioritize fresh news coverage, then append top encyclopedic context
-    for (let i = 0; i < Math.max(newsItems.length, wikiItems.length); i += 1) {
-      if (i < Math.max(2, maxItems - 1)) {
-        pushItem(newsItems[i]);
-      }
-    }
-    for (const w of wikiItems) {
-      pushItem(w);
-    }
-    for (const n of newsItems) {
-      pushItem(n);
-    }
-  } else {
-    // Interleave Wikipedia authoritative extracts and current Google News articles
-    const maxLen = Math.max(wikiItems.length, newsItems.length);
-    for (let i = 0; i < maxLen; i += 1) {
-      pushItem(wikiItems[i]);
-      pushItem(newsItems[i]);
-    }
-  }
-
-  return merged;
 }
 
 function stripEnvQuotes(val: string | undefined): string {
@@ -508,7 +332,11 @@ async function createServerGeminiClient(
         const data = (await res.json()) as {
           candidates?: Array<{
             content?: { parts?: GeminiResponsePart[] };
-            groundingMetadata?: { groundingChunks?: GeminiGroundingChunk[] };
+            groundingMetadata?: {
+              groundingChunks?: GeminiGroundingChunk[];
+              groundingSupports?: GeminiGroundingSupport[];
+              webSearchQueries?: string[];
+            };
           }>;
         };
         const firstCandidate = data.candidates?.[0];
@@ -802,6 +630,10 @@ Return ONLY a valid JSON object with exact keys:
 export class LiveGeminiSearchProvider implements SearchProvider {
   public readonly providerName = 'gemini-google-search';
   private readonly apiKey?: string;
+  /**
+   * Deprecated legacy accessors retained only for backward compatibility with
+   * older tests/callers. All runtime paths use stateless `executeSearch()`.
+   */
   public lastSynthesizedAnswer: string | null = null;
   public lastSearchImages: readonly SearchImageGalleryItem[] = [];
 
@@ -809,149 +641,204 @@ export class LiveGeminiSearchProvider implements SearchProvider {
     this.apiKey = options?.apiKey;
   }
 
-  public static buildTopicImages(query: string): readonly SearchImageGalleryItem[] {
-    const clean = query.replace(/[^A-Za-z0-9 ]/g, ' ').trim() || 'Architecture';
-    const themes = [
-      { label: `${clean.slice(0, 32)} — System Overview`, bg1: '#0f172a', bg2: '#0284c7', accent: '#38bdf8' },
-      { label: `${clean.slice(0, 32)} — Data Flow Diagram`, bg1: '#1e1b4b', bg2: '#6d28d9', accent: '#a78bfa' },
-      { label: `${clean.slice(0, 32)} — Benchmark & Metrics`, bg1: '#064e3b', bg2: '#059669', accent: '#34d399' },
-      { label: `${clean.slice(0, 32)} — Production Topology`, bg1: '#31102f', bg2: '#be123c', accent: '#fb7185' },
-    ];
-
-    return themes.map((t, idx) => {
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480" viewBox="0 0 800 480">
-  <defs>
-    <linearGradient id="g${idx}" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="${t.bg1}"/>
-      <stop offset="100%" stop-color="${t.bg2}"/>
-    </linearGradient>
-  </defs>
-  <rect width="800" height="480" rx="20" fill="url(#g${idx})"/>
-  <circle cx="680" cy="110" r="140" fill="${t.accent}" fill-opacity="0.14"/>
-  <rect x="48" y="48" width="704" height="384" rx="16" fill="#090d16" fill-opacity="0.55" stroke="${t.accent}" stroke-opacity="0.4"/>
-  <text x="84" y="120" fill="${t.accent}" font-family="system-ui, sans-serif" font-size="14" font-weight="700" letter-spacing="2">KARTIK.AI VISUAL REFERENCE #${idx + 1}</text>
-  <text x="84" y="185" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="28" font-weight="800">${t.label.replace(/[<>&"']/g, '')}</text>
-  <rect x="84" y="225" width="540" height="10" rx="5" fill="${t.accent}" fill-opacity="0.45"/>
-  <rect x="84" y="255" width="420" height="10" rx="5" fill="#94a3b8" fill-opacity="0.35"/>
-  <rect x="84" y="285" width="480" height="10" rx="5" fill="#94a3b8" fill-opacity="0.25"/>
-  <text x="84" y="380" fill="#cbd5e1" font-family="monospace" font-size="13">Click to inspect in Fullscreen Lightbox • Verified Web Visual</text>
-</svg>`;
-      const dataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-      return Object.freeze({
-        id: `simg_${idx + 1}`,
-        title: t.label,
-        imageUrl: dataUrl,
-        sourceUrl: `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(clean)}`,
-      });
-    });
-  }
-
-  public async searchWeb(input: {
+  public async executeSearch(input: {
     readonly query: string;
     readonly maxResults?: number;
-  }): Promise<readonly SearchResultItem[]> {
-    this.lastSynthesizedAnswer = null;
-    this.lastSearchImages = LiveGeminiSearchProvider.buildTopicImages(input.query);
-    const maxItems = input.maxResults ?? 4;
+    readonly maxOutputTokens?: number;
+  }): Promise<SearchExecutionBundle> {
+    const maxItems = Math.max(1, Math.min(8, input.maxResults ?? 6));
+    const maxOutputTokens = Math.max(input.maxOutputTokens || 8_192, 2_048);
+    const todayIso = new Date().toISOString().slice(0, 10);
 
     const ai = await createServerGeminiClient(this.apiKey);
     const inTest = isRunningInTestRunner();
     const groundingOnCooldown = !inTest && Date.now() < groundingRateLimitedUntilMs;
 
-    // 1. Primary path: Gemini native Google Search grounding
+    // 1. Primary path: Gemini native Google Search grounding (`gemini-3.1-flash-lite`)
     if (ai && !groundingOnCooldown) {
       try {
+        const groundingSystemInstruction = [
+          `You are Kartik.ai Web Research Specialist. Today's UTC date is ${todayIso}.`,
+          'Answer the user directly using verified live Google Search results in clean, scannable Markdown (use concise headings, bullet points, or a comparison table when helpful).',
+          'Never paste a raw bibliography or list of bare URLs at the end—citations are rendered separately as interactive source cards.',
+          'At the very end of your response, add a section titled exactly `FOLLOW_UP_QUESTIONS:` containing 3 concise, high-value follow-up search questions as `- ` bullet lines.',
+        ].join(' ');
+
         const response = await ai.generateContent({
           model: DEFAULT_TEXT_MODEL,
           contents: input.query,
           config: {
+            systemInstruction: groundingSystemInstruction,
+            maxOutputTokens,
             tools: [{ googleSearch: {} }],
           },
         });
 
-        this.lastSynthesizedAnswer = (response.text ?? '').trim() || null;
-        const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
-        const items: SearchResultItem[] = [];
+        const rawText = (response.text ?? '').trim();
+        const groundingMeta = response.candidates?.[0]?.groundingMetadata;
+        const chunks = groundingMeta?.groundingChunks ?? [];
+        const supports = groundingMeta?.groundingSupports ?? [];
+        const webSearchQueries = groundingMeta?.webSearchQueries ?? [];
 
-        for (const chunk of chunks) {
-          const web = chunk.web;
-          if (web?.uri && web?.title) {
-            items.push({
-              title: web.title,
-              url: web.uri,
-              snippet: this.lastSynthesizedAnswer
-                ? this.lastSynthesizedAnswer.slice(0, 260)
-                : `Verified web source for ${input.query}`,
-            });
+        const items: SearchResultItem[] = [];
+        const seenUrls = new Set<string>();
+        for (let idx = 0; idx < chunks.length; idx += 1) {
+          const web = chunks[idx]?.web;
+          if (!web?.uri || !isSafePublicHttpUrl(web.uri) || seenUrls.has(web.uri)) {
+            continue;
           }
+          seenUrls.add(web.uri);
+          const supportText = supports
+            .find((s) => s.groundingChunkIndices?.includes(idx))
+            ?.segment?.text?.trim();
+          const title = (web.title ?? '').trim() || extractCleanDomain(web.uri);
+          items.push({
+            title: title.slice(0, 140),
+            url: web.uri,
+            domain: extractCleanDomain(web.uri, title),
+            snippet:
+              supportText && supportText.length > 20
+                ? supportText.slice(0, 320)
+                : `Verified Google Search source covering ${cleanPublicSearchQuery(input.query).slice(0, 90)}.`,
+            sourceType: 'web',
+          });
           if (items.length >= maxItems) {
             break;
           }
         }
 
-        if (items.length > 0) {
-          return Object.freeze(items);
-        }
+        if (items.length > 0 || rawText.length > 0) {
+          const finalItems: SearchResultItem[] =
+            items.length > 0
+              ? [...items]
+              : [
+                  {
+                    title: `${cleanPublicSearchQuery(input.query).slice(0, 64)} — Live Search Summary`,
+                    url: `https://www.google.com/search?q=${encodeURIComponent(input.query.trim())}`,
+                    domain: 'google.com',
+                    snippet: rawText.slice(0, 280),
+                    sourceType: 'web',
+                  },
+                ];
 
-        // If Gemini returned a grounded text answer without explicit chunks, still preserve it
-        if (this.lastSynthesizedAnswer) {
-          const q = encodeURIComponent(input.query.trim());
-          return Object.freeze([
-            {
-              title: `${input.query.slice(0, 60)} — Live Google Search Summary`,
-              url: `https://www.google.com/search?q=${q}`,
-              snippet: this.lastSynthesizedAnswer.slice(0, 260),
-            },
-          ]);
+          // Outside strict unit-test runners, enrich with genuine Wikimedia/OG thumbnails & page excerpts
+          let enrichedImages: readonly SearchImageGalleryItem[] = [];
+          if (!inTest) {
+            const [wikiThumbsSettled, pageReadSettled] = await Promise.allSettled([
+              fetchWikipediaExtractResults(cleanPublicSearchQuery(input.query), 3, 2_200),
+              Promise.allSettled(
+                finalItems.slice(0, 2).map((it) => readPublicPageSnippet(it.url, 2_200)),
+              ),
+            ]);
+
+            if (pageReadSettled.status === 'fulfilled') {
+              pageReadSettled.value.forEach((res, idx) => {
+                if (res.status === 'fulfilled' && res.value && finalItems[idx]) {
+                  finalItems[idx] = {
+                    ...finalItems[idx]!,
+                    snippet:
+                      res.value.excerpt && res.value.excerpt.length > finalItems[idx]!.snippet.length
+                        ? res.value.excerpt
+                        : finalItems[idx]!.snippet,
+                    imageUrl: finalItems[idx]!.imageUrl ?? res.value.imageUrl,
+                  };
+                }
+              });
+            }
+
+            const wikiItems =
+              wikiThumbsSettled.status === 'fulfilled' ? wikiThumbsSettled.value : [];
+            enrichedImages = collectRealSearchImages([...finalItems, ...wikiItems], 4);
+          }
+
+          const { answer: parsedAnswer, followUpQueries } = parseAnswerAndFollowUps(
+            rawText,
+            input.query,
+            finalItems,
+          );
+          const citedAnswer = injectGroundingSupportCitations(
+            parsedAnswer,
+            supports,
+            finalItems.length,
+          );
+
+          return Object.freeze({
+            results: Object.freeze(finalItems),
+            synthesizedAnswer: citedAnswer || null,
+            searchImages: enrichedImages,
+            followUpQueries,
+            searchQueries: webSearchQueries,
+          });
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('HTTP 429') && !inTest) {
           groundingRateLimitedUntilMs = Date.now() + GROUNDING_429_COOLDOWN_MS;
           console.warn(
-            '[kartik-search] Gemini Google Search grounding hit HTTP 429 — switching to live public web retrieval + Gemini synthesis for 2m.',
+            '[kartik-search] Gemini Google Search grounding hit HTTP 429 — switching to hybrid multi-source live web reader + Gemini synthesis for 2m.',
           );
         }
       }
     }
 
-    // 2. Real Live Public Web Retrieval fallback (Google News RSS + Wikipedia API, zero API key).
+    // 2. Hybrid Multi-Source Live Web Reader (Google News RSS + Wikipedia + DuckDuckGo + HN + SSRF-safe page reader)
     // Preserves offline determinism in unit tests when GEMINI_API_KEY is unset.
     if (ai || !inTest) {
       try {
-        const liveItems = await fetchLivePublicWebResults(input.query, maxItems);
+        const liveItems = await fetchMultiSourceLiveWebResults(input.query, maxItems, {
+          readTopPages: !inTest || process.env.ENABLE_PAGE_READER_IN_TEST === 'true',
+        });
         if (liveItems.length > 0) {
+          const searchImages = collectRealSearchImages(liveItems, 4);
           const sourceContext = liveItems
-            .map((item, idx) => `[src_${idx + 1}] ${item.title} (${item.url}): ${item.snippet}`)
-            .join('\n');
+            .map((item, idx) => {
+              const meta = [item.domain, item.publishedAt].filter(Boolean).join(' · ');
+              return `[${idx + 1}] ${item.title}${meta ? ` (${meta})` : ''}\nURL: ${item.url}\nExcerpt: ${item.snippet}`;
+            })
+            .join('\n\n');
 
-          // 2a. Synthesize using plain Gemini generateContent (WITHOUT googleSearch tool, avoiding grounding 429 quota)
+          // 2a. Synthesize via plain Gemini `gemini-3.1-flash-lite` (no googleSearch tool -> avoids grounding quota)
           if (ai) {
             try {
               const synthRes = await ai.generateContent({
                 model: DEFAULT_TEXT_MODEL,
-                contents: `User query: "${input.query}"\n\nLive retrieved web sources:\n${sourceContext}\n\nWrite a clear, accurate, concise Markdown answer grounded strictly in these sources. Cite sources inline as [src_1], [src_2], etc.`,
+                contents: `Today's UTC date is ${todayIso}.\nUser query: "${input.query}"\n\nRetrieved live web sources:\n${sourceContext}\n\nWrite a clear, accurate, well-structured Markdown answer grounded strictly in these sources. Cite sources inline using [1], [2], etc. Do NOT append a raw URL list at the end.\n\nEnd with:\nFOLLOW_UP_QUESTIONS:\n- <follow-up 1>\n- <follow-up 2>\n- <follow-up 3>`,
                 config: {
                   systemInstruction:
-                    'You are Kartik.ai Web Search Synthesis Agent. Answer directly and accurately using the provided live web sources and cite [src_N] inline. Never invent URLs or facts outside the sources.',
+                    'You are Kartik.ai Web Search Synthesis Agent. Answer directly and accurately using ONLY the provided live web excerpts and cite [1], [2] inline. Never invent URLs, dates, or facts outside the sources.',
+                  maxOutputTokens,
                 },
               });
-              const synthText = (synthRes.text ?? '').trim();
-              if (synthText.length > 0) {
-                this.lastSynthesizedAnswer = synthText;
-                return Object.freeze(liveItems);
+              const synthRaw = (synthRes.text ?? '').trim();
+              if (synthRaw.length > 0) {
+                const { answer, followUpQueries } = parseAnswerAndFollowUps(
+                  synthRaw,
+                  input.query,
+                  liveItems,
+                );
+                const normalizedAnswer = normalizeInlineCitations(answer, liveItems.length);
+                return Object.freeze({
+                  results: Object.freeze(liveItems),
+                  synthesizedAnswer: normalizedAnswer,
+                  searchImages,
+                  followUpQueries,
+                });
               }
             } catch {
-              // Plain Gemini text generation was also rate-limited; build factual briefing from live sources below
+              // Plain Gemini text generation was also rate-limited; build factual briefing below
             }
           }
 
           // 2b. Direct factual briefing from the live retrieved web snippets (never generic boilerplate)
           const bulletSummary = liveItems
-            .map((item, idx) => `- **[src_${idx + 1}] ${item.title}**: ${item.snippet}`)
+            .map((item, idx) => `- **${item.title}** [${idx + 1}]: ${item.snippet}`)
             .join('\n');
-          this.lastSynthesizedAnswer = `Live web results retrieved for **"${input.query.trim()}"**:\n\n${bulletSummary}`;
-          return Object.freeze(liveItems);
+          return Object.freeze({
+            results: Object.freeze(liveItems),
+            synthesizedAnswer: `Live web results retrieved for **"${input.query.trim()}"**:\n\n${bulletSummary}`,
+            searchImages,
+            followUpQueries: buildDeterministicFollowUps(input.query, liveItems),
+          });
         }
       } catch {
         // Network completely unreachable — fall through to offline reference fallback
@@ -959,23 +846,46 @@ export class LiveGeminiSearchProvider implements SearchProvider {
     }
 
     const q = encodeURIComponent(input.query.trim());
-    return Object.freeze([
+    const offlineResults: SearchResultItem[] = [
       {
         title: `${input.query.slice(0, 60)} — Technical Documentation & Reference`,
         url: `https://developer.mozilla.org/en-US/search?q=${q}`,
+        domain: 'developer.mozilla.org',
         snippet: `Comprehensive specification, architectural patterns, and real-world benchmarks for ${input.query}.`,
+        sourceType: 'technical',
       },
       {
-        title: `${input.query.slice(0, 60)} — Architecture & Engineering Guide`,
+        title: `${input.query.slice(0, 60)} — Encyclopedia & Overview`,
         url: `https://en.wikipedia.org/wiki/Special:Search?search=${q}`,
-        snippet: `Foundational principles, historical evolution, and production trade-offs covering ${input.query}.`,
+        domain: 'en.wikipedia.org',
+        snippet: `Foundational principles, historical evolution, and background context covering ${input.query}.`,
+        sourceType: 'encyclopedia',
       },
       {
-        title: `${input.query.slice(0, 60)} — Cloud-Native Implementation Practices`,
+        title: `${input.query.slice(0, 60)} — Open-Source Reference Implementations`,
         url: `https://github.com/search?q=${q}`,
+        domain: 'github.com',
         snippet: `Open-source reference implementations, benchmarks, and deployment patterns for ${input.query}.`,
+        sourceType: 'technical',
       },
-    ]);
+    ];
+
+    return Object.freeze({
+      results: Object.freeze(offlineResults),
+      synthesizedAnswer: null,
+      searchImages: Object.freeze([]),
+      followUpQueries: buildDeterministicFollowUps(input.query, offlineResults),
+    });
+  }
+
+  public async searchWeb(input: {
+    readonly query: string;
+    readonly maxResults?: number;
+  }): Promise<readonly SearchResultItem[]> {
+    const bundle = await this.executeSearch(input);
+    this.lastSynthesizedAnswer = bundle.synthesizedAnswer;
+    this.lastSearchImages = bundle.searchImages;
+    return bundle.results;
   }
 }
 

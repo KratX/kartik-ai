@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   buildArtifactRawDownloadUrl,
   parsePptArtifactSlideDeck,
+  tokenizeInlineMarkdown,
   tokenizeMarkdownBlocks,
 } from '../src/index.js';
 
@@ -68,5 +69,21 @@ describe('@kartik/frontend SlideDeckPreview & MarkdownRenderer Tokenizers (9.4.a
       buildArtifactRawDownloadUrl('art_ppt_12345'),
       '/api/v1/artifacts/art_ppt_12345/raw',
     );
+  });
+
+  it('Fix #14: tokenizes inline citation markers ([1], [src_2], [1, 3]) and http(s) links while blocking javascript: URLs', () => {
+    const tokens = tokenizeInlineMarkdown(
+      'PostgreSQL **MVCC** uses `snapshots` [1] and [src_2] plus [1, 3]. See [Docs](https://www.postgresql.org/) or [Bad](javascript:alert(1)).',
+    );
+
+    const citationIndices = tokens
+      .filter((t) => t.type === 'citation')
+      .map((t) => t.index);
+    assert.deepEqual(citationIndices, [1, 2, 1, 3]);
+
+    const links = tokens.filter((t) => t.type === 'link');
+    assert.equal(links.length, 1);
+    assert.equal(links[0]?.label, 'Docs');
+    assert.equal(links[0]?.url, 'https://www.postgresql.org/');
   });
 });

@@ -8,13 +8,17 @@ import {
   AgentSlidingWindowRateLimiter,
   buildPdfBinaryBuffer,
   classifyCodingIntent,
+  collectRealSearchImages,
   DailyLiveBudgetGuard,
+  extractHtmlPageMetadata,
   extractTextPagesFromPdfBytes,
   FileIngestionAndArtifactService,
+  injectGroundingSupportCitations,
   InMemoryAgentRateLimitStore,
   InMemoryAgentRepository,
   InMemoryDailyBudgetStore,
   InMemoryVectorStore,
+  isSafePublicHttpUrl,
   LiveGeminiChatModelProvider,
   LiveGeminiCodingModelProvider,
   LiveGeminiEmbeddingProvider,
@@ -25,6 +29,8 @@ import {
   LiveGeminiVisionProvider,
   loadAgentConfig,
   MOCK_PNG_BYTES,
+  normalizeInlineCitations,
+  parseAnswerAndFollowUps,
 } from '../src/index.js';
 
 const { publicKey } = crypto.generateKeyPairSync('ed25519');
@@ -252,8 +258,8 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
       maxResults: 3,
     });
     assert.ok(results.length >= 1);
-    assert.equal(searchProvider.lastSearchImages.length, 4);
-    assert.ok(searchProvider.lastSearchImages[0]?.imageUrl.startsWith('data:image/svg+xml;utf8,'));
+    // Fix #14: never synthesize fake placeholder SVG images when no real thumbnails exist
+    assert.equal(searchProvider.lastSearchImages.length, 0);
 
     const visionProvider = new LiveGeminiVisionProvider();
     const visionOut = await visionProvider.analyzeImage({
@@ -374,8 +380,11 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
       preferredAgent: 'search',
     });
     assert.equal(searchRes.agent, 'search');
-    assert.ok(searchRes.replyContent.includes('row version snapshots [src_1]'));
+    assert.ok(searchRes.replyContent.includes('row version snapshots [1]'));
+    assert.ok(!searchRes.replyContent.includes('### Cited Source Material'));
     assert.ok(!searchRes.replyContent.includes('Synthesized from 1 cited source(s)'));
+    assert.equal(searchRes.citations?.[0]?.domain, 'postgresql.org');
+    assert.equal(searchRes.followUpQueries?.length, 3);
 
     // 2. RAG synthesizes an LLM answer grounded in ingested PDF chunks
     const ingestion = new FileIngestionAndArtifactService({
@@ -842,7 +851,7 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
       assert.equal(resultsA.length, 2);
       assert.equal(resultsA[0]?.url, 'https://news.google.com/rss/articles/node-annual-lts');
       assert.equal(resultsA[1]?.url, 'https://en.wikipedia.org/wiki/Node.js');
-      assert.ok(provider.lastSynthesizedAnswer?.includes('[src_1]'));
+      assert.ok(provider.lastSynthesizedAnswer?.includes('[1]'));
       assert.ok(provider.lastSynthesizedAnswer?.includes('annual major release'));
       assert.ok(!attemptedGeminiModels.includes('gemini-2.5-flash'));
 
@@ -856,6 +865,249 @@ describe('Phase 9.2.a — Live Gemini Providers, Real PDF Binary Loader, Coding 
       assert.ok(provider.lastSynthesizedAnswer?.includes('Node.js Moves to Annual Major Releases'));
       assert.ok(provider.lastSynthesizedAnswer?.includes('Node.js — Wikipedia'));
       assert.ok(!provider.lastSynthesizedAnswer?.includes('Ingress & Gateway'));
+    } finally {
+      globalThis.fetch = prevFetch;
+      if (prevGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = prevGeminiKey;
+    }
+  });
+
+  it('Fix #14: enforces SSRF URL guard, extracts HTML/og:image metadata, injects groundingSupports citations, parses follow-ups, and keeps concurrent searches stateless', async () => {
+    // 1. SSRF URL guard blocks private/loopback/metadata/non-HTTP URLs
+    assert.equal(isSafePublicHttpUrl('https://www.postgresql.org/docs/current/mvcc.html'), true);
+    assert.equal(isSafePublicHttpUrl('http://localhost:3000/secret'), false);
+    assert.equal(isSafePublicHttpUrl('http://127.0.0.1:8080/admin'), false);
+    assert.equal(isSafePublicHttpUrl('http://169.254.169.254/latest/meta-data/'), false);
+    assert.equal(isSafePublicHttpUrl('http://10.0.0.1/internal'), false);
+    assert.equal(isSafePublicHttpUrl('http://192.168.1.5/router'), false);
+    assert.equal(isSafePublicHttpUrl('http://[::1]/loopback'), false);
+    assert.equal(isSafePublicHttpUrl('file:///etc/passwd'), false);
+    assert.equal(isSafePublicHttpUrl('javascript:alert(1)'), false);
+
+    // 2. HTML page metadata & og:image extraction (rejects SVG images)
+    const htmlWithPhoto = `<!doctype html><html><head>
+      <title>PostgreSQL 18 Benchmarks</title>
+      <meta property="og:image" content="https://cdn.example.com/pg18-chart.png" />
+      <meta name="description" content="Asynchronous I/O accelerates sequential scans by up to 2.4x." />
+    </head><body><main><p>PostgreSQL 18 introduces native asynchronous I/O for read-heavy OLAP and transactional workloads.</p></main></body></html>`;
+    const metaPhoto = extractHtmlPageMetadata(htmlWithPhoto, 'https://example.com/pg18');
+    assert.equal(metaPhoto.imageUrl, 'https://cdn.example.com/pg18-chart.png');
+    assert.ok(metaPhoto.excerpt?.includes('Asynchronous I/O'));
+
+    const htmlWithSvg = `<html><head><meta property="og:image" content="https://cdn.example.com/logo.svg" /></head><body></body></html>`;
+    const metaSvg = extractHtmlPageMetadata(htmlWithSvg, 'https://example.com/svg');
+    assert.equal(metaSvg.imageUrl, undefined);
+
+    // 3. Inline citation normalization, groundingSupports injection, and follow-up parsing
+    assert.equal(
+      normalizeInlineCitations('MVCC uses snapshots [src_1] and vacuuming [src_2].', 2),
+      'MVCC uses snapshots [1] and vacuuming [2].',
+    );
+    const injected = injectGroundingSupportCitations(
+      'PostgreSQL uses MVCC. Raft uses leader election.',
+      [
+        { segment: { endIndex: 21 }, groundingChunkIndices: [0] },
+        { segment: { endIndex: 48 }, groundingChunkIndices: [1] },
+      ],
+      2,
+    );
+    assert.equal(injected, 'PostgreSQL uses MVCC.[1] Raft uses leader election.[2]');
+
+    const parsedFollowUps = parseAnswerAndFollowUps(
+      [
+        'PostgreSQL MVCC lets readers and writers run concurrently [1].',
+        '',
+        'FOLLOW_UP_QUESTIONS:',
+        '- How does PostgreSQL autovacuum prevent transaction ID wraparound?',
+        '- How does MVCC compare with InnoDB undo logs?',
+        '- What isolation levels does PostgreSQL support?',
+      ].join('\n'),
+      'PostgreSQL MVCC',
+      [],
+    );
+    assert.ok(!parsedFollowUps.answer.includes('FOLLOW_UP_QUESTIONS'));
+    assert.equal(parsedFollowUps.followUpQueries.length, 3);
+    assert.ok(parsedFollowUps.followUpQueries[0]?.includes('autovacuum'));
+
+    // 4. Real image collector keeps only genuine https thumbnails, zero fake SVGs
+    const realImages = collectRealSearchImages([
+      {
+        title: 'PostgreSQL',
+        url: 'https://en.wikipedia.org/wiki/PostgreSQL',
+        snippet: 'Relational DB',
+        imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/pg.png',
+      },
+      {
+        title: 'Fake SVG',
+        url: 'https://example.com',
+        snippet: 'Bad',
+        imageUrl: 'data:image/svg+xml;utf8,<svg></svg>',
+      },
+    ]);
+    assert.equal(realImages.length, 1);
+    assert.equal(realImages[0]?.imageUrl, 'https://upload.wikimedia.org/wikipedia/commons/pg.png');
+
+    // 5. Stateless concurrent executeSearch() calls must never leak answers, images, or follow-ups across requests
+    const prevFetch = globalThis.fetch;
+    const prevGeminiKey = process.env.GEMINI_API_KEY;
+    try {
+      process.env.GEMINI_API_KEY = 'AIzaSyRealLookingUnitTestKey987654321';
+
+      globalThis.fetch = (async (inputUrl, init) => {
+        const urlStr = String(inputUrl);
+        if (urlStr.startsWith('https://generativelanguage.googleapis.com/')) {
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            tools?: Array<{ googleSearch?: Record<string, unknown> }>;
+            contents?: Array<{ parts?: Array<{ text?: string }> }>;
+          };
+          const promptText = body.contents?.[0]?.parts?.[0]?.text ?? '';
+          const isGrounding = Boolean(body.tools?.some((t) => Boolean(t.googleSearch)));
+
+          // Force Path B multi-source web reader on Query A (PostgreSQL) and Path A grounding on Query B (Tokyo)
+          if (promptText.includes('PostgreSQL') && isGrounding) {
+            return new Response(JSON.stringify({ error: { code: 429 } }), { status: 429 });
+          }
+
+          if (promptText.includes('Tokyo')) {
+            await new Promise((r) => setTimeout(r, 15));
+            return new Response(
+              JSON.stringify({
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        {
+                          text: [
+                            'Tokyo currently experiences mild autumn temperatures.',
+                            '',
+                            'FOLLOW_UP_QUESTIONS:',
+                            '- What is the 7-day forecast for Tokyo?',
+                            '- When is peak autumn foliage in Tokyo?',
+                            '- What are the best indoor spots in Tokyo for rain?',
+                          ].join('\n'),
+                        },
+                      ],
+                    },
+                    groundingMetadata: {
+                      groundingChunks: [
+                        {
+                          web: {
+                            title: 'Japan Meteorological Agency',
+                            uri: 'https://www.jma.go.jp/jma/indexe.html',
+                          },
+                        },
+                      ],
+                      groundingSupports: [
+                        {
+                          segment: { endIndex: 53 },
+                          groundingChunkIndices: [0],
+                        },
+                      ],
+                    },
+                  },
+                ],
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } },
+            );
+          }
+
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text: [
+                          'PostgreSQL MVCC keeps tuple versions for snapshot isolation [1], backed by active community benchmarks [2].',
+                          '',
+                          'FOLLOW_UP_QUESTIONS:',
+                          '- How does HOT update reduce index bloat in PostgreSQL?',
+                          '- How does PostgreSQL 18 AIO improve scan throughput?',
+                          '- How do you tune autovacuum for write-heavy tables?',
+                        ].join('\n'),
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        if (urlStr.startsWith('https://en.wikipedia.org/w/api.php')) {
+          return new Response(
+            JSON.stringify({
+              query: {
+                pages: {
+                  '23824': {
+                    index: 1,
+                    title: 'PostgreSQL',
+                    fullurl: 'https://en.wikipedia.org/wiki/PostgreSQL',
+                    extract: 'PostgreSQL is a free and open-source relational database system using MVCC.',
+                    thumbnail: {
+                      source: 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/29/Postgresql_elephant.png',
+                    },
+                  },
+                },
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        if (urlStr.startsWith('https://hn.algolia.com/api/v1/search')) {
+          return new Response(
+            JSON.stringify({
+              hits: [
+                {
+                  title: 'PostgreSQL 18 Asynchronous I/O Benchmarks',
+                  url: 'https://www.postgresql.org/docs/18/release-18.html',
+                  objectID: '999001',
+                  points: 412,
+                  num_comments: 120,
+                  created_at: '2026-10-15T12:00:00Z',
+                },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        return new Response('Not Found', { status: 404 });
+      }) as typeof fetch;
+
+      const sharedProvider = new LiveGeminiSearchProvider();
+      const [pgBundle, tokyoBundle] = await Promise.all([
+        sharedProvider.executeSearch({
+          query: 'PostgreSQL MVCC benchmarks',
+          maxResults: 4,
+        }),
+        sharedProvider.executeSearch({
+          query: 'What is the weather in Tokyo?',
+          maxResults: 4,
+        }),
+      ]);
+
+      // Zero cross-request contamination
+      assert.ok(pgBundle.synthesizedAnswer?.includes('PostgreSQL MVCC'));
+      assert.ok(!pgBundle.synthesizedAnswer?.includes('Tokyo'));
+      assert.equal(pgBundle.searchImages.length, 1);
+      assert.equal(
+        pgBundle.searchImages[0]?.imageUrl,
+        'https://upload.wikimedia.org/wikipedia/commons/thumb/2/29/Postgresql_elephant.png',
+      );
+      assert.ok(pgBundle.results.some((r) => r.sourceType === 'technical'));
+      assert.equal(pgBundle.followUpQueries.length, 3);
+      assert.ok(pgBundle.followUpQueries[0]?.includes('HOT update'));
+
+      assert.ok(tokyoBundle.synthesizedAnswer?.includes('Tokyo currently experiences'));
+      assert.ok(tokyoBundle.synthesizedAnswer?.includes('[1]'));
+      assert.ok(!tokyoBundle.synthesizedAnswer?.includes('PostgreSQL'));
+      assert.equal(tokyoBundle.searchImages.length, 0);
+      assert.equal(tokyoBundle.followUpQueries.length, 3);
+      assert.ok(tokyoBundle.followUpQueries[0]?.includes('7-day forecast'));
     } finally {
       globalThis.fetch = prevFetch;
       if (prevGeminiKey === undefined) delete process.env.GEMINI_API_KEY;

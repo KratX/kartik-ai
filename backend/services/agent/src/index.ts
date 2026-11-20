@@ -18,6 +18,7 @@ export {
   type ChatModelProvider,
   type CodingModelProvider,
   type SearchResultItem,
+  type SearchExecutionBundle,
   type SearchProvider,
   type EmbeddingProvider,
   type ImageGenerationProvider,
@@ -166,6 +167,23 @@ export {
   LiveGeminiImageGenerationProvider,
   type SearchImageGalleryItem,
 } from './services/live-gemini-providers.js';
+
+export {
+  buildDeterministicFollowUps,
+  cleanPublicSearchQuery,
+  collectRealSearchImages,
+  extractCleanDomain,
+  extractHtmlPageMetadata,
+  fetchMultiSourceLiveWebResults,
+  injectGroundingSupportCitations,
+  isSafePublicHttpUrl,
+  isTechnicalQuery,
+  isTimeSensitiveQuery,
+  normalizeInlineCitations,
+  parseAnswerAndFollowUps,
+  readPublicPageSnippet,
+  type GeminiGroundingSupport,
+} from './services/web-search-engine.js';
 
 export {
   buildAgentBootstrapEnv,

@@ -47,8 +47,8 @@ const QUICK_LAUNCH_PROMPTS: ReadonlyArray<{
   },
   {
     agent: 'search',
-    label: 'Web Search + Visual Gallery',
-    subtitle: 'Cited sources + 4-image Lightbox',
+    label: 'Live Web Search & Citations',
+    subtitle: 'Hybrid live search, inline citations & follow-ups',
     prompt: 'Search the web for PostgreSQL MVCC concurrency control benchmarks and cite sources',
     icon: <Globe className="w-4 h-4 text-amber-400" />,
   },
@@ -143,6 +143,7 @@ export function ChatArea({
             messages={messages}
             isLoading={isLoading}
             activeAgent={activeAgent}
+            onFollowUpSearch={(query) => onQuickPromptSelect?.(query, 'search')}
             onOpenCodeArtifact={onOpenCodeArtifact}
             onOpenLightboxImage={(img) => setLightboxImage(img)}
           />
@@ -191,6 +192,7 @@ export function ChatArea({
               <img
                 src={lightboxImage.imageUrl}
                 alt={lightboxImage.title}
+                referrerPolicy="no-referrer"
                 className="max-h-[70vh] w-auto rounded-lg border border-slate-800"
               />
             </div>

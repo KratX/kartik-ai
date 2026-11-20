@@ -17,6 +17,119 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-14',
+    title: 'Fix #14 — Web Search Agent Overhaul (Hybrid Retrieval, Inline Citations, Rich Source Cards, Real Visuals & Follow-Ups)',
+    subtitle:
+      '19 files · Hybrid Gemini googleSearch grounding + multi-source web reader (Google News RSS, Wikipedia extracts/pageimages, DuckDuckGo, Hacker News Algolia + SSRF-safe page reader), stateless SearchExecutionBundle concurrency fix, zero fake SVG placeholders (real thumbnails only, auto-hidden if none), clickable [1] inline citation badges, rich numbered source cards, one-click follow-up queries, and unified live-query Auto-Router',
+    zipFilename: 'fix-14-web-search-hybrid-citations-and-followups.zip',
+    zipHref: '/__downloads/fix-14-web-search-hybrid-citations-and-followups.zip',
+    commitMessage: `feat(search,agent,frontend): overhaul Web Search agent with hybrid retrieval, clickable inline citations, rich source cards, real visuals & follow-ups
+
+- Add backend/services/agent/src/services/web-search-engine.ts with SSRF-safe URL guard (isSafePublicHttpUrl), Google News RSS, Wikipedia intro extracts + pageimages thumbnails, DuckDuckGo Instant Answer, Hacker News Algolia tech retrieval, HTML og:image/excerpt reader, groundingSupports inline citation injection, and follow-up query parser
+- Refactor LiveGeminiSearchProvider into stateless executeSearch() returning SearchExecutionBundle (answer, enriched citations, real-only thumbnails, followUpQueries) to eliminate concurrent request cross-bleed and remove fake SVG placeholder cards
+- Inject current UTC date into Web Search system instructions on gemini-3.1-flash-lite (maxOutputTokens: 8192) and remove duplicate raw "### Cited Source Material" text block from Web Search Markdown replies
+- Unify expanded live-query auto-routing (isLiveWebSearchPrompt) in backend/shared/contracts/index.ts across @kartik/agent and @kartik/chat
+- Upgrade frontend MarkdownRenderer, MessageBubble, MessageList, and ChatArea with clickable superscript [1] citation badges (scroll & highlight source card), rich 2-column numbered source cards (domain, date, 2-line snippet), real-only pruned thumbnails (hidden when empty), and 3 clickable Related follow-ups buttons
+- Add Fix #14 unit & concurrency regression tests across backend/services/agent/tests and frontend/tests`,
+    changedFiles: [
+      {
+        path: 'backend/shared/contracts/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/shared/contracts/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/models/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/models/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/services/web-search-engine.ts',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/services/web-search-engine.ts',
+      },
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'backend/services/agent/src/graph/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/graph/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/eval/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/eval/index.ts',
+      },
+      {
+        path: 'backend/services/chat/src/services/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/chat/src/services/index.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'frontend/src/types/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/types/index.ts',
+      },
+      {
+        path: 'frontend/src/components/slide-deck-and-markdown.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/slide-deck-and-markdown.ts',
+      },
+      {
+        path: 'frontend/src/components/chat/MarkdownRenderer.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MarkdownRenderer.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageBubble.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageBubble.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageList.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageList.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/ChatArea.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ChatArea.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+      {
+        path: 'backend/services/agent/tests/live-providers-and-limits.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/tests/live-providers-and-limits.test.ts',
+      },
+      {
+        path: 'backend/services/agent/tests/agent-graph.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/tests/agent-graph.test.ts',
+      },
+      {
+        path: 'frontend/tests/slide-deck-and-markdown.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/tests/slide-deck-and-markdown.test.ts',
+      },
+    ],
+  },
+  {
     id: 'fix-13',
     title: 'Fix #13 — Security Hardening (/__downloads, Redis TLS, Firebase Config), Docker/Compose Fixes & Fix #9 GitHub Sync',
     subtitle:

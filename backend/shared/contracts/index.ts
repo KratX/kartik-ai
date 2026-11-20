@@ -169,18 +169,64 @@ export interface AgentExecuteRequest {
   readonly attachmentFileIds?: readonly string[];
 }
 
+export interface AgentCitation {
+  readonly sourceId: string;
+  readonly title: string;
+  readonly urlOrPage: string;
+  readonly domain?: string;
+  readonly snippet?: string;
+  readonly publishedAt?: string;
+  readonly sourceType?: 'web' | 'news' | 'encyclopedia' | 'technical' | 'document';
+}
+
+export interface SearchImageGalleryItem {
+  readonly id: string;
+  readonly title: string;
+  readonly imageUrl: string;
+  readonly sourceUrl: string;
+  readonly domain?: string;
+}
+
 export interface AgentExecuteResponse {
   readonly executionId: string;
   readonly requestId: string;
   readonly agent: SpecialistAgentName;
   readonly replyContent: string;
-  readonly citations?: readonly {
-    readonly sourceId: string;
-    readonly title: string;
-    readonly urlOrPage: string;
-  }[];
+  readonly citations?: readonly AgentCitation[];
+  readonly searchImages?: readonly SearchImageGalleryItem[];
+  readonly followUpQueries?: readonly string[];
   readonly artifactIds?: readonly string[];
   readonly usage: AgentUsageMetrics;
+}
+
+/**
+ * Shared deterministic detector for live / real-time / verifiable web-search queries.
+ * Used by both `@kartik/chat` (`resolveTargetSpecialist`) and `@kartik/agent`
+ * (`routePromptToSpecialist`) so pre-execution credit reservation and graph routing stay aligned.
+ */
+export function isLiveWebSearchPrompt(prompt: string): boolean {
+  const lower = prompt.trim().toLowerCase();
+  if (!lower) {
+    return false;
+  }
+  return (
+    /\b(search the web|web search|look up online|cite sources|latest news|breaking news|recent news|news about|news on)\b/.test(
+      lower,
+    ) ||
+    /\b(current price|stock price|share price|market cap|exchange rate|bitcoin price|crypto price|weather in|forecast for)\b/.test(
+      lower,
+    ) ||
+    /\b(who won|match score|final score|standings|release date|when does .+ come out|what happened (?:today|yesterday|this week|recently))\b/.test(
+      lower,
+    ) ||
+    /\b(latest|newest|current|recent|today(?:'s)?|this week(?:'s)?)\s+(version|release|update|benchmark|benchmarks|model|report|stats|status|ceo|president|prime minister|election|laws|regulations)\b/.test(
+      lower,
+    ) ||
+    /\b(2025|2026|2027)\b/.test(lower) &&
+      /\b(latest|new|release|benchmark|news|price|update|announced|launch|winner|report|compare|vs)\b/.test(
+        lower,
+      )
+  );
 }
 
 /**

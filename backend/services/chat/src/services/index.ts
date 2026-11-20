@@ -4,6 +4,7 @@ import {
   REDIS_TTL_SECONDS,
   RedisKeys,
   computePayloadFingerprint,
+  isLiveWebSearchPrompt,
   validateIdempotencyKey,
   type AgentExecuteRequest,
   type AgentExecuteResponse,
@@ -98,19 +99,18 @@ export function resolveTargetSpecialist(input: {
     return 'pdf';
   }
   if (
+    lower.includes('build an app') ||
     lower.includes('write code') ||
-    lower.includes('typescript') ||
     lower.includes('react component') ||
     lower.includes('implement ')
   ) {
     return 'coding';
   }
-  if (
-    lower.includes('search the web') ||
-    lower.includes('latest news') ||
-    lower.includes('current price')
-  ) {
+  if (isLiveWebSearchPrompt(input.prompt)) {
     return 'search';
+  }
+  if (lower.includes('typescript')) {
+    return 'coding';
   }
   return 'chat';
 }

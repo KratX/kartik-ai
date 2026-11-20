@@ -212,14 +212,14 @@ export class SpecialistEvaluationRunner {
           groundingValid = false;
           failureReasons.push(`Expected non-empty citations for "${response.agent}" specialist`);
         } else if (response.agent === 'search') {
-          const hasSections =
-            response.replyContent.includes('### Cited Source Material') &&
-            response.replyContent.includes('### Synthesis');
+          const hasCleanSynthesis =
+            response.replyContent.trim().length > 16 &&
+            !response.replyContent.includes('### Cited Source Material');
           const allUrlsValid = citations.every((c) => /^https?:\/\//i.test(c.urlOrPage));
-          if (!hasSections || !allUrlsValid) {
+          if (!hasCleanSynthesis || !allUrlsValid) {
             groundingValid = false;
             failureReasons.push(
-              'Search specialist must separate Cited Source Material from Synthesis and include valid http(s) URLs',
+              'Search specialist must return clean synthesized prose with valid http(s) structured citations',
             );
           }
         } else if (response.agent === 'rag') {
