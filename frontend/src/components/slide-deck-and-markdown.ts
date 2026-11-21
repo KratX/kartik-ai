@@ -751,7 +751,7 @@ export const AGENT_SELECTOR_PILLS: readonly AgentSelectorPillSpec[] = Object.fre
     id: 'image',
     label: 'Image Gen',
     creditCostLabel: '10 cr',
-    placeholder: 'Describe the visual artwork or architecture diagram to generate...',
+    placeholder: 'Describe the artwork, logo, diagram, or aspect ratio (16:9, 9:16, 4:3) to generate...',
   },
 ]);
 
@@ -1170,4 +1170,96 @@ export function formatImageFileBadge(mimeType: string, sizeBytes: number): strin
           : 'IMAGE';
   const kb = Math.max(1, Math.round(Math.max(0, sizeBytes) / 1024));
   return `${format} · ${kb} KB`;
+}
+
+export interface ParsedImageArtifactSpec {
+  readonly originalPrompt: string;
+  readonly enhancedPrompt: string;
+  readonly styleLabel: string;
+  readonly aspectRatio: string;
+  readonly width: number | null;
+  readonly height: number | null;
+  readonly resolutionLabel: string | null;
+  readonly model: string;
+  readonly isEdit: boolean;
+  readonly referenceFilename?: string;
+}
+
+/**
+ * Parses the `image-spec.json` manifest entry attached to a `generated_image` artifact
+ * into a clean Studio view-model (resolution, aspect ratio, style label, art-directed prompt).
+ */
+export function parseImageArtifactSpec(
+  rawSpecJson: string | undefined,
+  fallbackTitle: string,
+): ParsedImageArtifactSpec | null {
+  if (!rawSpecJson || !rawSpecJson.trim()) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(rawSpecJson) as {
+      originalPrompt?: unknown;
+      enhancedPrompt?: unknown;
+      styleLabel?: unknown;
+      style?: unknown;
+      aspectRatio?: unknown;
+      width?: unknown;
+      height?: unknown;
+      model?: unknown;
+      isEdit?: unknown;
+      referenceFilename?: unknown;
+    };
+    const originalPrompt =
+      typeof parsed.originalPrompt === 'string' && parsed.originalPrompt.trim()
+        ? parsed.originalPrompt.trim()
+        : fallbackTitle;
+    const enhancedPrompt =
+      typeof parsed.enhancedPrompt === 'string' && parsed.enhancedPrompt.trim()
+        ? parsed.enhancedPrompt.trim()
+        : originalPrompt;
+    const styleLabel =
+      typeof parsed.styleLabel === 'string' && parsed.styleLabel.trim()
+        ? parsed.styleLabel.trim()
+        : typeof parsed.style === 'string' && parsed.style.trim()
+          ? parsed.style.trim()
+          : 'Visual Artwork';
+    const aspectRatio =
+      typeof parsed.aspectRatio === 'string' && parsed.aspectRatio.trim()
+        ? parsed.aspectRatio.trim()
+        : '1:1';
+    const width =
+      typeof parsed.width === 'number' && Number.isFinite(parsed.width) && parsed.width > 0
+        ? Math.trunc(parsed.width)
+        : null;
+    const height =
+      typeof parsed.height === 'number' && Number.isFinite(parsed.height) && parsed.height > 0
+        ? Math.trunc(parsed.height)
+        : null;
+    const resolutionLabel =
+      width && height && (width > 1 || height > 1) ? `${width}×${height}` : null;
+    const model =
+      typeof parsed.model === 'string' && parsed.model.trim()
+        ? parsed.model.trim()
+        : 'gemini-3.1-flash-lite-image';
+    const isEdit = Boolean(parsed.isEdit);
+    const referenceFilename =
+      typeof parsed.referenceFilename === 'string' && parsed.referenceFilename.trim()
+        ? parsed.referenceFilename.trim()
+        : undefined;
+
+    return Object.freeze({
+      originalPrompt,
+      enhancedPrompt,
+      styleLabel,
+      aspectRatio,
+      width,
+      height,
+      resolutionLabel,
+      model,
+      isEdit,
+      ...(referenceFilename ? { referenceFilename } : {}),
+    });
+  } catch {
+    return null;
+  }
 }

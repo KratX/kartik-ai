@@ -62,8 +62,8 @@ const QUICK_LAUNCH_PROMPTS: ReadonlyArray<{
   {
     agent: 'image',
     label: 'Generate Enhanced Artwork',
-    subtitle: 'Prompt enhancement + PNG download',
-    prompt: 'Create an image of a futuristic quantum data center with neon fiber optics',
+    subtitle: '6 styles, auto aspect ratio & Lightbox studio',
+    prompt: 'Create a 16:9 widescreen futuristic quantum data center with glowing glass server racks and volumetric lighting',
     icon: <ImageIcon className="w-4 h-4 text-purple-400" />,
   },
 ];

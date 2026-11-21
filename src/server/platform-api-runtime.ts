@@ -741,7 +741,7 @@ export class KartikPlatformRuntime {
           '| **PPT Generator (`ppt`)** | Keynote-grade 16:9 **OpenXML `.pptx`** compiler: 6 deck themes, 5 visual slide layouts (KPIs, 2-column, process flow, spotlight, bullets), embedded speaker notes & interactive Stage/Grid Studio | `8 credits` · `5 req/min` |',
           '| **PDF RAG (`rag`)** | Hybrid dense + BM25/lexical reranking over uploaded `.pdf` files with prompt-injection defense, clickable `[1]` citations, interactive Document Evidence cards & follow-up research | `2 credits` · `5 req/min` |',
           '| **Vision OCR (`vision`)** | Multi-mode multimodal OCR, table/receipt extraction, diagram & UI/code inspection with real inline image thumbnails, fullscreen Lightbox & multi-turn image follow-ups | `3 credits` · `5 req/min` |',
-          '| **Image Gen (`image`)** | Prompt-enhanced high-resolution visual artwork & architecture illustration generation | `10 credits` · `5 req/min` |',
+          '| **Image Gen (`image`)** | 6-style art-directed visual studio with automatic aspect-ratio detection (`1:1`, `16:9`, `9:16`, `4:3`, `3:4`), image-to-image restyling, fullscreen Lightbox, prompt inspector & refinement chips | `10 credits` · `5 req/min` |',
         ].join('\n'),
         citations: [],
         createdAt: nowIso,

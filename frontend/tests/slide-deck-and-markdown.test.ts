@@ -6,6 +6,7 @@ import {
   buildUploadedFileRawUrl,
   formatCitationRelevancePercent,
   formatImageFileBadge,
+  parseImageArtifactSpec,
   parsePdfArtifactDocument,
   parsePptArtifactSlideDeck,
   pdfDocumentSpecToMarkdown,
@@ -318,5 +319,60 @@ describe('@kartik/frontend SlideDeckPreview & MarkdownRenderer Tokenizers (9.4.a
     assert.ok(visionPill);
     assert.equal(visionPill.label, 'Vision OCR');
     assert.ok(visionPill.placeholder.includes('OCR'));
+  });
+
+  it('Fix #20: parses image-spec.json manifests into Image Studio view-models and validates Image Gen selector pill', () => {
+    const parsed = parseImageArtifactSpec(
+      JSON.stringify({
+        originalPrompt: 'Quantum data center in 16:9',
+        enhancedPrompt:
+          'Quantum data center in 16:9. Cinematic high-craft concept art, dramatic volumetric lighting.',
+        style: 'cinematic_artwork',
+        styleLabel: 'Cinematic Concept Art',
+        aspectRatio: '16:9',
+        width: 1344,
+        height: 768,
+        model: 'gemini-3.1-flash-lite-image',
+        isEdit: false,
+      }),
+      'Fallback Artwork',
+    );
+
+    assert.ok(parsed);
+    assert.equal(parsed.styleLabel, 'Cinematic Concept Art');
+    assert.equal(parsed.aspectRatio, '16:9');
+    assert.equal(parsed.resolutionLabel, '1344×768');
+    assert.equal(parsed.model, 'gemini-3.1-flash-lite-image');
+    assert.equal(parsed.isEdit, false);
+
+    // 1x1 mock placeholder hides resolutionLabel instead of displaying noisy "1x1"
+    const mockSpec = parseImageArtifactSpec(
+      JSON.stringify({
+        originalPrompt: 'Logo',
+        enhancedPrompt: 'Logo enhanced',
+        style: 'logo_icon',
+        styleLabel: 'Minimalist Brand Mark',
+        aspectRatio: '1:1',
+        width: 1,
+        height: 1,
+        model: 'mock-image-fallback',
+        isEdit: true,
+        referenceFilename: 'sketch.png',
+      }),
+      'Fallback Logo',
+    );
+    assert.ok(mockSpec);
+    assert.equal(mockSpec.resolutionLabel, null);
+    assert.equal(mockSpec.isEdit, true);
+    assert.equal(mockSpec.referenceFilename, 'sketch.png');
+
+    // Malformed or missing spec JSON safely returns null
+    assert.equal(parseImageArtifactSpec(undefined, 'Fallback'), null);
+    assert.equal(parseImageArtifactSpec('{broken-json', 'Fallback'), null);
+
+    const imagePill = AGENT_SELECTOR_PILLS.find((p) => p.id === 'image');
+    assert.ok(imagePill);
+    assert.equal(imagePill.label, 'Image Gen');
+    assert.ok(imagePill.placeholder.includes('16:9'));
   });
 });

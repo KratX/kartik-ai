@@ -53,7 +53,16 @@ import {
   buildVisionFollowUps,
   buildVisionSystemInstruction,
   classifyVisionIntent,
+  parseImageDimensions,
 } from '../agents/vision/index.js';
+import {
+  buildEnhancedImagePrompt,
+  buildImageFollowUps,
+  buildImageSpecManifestPayload,
+  classifyImageStyle,
+  detectImageAspectRatio,
+  type ImageStyleArchetype,
+} from '../agents/image/index.js';
 import type { DailyLiveBudgetGuard } from '../services/budget-guard.js';
 import type { AgentSlidingWindowRateLimiter } from '../services/agent-rate-limiter.js';
 import {
@@ -105,7 +114,11 @@ export function routePromptToSpecialist(input: {
   }
 
   const lower = input.prompt.toLowerCase();
-  if (/\b(generate an image|draw|illustration|create an image|render a picture)\b/.test(lower)) {
+  if (
+    /\b(generate an? image|generate image|draw|illustration|create an? image|create image|make an? image|render a picture|render an? illustration|generate artwork|design a logo|generate a poster|concept art of|photorealistic image)\b/.test(
+      lower,
+    )
+  ) {
     return 'image';
   }
   if (/\b(create a ppt|generate a ppt|presentation|slide deck|powerpoint|slides on)\b/.test(lower)) {
@@ -894,9 +907,50 @@ export class AgentGraphExecutor {
     }
 
     // specialist === 'image'
+    const imageStyle = classifyImageStyle(trimmedPrompt);
+    const aspectRatio = detectImageAspectRatio(trimmedPrompt);
+    const referenceFile = attachedFiles.find((f) => f.mimeType.startsWith('image/'));
+    let referenceImage:
+      | {
+          readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+          readonly data: Uint8Array;
+          readonly filename?: string;
+        }
+      | undefined;
+
+    if (referenceFile && this.deps.loadImageBytes) {
+      const refBytes = await this.deps.loadImageBytes(
+        referenceFile.storageKey,
+        request.userId,
+      );
+      referenceImage = {
+        mimeType: referenceFile.mimeType as 'image/png' | 'image/jpeg' | 'image/webp',
+        data: refBytes,
+        filename: referenceFile.originalFilename,
+      };
+    }
+
+    const enhancedPrompt = buildEnhancedImagePrompt({
+      prompt: trimmedPrompt,
+      style: imageStyle,
+      aspectRatio,
+      isEdit: Boolean(referenceImage),
+    });
+
     const imageGen = await this.deps.imageProvider.generateImage({
       prompt: trimmedPrompt,
+      enhancedPrompt,
+      aspectRatio,
+      style: imageStyle,
+      referenceImage,
     });
+    const finalStyle =
+      (imageGen.style as ImageStyleArchetype | undefined) ?? imageStyle;
+    const finalAspectRatio = imageGen.aspectRatio ?? aspectRatio;
+    const finalEnhancedPrompt = imageGen.enhancedPrompt ?? enhancedPrompt;
+    const finalModel = imageGen.modelUsed ?? 'gemini-3.1-flash-lite-image';
+    const parsedDims = parseImageDimensions(imageGen.mimeType, imageGen.data);
+
     const imageExt =
       imageGen.mimeType === 'image/jpeg'
         ? '.jpg'
@@ -921,6 +975,24 @@ export class AgentGraphExecutor {
       sha256: imageSha256,
     });
 
+    const imageSpecPayload = buildImageSpecManifestPayload({
+      originalPrompt: trimmedPrompt,
+      enhancedPrompt: finalEnhancedPrompt,
+      style: finalStyle,
+      aspectRatio: finalAspectRatio,
+      width: parsedDims?.width ?? null,
+      height: parsedDims?.height ?? null,
+      model: finalModel,
+      isEdit: Boolean(referenceImage),
+      ...(referenceImage?.filename ? { referenceFilename: referenceImage.filename } : {}),
+      liveGenerated: imageGen.liveGenerated ?? budgetDecision.allowLive,
+    });
+    const imageSpecJson = JSON.stringify(imageSpecPayload);
+    const imageSpecSha = crypto
+      .createHash('sha256')
+      .update(imageSpecJson, 'utf8')
+      .digest('hex');
+
     const imageArtifact: ArtifactRecord = Object.freeze({
       artifactId,
       userId: request.userId,
@@ -932,7 +1004,15 @@ export class AgentGraphExecutor {
       storageKey,
       mimeType: imageGen.mimeType,
       sizeBytes: imageGen.data.byteLength,
-      filesManifest: Object.freeze([]),
+      filesManifest: Object.freeze([
+        {
+          path: 'image-spec.json',
+          mimeType: 'application/json',
+          sizeBytes: Buffer.byteLength(imageSpecJson, 'utf8'),
+          sha256: imageSpecSha,
+          content: imageSpecJson,
+        },
+      ]),
       createdAt: new Date().toISOString(),
     });
 
@@ -944,12 +1024,17 @@ export class AgentGraphExecutor {
       agent: 'image',
       replyContent: `${fallbackNotice}${imageGen.caption}`,
       artifactIds: [artifactId],
+      followUpQueries: buildImageFollowUps(
+        trimmedPrompt,
+        finalStyle,
+        finalAspectRatio,
+      ),
       usage: {
         promptTokens,
         completionTokens: 64,
         totalTokens: promptTokens + 64,
         provider: this.deps.imageProvider.providerName,
-        model: 'gemini-3.1-flash-lite-image',
+        model: finalModel,
         durationMs: Math.max(1, Date.now() - startMs),
         mock: !budgetDecision.allowLive,
       },

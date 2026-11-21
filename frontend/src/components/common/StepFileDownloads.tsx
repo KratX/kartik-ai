@@ -17,6 +17,87 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-20',
+    title: 'Fix #20 — Image Gen Studio & Art-Direction Overhaul (6 Style Archetypes, Auto Aspect-Ratio Control, Multimodal Image-to-Image Restyling, Studio Card, Prompt Inspector & Lightbox)',
+    subtitle:
+      '13 files · Overhauls Image Gen end-to-end: dedicated pure art-direction module (6 visual archetypes: Editorial Photography, Technical Architecture, Product & UI Render, Editorial Illustration, Minimalist Brand Mark, Cinematic Concept Art; automatic 1:1 / 16:9 / 9:16 / 4:3 / 3:4 aspect-ratio extraction; deterministic prompt enrichment; image-spec.json manifest & 3 clickable visual refinement follow-ups), Gemini imageConfig.aspectRatio + multimodal image-to-image reference editing when an image is attached with preferredAgent: "image", binary dimension parsing for generated output, expanded Auto-Router visual triggers, new modular ImageArtifactCard Studio UI (clickable full-bleed canvas opening Escape-dismissible Lightbox, metadata bar, collapsible art-directed Prompt inspector drawer, safe Copy Prompt & direct binary Download), plus backend & frontend unit tests',
+    zipFilename: 'fix-20-image-gen-art-direction-studio-and-lightbox.zip',
+    zipHref: '/__downloads/fix-20-image-gen-art-direction-studio-and-lightbox.zip',
+    commitMessage: `feat(image,agent,server,frontend): overhaul Image Gen with 6-style art direction, aspect ratio control, image-to-image editing & Studio Lightbox UI
+
+- Add backend/services/agent/src/agents/image/index.ts with 6 visual style archetypes, automatic aspect ratio detection (1:1, 16:9, 9:16, 4:3, 3:4), deterministic art-directed prompt enhancement, image-spec.json manifest builder, and 3 contextual visual refinement follow-ups
+- Upgrade LiveGeminiImageGenerationProvider and AgentGraphExecutor to pass imageConfig.aspectRatio, support multimodal image-to-image restyling via attached referenceImage, parse exact output pixel dimensions, persist image-spec.json in artifact filesManifest, expand Auto-Router triggers, and return 3 followUpQueries
+- Add frontend/src/components/chat/ImageArtifactCard.tsx with clickable full-bleed Studio preview opening the fullscreen Lightbox, format/resolution/aspect/style metadata bar, collapsible art-directed Prompt inspector drawer, clipboard-safe Copy Prompt, and direct binary Download
+- Update MessageBubble.tsx, ChatArea.tsx, slide-deck-and-markdown.ts, and platform-api-runtime.ts for the upgraded Image Gen experience and add Fix #20 backend & frontend unit tests`,
+    changedFiles: [
+      {
+        path: 'backend/services/agent/src/agents/image/index.ts',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/agents/image/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/models/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/models/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'backend/services/agent/src/graph/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/graph/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/index.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'frontend/src/components/slide-deck-and-markdown.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/slide-deck-and-markdown.ts',
+      },
+      {
+        path: 'frontend/src/components/chat/ImageArtifactCard.tsx',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ImageArtifactCard.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageBubble.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageBubble.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/ChatArea.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ChatArea.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+      {
+        path: 'backend/services/agent/tests/image-gen-engine.test.ts',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=backend/services/agent/tests/image-gen-engine.test.ts',
+      },
+      {
+        path: 'frontend/tests/slide-deck-and-markdown.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/tests/slide-deck-and-markdown.test.ts',
+      },
+    ],
+  },
+  {
     id: 'fix-19',
     title: 'Fix #19 — Vision OCR & Multimodal Image Inspector Overhaul (5-Mode Grounded Prompting, PNG/JPEG/WebP Dimension Parser, Ownership-Scoped Raw Image Streaming, Inline Previews, Lightbox & Multi-Turn Follow-Ups)',
     subtitle:

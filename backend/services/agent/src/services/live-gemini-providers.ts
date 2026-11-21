@@ -66,6 +66,15 @@ import {
   formatOfflineVisionFallback,
   parseImageDimensions,
 } from '../agents/vision/index.js';
+import {
+  buildEnhancedImagePrompt,
+  buildOfflineStudioPreviewPng,
+  classifyImageStyle,
+  detectImageAspectRatio,
+  formatImageCaption,
+  type ImageAspectRatio,
+  type ImageStyleArchetype,
+} from '../agents/image/index.js';
 import { computeDeterministicEmbedding } from './mock-providers.js';
 import {
   stripMarkdownJsonFences,
@@ -1324,20 +1333,68 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
 
   public async generateImage(input: {
     readonly prompt: string;
+    readonly enhancedPrompt?: string;
+    readonly aspectRatio?: ImageAspectRatio;
+    readonly style?: string;
+    readonly referenceImage?: {
+      readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+      readonly data: Uint8Array;
+      readonly filename?: string;
+    };
   }): Promise<{
     readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
     readonly data: Uint8Array;
     readonly caption: string;
+    readonly enhancedPrompt: string;
+    readonly aspectRatio: ImageAspectRatio;
+    readonly style: ImageStyleArchetype;
+    readonly modelUsed: string;
+    readonly liveGenerated: boolean;
   }> {
-    const enhancedPrompt = input.prompt.trim();
+    const rawPrompt = input.prompt.trim();
+    const style = (input.style as ImageStyleArchetype | undefined) ?? classifyImageStyle(rawPrompt);
+    const aspectRatio: ImageAspectRatio = input.aspectRatio ?? detectImageAspectRatio(rawPrompt);
+    const isEdit = Boolean(input.referenceImage);
+    const enhancedPrompt =
+      input.enhancedPrompt?.trim() ||
+      buildEnhancedImagePrompt({
+        prompt: rawPrompt,
+        style,
+        aspectRatio,
+        isEdit,
+      });
+
+    const caption = formatImageCaption({
+      originalPrompt: rawPrompt,
+      enhancedPrompt,
+      style,
+      aspectRatio,
+      isEdit,
+      referenceFilename: input.referenceImage?.filename,
+    });
+
     const ai = await createServerGeminiClient(this.apiKey);
 
-    // Direct image generation via cheapest Gemini lite image model (skips extra prompt-enhancement LLM roundtrip)
+    // Direct multimodal image generation / editing via Gemini lite image model
     if (ai) {
       const imageModels = uniqueNonEmpty([
         process.env.GEMINI_IMAGE_MODEL,
         ...DEFAULT_IMAGE_MODELS,
       ]);
+      const userParts: Array<
+        | { readonly text: string }
+        | { readonly inlineData: { readonly mimeType: string; readonly data: string } }
+      > = [];
+      if (input.referenceImage) {
+        userParts.push({
+          inlineData: {
+            mimeType: input.referenceImage.mimeType,
+            data: Buffer.from(input.referenceImage.data).toString('base64'),
+          },
+        });
+      }
+      userParts.push({ text: enhancedPrompt });
+
       for (const imageModel of imageModels) {
         try {
           const imgRes = await ai.generateContent({
@@ -1346,13 +1403,13 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
             contents: [
               {
                 role: 'user',
-                parts: [{ text: enhancedPrompt }],
+                parts: userParts,
               },
             ],
             config: {
               responseModalities: ['IMAGE', 'TEXT'],
               imageConfig: {
-                aspectRatio: '1:1',
+                aspectRatio,
               },
             },
             timeoutMs: resolveProviderTimeoutMs(60_000),
@@ -1375,7 +1432,12 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
                 return {
                   mimeType,
                   data: bytes,
-                  caption: `### Generated Visual Artwork\n**Enhanced Prompt:** *${enhancedPrompt}*`,
+                  caption,
+                  enhancedPrompt,
+                  aspectRatio,
+                  style,
+                  modelUsed: imageModel,
+                  liveGenerated: true,
                 };
               }
             }
@@ -1385,8 +1447,8 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
         }
       }
 
-      // 3. Secondary real image generation: Google Imagen 3 :predict endpoint
-      if (ai.predictImagen) {
+      // Secondary real image generation: Google Imagen 3 :predict endpoint (text-to-image)
+      if (!isEdit && ai.predictImagen) {
         try {
           const imagen = await ai.predictImagen({
             model: 'imagen-3.0-generate-002',
@@ -1397,7 +1459,12 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
             return {
               mimeType: imagen.mimeType,
               data: imagen.data,
-              caption: `### Generated Visual Artwork\n**Enhanced Prompt:** *${enhancedPrompt}*`,
+              caption,
+              enhancedPrompt,
+              aspectRatio,
+              style,
+              modelUsed: 'imagen-3.0-generate-002',
+              liveGenerated: true,
             };
           }
         } catch {
@@ -1406,23 +1473,22 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
       }
     }
 
-    // 4. Offline/test deterministic PNG fallback when GEMINI_API_KEY is not configured
-    const pngBytes = new Uint8Array([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-      0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-      0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
-      0x54, 0x78, 0x9c, 0x63, 0x60, 0xf8, 0xcf, 0xc0,
-      0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xdd,
-      0x8d, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
-      0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-    ]);
+    // Offline/demo aspect-ratio-matched raster PNG fallback when GEMINI_API_KEY is not configured
+    const pngBytes = buildOfflineStudioPreviewPng({
+      style,
+      aspectRatio,
+      prompt: rawPrompt,
+    });
 
     return {
       mimeType: 'image/png',
       data: pngBytes,
-      caption: `### Generated Visual Artwork\n**Enhanced Prompt:** *${enhancedPrompt}*`,
+      caption,
+      enhancedPrompt,
+      aspectRatio,
+      style,
+      modelUsed: 'studio-offline-preview',
+      liveGenerated: false,
     };
   }
 }

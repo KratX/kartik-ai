@@ -141,10 +141,23 @@ export interface ImageGenerationProvider {
   readonly providerName: string;
   generateImage(input: {
     readonly prompt: string;
+    readonly enhancedPrompt?: string;
+    readonly aspectRatio?: '1:1' | '16:9' | '9:16' | '4:3' | '3:4';
+    readonly style?: string;
+    readonly referenceImage?: {
+      readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+      readonly data: Uint8Array;
+      readonly filename?: string;
+    };
   }): Promise<{
     readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
     readonly data: Uint8Array;
     readonly caption: string;
+    readonly enhancedPrompt?: string;
+    readonly aspectRatio?: '1:1' | '16:9' | '9:16' | '4:3' | '3:4';
+    readonly style?: string;
+    readonly modelUsed?: string;
+    readonly liveGenerated?: boolean;
   }>;
 }
 

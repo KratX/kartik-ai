@@ -7,7 +7,6 @@ import {
   ChevronUp,
   Code2,
   Copy,
-  Download,
   ExternalLink,
   FileText,
   Image as ImageIcon,
@@ -30,6 +29,7 @@ import type {
   SearchImageGalleryItem,
 } from '../../types/index.js';
 import { MarkdownRenderer } from './MarkdownRenderer.js';
+import { ImageArtifactCard } from './ImageArtifactCard.js';
 import { PdfDocumentPreview } from './PdfDocumentPreview.js';
 import { SlideDeckPreview } from './SlideDeckPreview.js';
 
@@ -162,7 +162,10 @@ export function MessageBubble({
     const quoteBody = citation.snippet?.trim()
       ? `"${citation.snippet.trim()}" — ${citation.title} (${citation.urlOrPage})`
       : `${citation.title} (${citation.urlOrPage})`;
-    void navigator.clipboard?.writeText(quoteBody);
+    const clip = navigator.clipboard?.writeText(quoteBody);
+    if (clip && typeof clip.catch === 'function') {
+      clip.catch(() => {});
+    }
     setCopiedCitationIdx(citationIndex);
     if (copyTimerRef.current) {
       clearTimeout(copyTimerRef.current);
@@ -173,7 +176,10 @@ export function MessageBubble({
   };
 
   const handleCopyVisionAnalysis = () => {
-    void navigator.clipboard?.writeText(message.content);
+    const clip = navigator.clipboard?.writeText(message.content);
+    if (clip && typeof clip.catch === 'function') {
+      clip.catch(() => {});
+    }
     setCopiedVisionReply(true);
     if (visionCopyTimerRef.current) {
       clearTimeout(visionCopyTimerRef.current);
@@ -365,7 +371,17 @@ export function MessageBubble({
 
         {/* Markdown Message Content with Clickable Inline Citation Badges */}
         <MarkdownRenderer
-          content={message.content}
+          content={
+            !isUser &&
+            message.agentUsed === 'image' &&
+            message.artifacts?.some(
+              (a) =>
+                a.artifactType === 'generated_image' &&
+                a.filesManifest?.some((f) => f.path === 'image-spec.json'),
+            )
+              ? message.content.replace(/\n*\*\*Enhanced Prompt:\*\*[\s\S]*$/i, '').trim()
+              : message.content
+          }
           citations={citations}
           onCitationClick={handleCitationClick}
         />
@@ -610,31 +626,6 @@ export function MessageBubble({
           </div>
         )}
 
-        {/* Clickable Related Follow-Up Queries */}
-        {!isUser && followUpQueries.length > 0 && (
-          <div className="mt-4 pt-3 border-t border-slate-800/80">
-            <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-              Related follow-ups
-            </div>
-            <div className="space-y-1.5">
-              {followUpQueries.map((query, qIdx) => (
-                <button
-                  key={`${qIdx}-${query}`}
-                  type="button"
-                  disabled={isLoading || !onFollowUpSearch}
-                  onClick={() =>
-                    onFollowUpSearch?.(query, message.agentUsed ?? 'search')
-                  }
-                  className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-slate-900/65 hover:bg-slate-800/80 border border-slate-800 hover:border-sky-500/45 text-left text-xs text-slate-200 hover:text-sky-200 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed group"
-                >
-                  <span className="line-clamp-1">{query}</span>
-                  <ArrowUpRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-sky-400 shrink-0 transition-colors" />
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Hydrated Artifacts (Code Bundle, PDF 1.4, PPTX Deck, Generated Image) */}
         {message.artifacts && message.artifacts.length > 0 && (
           <div className="mt-4 space-y-3">
@@ -683,66 +674,40 @@ export function MessageBubble({
               }
 
               // generated_image
-              const imageExt =
-                art.mimeType === 'image/jpeg'
-                  ? '.jpg'
-                  : art.mimeType === 'image/webp'
-                    ? '.webp'
-                    : '.png';
-              const imageFormatLabel =
-                art.mimeType === 'image/jpeg'
-                  ? 'JPEG'
-                  : art.mimeType === 'image/webp'
-                    ? 'WEBP'
-                    : 'PNG';
-              const inlineImageUrl = `${rawDownloadUrl}?inline=1`;
-              const safeImageFilename =
-                art.title
-                  .replace(/[^A-Za-z0-9._-]+/g, '-')
-                  .replace(/^-+|-+$/g, '')
-                  .toLowerCase()
-                  .slice(0, 48) || 'kartik-generated-image';
-
               return (
-                <div
+                <ImageArtifactCard
                   key={art.artifactId}
-                  className="overflow-hidden rounded-xl bg-slate-900/90 border border-purple-500/30"
-                >
-                  <div className="bg-slate-950/90 border-b border-purple-500/20 flex items-center justify-center p-2">
-                    <img
-                      src={inlineImageUrl}
-                      alt={art.title}
-                      loading="lazy"
-                      className="max-h-[420px] w-auto max-w-full rounded-lg object-contain shadow-lg"
-                    />
-                  </div>
-                  <div className="flex flex-wrap items-center justify-between gap-3 p-3.5">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-lg bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
-                        <ImageIcon className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-semibold text-slate-100 truncate">
-                          {art.title}
-                        </div>
-                        <div className="text-[11px] font-mono text-slate-400">
-                          {imageFormatLabel} Artwork · {Math.max(1, Math.round(art.sizeBytes / 1024))} KB
-                        </div>
-                      </div>
-                    </div>
-
-                    <a
-                      href={rawDownloadUrl}
-                      download={`${safeImageFilename}${imageExt}`}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-purple-500 hover:bg-purple-400 text-white rounded-lg transition-colors shrink-0"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Download {imageExt.toUpperCase()}
-                    </a>
-                  </div>
-                </div>
+                  artifact={art}
+                  onOpenLightboxImage={onOpenLightboxImage}
+                />
               );
             })}
+          </div>
+        )}
+
+        {/* Clickable Related Follow-Up Queries */}
+        {!isUser && followUpQueries.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-slate-800/80">
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+              Related follow-ups
+            </div>
+            <div className="space-y-1.5">
+              {followUpQueries.map((query, qIdx) => (
+                <button
+                  key={`${qIdx}-${query}`}
+                  type="button"
+                  data-follow-up-chip="true"
+                  disabled={isLoading || !onFollowUpSearch}
+                  onClick={() =>
+                    onFollowUpSearch?.(query, message.agentUsed ?? 'search')
+                  }
+                  className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-slate-900/65 hover:bg-slate-800/80 border border-slate-800 hover:border-sky-500/45 text-left text-xs text-slate-200 hover:text-sky-200 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed group"
+                >
+                  <span className="line-clamp-1">{query}</span>
+                  <ArrowUpRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-sky-400 shrink-0 transition-colors" />
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>

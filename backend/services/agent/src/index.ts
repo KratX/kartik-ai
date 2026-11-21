@@ -100,6 +100,22 @@ export {
 } from './agents/vision/index.js';
 
 export {
+  IMAGE_ASPECT_RATIOS,
+  IMAGE_STYLE_ARCHETYPES,
+  buildEnhancedImagePrompt,
+  buildImageFollowUps,
+  buildImageSpecManifestPayload,
+  buildOfflineStudioPreviewPng,
+  classifyImageStyle,
+  detectImageAspectRatio,
+  formatImageCaption,
+  getImageStyleDisplayLabel,
+  type ImageArtifactSpecPayload,
+  type ImageAspectRatio,
+  type ImageStyleArchetype,
+} from './agents/image/index.js';
+
+export {
   readSingleHeader,
   requireAgentUserContext,
   requireAgentServiceAuth,
