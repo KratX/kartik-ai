@@ -50,6 +50,7 @@ export {
 
 export {
   AgentGraphExecutor,
+  resolveSpecialistRoutingDecision,
   routePromptToSpecialist,
   type AgentMetadataStore,
   type AgentGraphDependencies,
@@ -114,6 +115,23 @@ export {
   type ImageAspectRatio,
   type ImageStyleArchetype,
 } from './agents/image/index.js';
+
+export {
+  CHAT_REASONING_MODES,
+  CHAT_RESPONSE_DEPTHS,
+  buildChatFollowUps,
+  buildChatSystemInstruction,
+  buildMultiTurnGeminiContents,
+  buildOfflineChatReply,
+  classifyChatMode,
+  formatThreadContextBlock,
+  getChatModeDisplayLabel,
+  normalizeChatResponseDepth,
+  parseChatReplyAndFollowUps,
+  sanitizeConversationHistory,
+  type ChatReasoningMode,
+  type GeminiConversationContent,
+} from './agents/chat/index.js';
 
 export {
   readSingleHeader,

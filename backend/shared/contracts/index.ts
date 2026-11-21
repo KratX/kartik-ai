@@ -158,6 +158,36 @@ export interface AgentUsageMetrics {
   readonly mock: boolean;
 }
 
+export type ChatResponseDepth = 'concise' | 'balanced' | 'deep';
+
+export interface ConversationHistoryTurn {
+  readonly role: 'user' | 'assistant';
+  readonly content: string;
+  readonly agentUsed?: SpecialistAgentName;
+}
+
+export interface ThreadContextFile {
+  readonly filename: string;
+  readonly mimeType: string;
+  readonly pageCount?: number | null;
+}
+
+export interface ThreadContextArtifact {
+  readonly title: string;
+  readonly artifactType: string;
+}
+
+export interface ConversationThreadContext {
+  readonly files?: readonly ThreadContextFile[];
+  readonly artifacts?: readonly ThreadContextArtifact[];
+}
+
+export interface SpecialistRoutingDecision {
+  readonly agent: SpecialistAgentName;
+  readonly routedFromChat: boolean;
+  readonly reason?: string;
+}
+
 export interface AgentExecuteRequest {
   readonly requestId: string;
   readonly traceId: string;
@@ -167,6 +197,9 @@ export interface AgentExecuteRequest {
   readonly prompt: string;
   readonly preferredAgent?: SpecialistAgentName;
   readonly attachmentFileIds?: readonly string[];
+  readonly responseDepth?: ChatResponseDepth;
+  readonly conversationHistory?: readonly ConversationHistoryTurn[];
+  readonly threadContext?: ConversationThreadContext;
 }
 
 export interface AgentCitation {
@@ -197,6 +230,10 @@ export interface AgentExecuteResponse {
   readonly searchImages?: readonly SearchImageGalleryItem[];
   readonly followUpQueries?: readonly string[];
   readonly artifactIds?: readonly string[];
+  readonly routedFromChat?: boolean;
+  readonly routingReason?: string;
+  readonly chatMode?: string;
+  readonly responseDepth?: ChatResponseDepth;
   readonly usage: AgentUsageMetrics;
 }
 
@@ -223,11 +260,123 @@ export function isLiveWebSearchPrompt(prompt: string): boolean {
     /\b(latest|newest|current|recent|today(?:'s)?|this week(?:'s)?)\s+(version|release|update|benchmark|benchmarks|model|report|stats|status|ceo|president|prime minister|election|laws|regulations)\b/.test(
       lower,
     ) ||
-    /\b(2025|2026|2027)\b/.test(lower) &&
+    (/\b(2025|2026|2027)\b/.test(lower) &&
       /\b(latest|new|release|benchmark|news|price|update|announced|launch|winner|report|compare|vs)\b/.test(
         lower,
-      )
+      ))
   );
+}
+
+/**
+ * Fix #21: Single canonical Smart Hybrid Router shared by `@kartik/chat` (`resolveTargetSpecialist`)
+ * and `@kartik/agent` (`routePromptToSpecialist`).
+ *
+ * Keeps conceptual technical/programming Q&A inside Chat (`1 credit`) while transparently delegating
+ * explicit builds, documents, decks, visual generation, live web lookups, and file attachments to the
+ * matching specialist with a crisp human-readable routing reason.
+ */
+export function classifySpecialistRoute(input: {
+  readonly prompt: string;
+  readonly preferredAgent?: SpecialistAgentName;
+  readonly hasPdfAttachment?: boolean;
+  readonly hasImageAttachment?: boolean;
+}): SpecialistRoutingDecision {
+  if (input.preferredAgent !== undefined) {
+    return {
+      agent: input.preferredAgent,
+      routedFromChat: false,
+    };
+  }
+
+  if (input.hasPdfAttachment) {
+    return {
+      agent: 'rag',
+      routedFromChat: true,
+      reason: 'Attached PDF document',
+    };
+  }
+  if (input.hasImageAttachment) {
+    return {
+      agent: 'vision',
+      routedFromChat: true,
+      reason: 'Attached image inspection',
+    };
+  }
+
+  const lower = input.prompt.trim().toLowerCase();
+
+  if (
+    /\b(generate an? image|generate image|draw\s+(?:a|an|me|the)\b|illustration of|create an? image|create image|make an? image|render a picture|render an? illustration|generate artwork|design a logo|generate a poster|concept art of|photorealistic image)\b/.test(
+      lower,
+    )
+  ) {
+    return {
+      agent: 'image',
+      routedFromChat: true,
+      reason: 'Visual artwork request',
+    };
+  }
+
+  if (
+    /\b(create a ppt|generate a ppt|create a presentation|generate a presentation|make a presentation|slide deck|powerpoint|slides on|slides about|\d+-slide\s+(?:deck|presentation))\b/.test(
+      lower,
+    )
+  ) {
+    return {
+      agent: 'ppt',
+      routedFromChat: true,
+      reason: 'Slide deck generation',
+    };
+  }
+
+  if (
+    /\b(generate a pdf|create a pdf|compile a pdf|pdf report|export pdf|export as pdf|write a pdf)\b/.test(
+      lower,
+    )
+  ) {
+    return {
+      agent: 'pdf',
+      routedFromChat: true,
+      reason: 'PDF document generation',
+    };
+  }
+
+  if (
+    /\b(build an app|build a [a-z0-9\s-]{1,36}?(?:app|clone|calculator|dashboard|game|website|tool|widget|tracker|ui)|write code|create a (?:react |html )?component|react component|html,\s*css|sandbox|debug this|fix this bug|refactor this|implement (?:a |an |the )?[a-z0-9_-]+(?:\s+(?:function|class|hook|algorithm|component|api|endpoint|service|parser)))\b/.test(
+      lower,
+    )
+  ) {
+    return {
+      agent: 'coding',
+      routedFromChat: true,
+      reason: 'Code & sandbox request',
+    };
+  }
+
+  if (isLiveWebSearchPrompt(input.prompt)) {
+    return {
+      agent: 'search',
+      routedFromChat: true,
+      reason: 'Live web lookup',
+    };
+  }
+
+  if (
+    /\b(in the uploaded pdf|according to the uploaded|according to the document|page number in the pdf|uploaded file)\b/.test(
+      lower,
+    )
+  ) {
+    return {
+      agent: 'rag',
+      routedFromChat: true,
+      reason: 'Uploaded document query',
+    };
+  }
+
+  return {
+    agent: 'chat',
+    routedFromChat: false,
+  };
 }
 
 /**

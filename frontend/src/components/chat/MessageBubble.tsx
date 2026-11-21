@@ -9,17 +9,21 @@ import {
   Copy,
   ExternalLink,
   FileText,
+  Globe,
   Image as ImageIcon,
   Maximize2,
   Paperclip,
+  Presentation,
+  RotateCcw,
   ShieldCheck,
   User,
 } from 'lucide-react';
 import {
-  buildArtifactRawDownloadUrl,
   buildUploadedFileRawUrl,
+  formatChatModeAndDepthMeta,
   formatCitationRelevancePercent,
   formatImageFileBadge,
+  formatRoutingAttribution,
   summarizeDocumentCitations,
 } from '../slide-deck-and-markdown.js';
 import type {
@@ -75,6 +79,11 @@ export interface MessageBubbleProps {
     query: string,
     agent?: PlatformMessage['agentUsed'],
   ) => void;
+  readonly onRegenerate?: (message: PlatformMessage) => void;
+  readonly onHandoffToSpecialist?: (
+    target: 'pdf' | 'ppt' | 'search',
+    message: PlatformMessage,
+  ) => void;
   readonly onOpenCodeArtifact?: (artifact: ArtifactRecord) => void;
   readonly onOpenLightboxImage?: (image: {
     readonly title: string;
@@ -87,10 +96,13 @@ export function MessageBubble({
   message,
   isLoading = false,
   onFollowUpSearch,
+  onRegenerate,
+  onHandoffToSpecialist,
   onOpenCodeArtifact,
   onOpenLightboxImage,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user';
+  const isWelcomeGreeting = message.messageId.startsWith('msg_welcome_assistant_');
   const [failedImageIds, setFailedImageIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -103,11 +115,11 @@ export function MessageBubble({
   const [copiedCitationIdx, setCopiedCitationIdx] = useState<number | null>(
     null,
   );
-  const [copiedVisionReply, setCopiedVisionReply] = useState(false);
+  const [copiedMarkdown, setCopiedMarkdown] = useState(false);
   const citationCardRefs = useRef<Record<number, HTMLElement | null>>({});
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const visionCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markdownCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {
@@ -117,8 +129,8 @@ export function MessageBubble({
       if (copyTimerRef.current) {
         clearTimeout(copyTimerRef.current);
       }
-      if (visionCopyTimerRef.current) {
-        clearTimeout(visionCopyTimerRef.current);
+      if (markdownCopyTimerRef.current) {
+        clearTimeout(markdownCopyTimerRef.current);
       }
     };
   }, []);
@@ -175,17 +187,17 @@ export function MessageBubble({
     }, 1600);
   };
 
-  const handleCopyVisionAnalysis = () => {
+  const handleCopyMarkdown = () => {
     const clip = navigator.clipboard?.writeText(message.content);
     if (clip && typeof clip.catch === 'function') {
       clip.catch(() => {});
     }
-    setCopiedVisionReply(true);
-    if (visionCopyTimerRef.current) {
-      clearTimeout(visionCopyTimerRef.current);
+    setCopiedMarkdown(true);
+    if (markdownCopyTimerRef.current) {
+      clearTimeout(markdownCopyTimerRef.current);
     }
-    visionCopyTimerRef.current = setTimeout(() => {
-      setCopiedVisionReply(false);
+    markdownCopyTimerRef.current = setTimeout(() => {
+      setCopiedMarkdown(false);
     }, 1600);
   };
 
@@ -207,8 +219,22 @@ export function MessageBubble({
   const docCitations = indexedCitations.filter((c) => !c.isWebUrl);
   const followUpQueries = (message.followUpQueries ?? []).slice(0, 3);
 
+  const routingAttribution = !isUser
+    ? formatRoutingAttribution(
+        message.agentUsed,
+        message.routedFromChat,
+        message.routingReason,
+      )
+    : null;
+  const chatModeMeta =
+    !isUser && message.agentUsed === 'chat'
+      ? formatChatModeAndDepthMeta(message.chatMode, message.responseDepth)
+      : null;
+
   return (
     <div
+      data-message-role={message.role}
+      data-agent-used={message.agentUsed ?? ''}
       className={`flex items-start gap-3.5 ${
         isUser ? 'flex-row-reverse' : 'flex-row'
       }`}
@@ -234,44 +260,42 @@ export function MessageBubble({
       >
         {/* Top Metadata Strip */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5 pb-2 border-b border-slate-800/70">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-300">
-              {isUser ? 'You' : 'Kartik.ai Specialist'}
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <span className="text-xs font-semibold text-slate-200">
+              {isUser ? 'You' : 'Kartik.ai'}
             </span>
             {!isUser && message.agentUsed && (
-              <span className="px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">
-                {message.agentUsed.toUpperCase()} AGENT
+              <span className="text-[11px] font-mono uppercase tracking-wider text-sky-300 font-semibold">
+                {message.agentUsed === 'chat'
+                  ? 'CHAT'
+                  : `${message.agentUsed.toUpperCase()} AGENT`}
+              </span>
+            )}
+            {routingAttribution && (
+              <span
+                data-routing-attribution="true"
+                className="text-[11px] text-slate-400 font-normal truncate"
+              >
+                · {routingAttribution}
+              </span>
+            )}
+            {!routingAttribution && chatModeMeta && (
+              <span
+                data-chat-mode-meta="true"
+                className="text-[11px] text-slate-400 font-normal truncate"
+              >
+                · {chatModeMeta}
               </span>
             )}
             {message.idempotentReplay && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+              <span className="inline-flex items-center gap-1 text-[10px] font-mono font-semibold text-emerald-300">
                 <ShieldCheck className="w-3 h-3" />
-                IDEMPOTENT REPLAY · 0 CREDITS
+                IDEMPOTENT REPLAY · 0 CR
               </span>
             )}
           </div>
 
-          <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400">
-            {!isUser && message.agentUsed === 'vision' && (
-              <button
-                type="button"
-                onClick={handleCopyVisionAnalysis}
-                aria-label="Copy Vision OCR analysis"
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-[11px] font-sans font-medium text-slate-300 hover:text-sky-300 transition-colors cursor-pointer"
-              >
-                {copiedVisionReply ? (
-                  <>
-                    <Check className="w-3 h-3 text-emerald-400" />
-                    <span className="text-emerald-300">Copied</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3 h-3" />
-                    <span>Copy OCR</span>
-                  </>
-                )}
-              </button>
-            )}
+          <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 shrink-0">
             {!isUser &&
               typeof message.creditsCharged === 'number' &&
               !message.idempotentReplay && (
@@ -630,7 +654,6 @@ export function MessageBubble({
         {message.artifacts && message.artifacts.length > 0 && (
           <div className="mt-4 space-y-3">
             {message.artifacts.map((art) => {
-              const rawDownloadUrl = buildArtifactRawDownloadUrl(art.artifactId);
 
               if (art.artifactType === 'ppt_presentation') {
                 return <SlideDeckPreview key={art.artifactId} artifact={art} />;
@@ -685,9 +708,91 @@ export function MessageBubble({
           </div>
         )}
 
+        {/* Assistant Message Action Toolbar: Copy Markdown, Regenerate & One-Click Specialist Handoffs */}
+        {!isUser && (
+          <div
+            data-message-actions="true"
+            className="mt-4 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2"
+          >
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                data-action-copy-markdown="true"
+                onClick={handleCopyMarkdown}
+                aria-label="Copy answer as Markdown"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-[11px] font-medium text-slate-300 hover:text-slate-100 transition-colors whitespace-nowrap cursor-pointer"
+              >
+                {copiedMarkdown ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-300">Copied</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Copy Markdown</span>
+                  </>
+                )}
+              </button>
+
+              {!isWelcomeGreeting && onRegenerate && (
+                <button
+                  type="button"
+                  data-action-regenerate="true"
+                  disabled={isLoading}
+                  onClick={() => onRegenerate(message)}
+                  aria-label="Regenerate this response"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-[11px] font-medium text-slate-300 hover:text-sky-200 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Regenerate</span>
+                </button>
+              )}
+            </div>
+
+            {!isWelcomeGreeting &&
+              message.agentUsed === 'chat' &&
+              onHandoffToSpecialist && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-slate-500 mr-0.5">Send to</span>
+                  <button
+                    type="button"
+                    data-handoff-agent="pdf"
+                    disabled={isLoading}
+                    onClick={() => onHandoffToSpecialist('pdf', message)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/45 text-[11px] font-medium text-slate-300 hover:text-emerald-200 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+                  >
+                    <FileText className="w-3 h-3 text-emerald-400" />
+                    <span>Export PDF</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-handoff-agent="ppt"
+                    disabled={isLoading}
+                    onClick={() => onHandoffToSpecialist('ppt', message)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-indigo-500/45 text-[11px] font-medium text-slate-300 hover:text-indigo-200 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+                  >
+                    <Presentation className="w-3 h-3 text-indigo-400" />
+                    <span>Build Slides</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-handoff-agent="search"
+                    disabled={isLoading}
+                    onClick={() => onHandoffToSpecialist('search', message)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-sky-500/45 text-[11px] font-medium text-slate-300 hover:text-sky-200 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+                  >
+                    <Globe className="w-3 h-3 text-sky-400" />
+                    <span>Verify on Web</span>
+                  </button>
+                </div>
+              )}
+          </div>
+        )}
+
         {/* Clickable Related Follow-Up Queries */}
         {!isUser && followUpQueries.length > 0 && (
-          <div className="mt-4 pt-3 border-t border-slate-800/80">
+          <div className="mt-3.5 pt-3 border-t border-slate-800/70">
             <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
               Related follow-ups
             </div>
@@ -699,7 +804,7 @@ export function MessageBubble({
                   data-follow-up-chip="true"
                   disabled={isLoading || !onFollowUpSearch}
                   onClick={() =>
-                    onFollowUpSearch?.(query, message.agentUsed ?? 'search')
+                    onFollowUpSearch?.(query, message.agentUsed ?? 'chat')
                   }
                   className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-slate-900/65 hover:bg-slate-800/80 border border-slate-800 hover:border-sky-500/45 text-left text-xs text-slate-200 hover:text-sky-200 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed group"
                 >

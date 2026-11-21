@@ -6,11 +6,10 @@ import {
 } from '../src/index.js';
 
 describe('@kartik/frontend Multi-Agent Selector Pills & Multi-File Sandbox Assembler (9.5.a)', () => {
-  it('defines Auto Router plus all 8 specialist agent selector pills with credit cost labels', () => {
-    assert.equal(AGENT_SELECTOR_PILLS.length, 9);
+  it('defines unified Chat smart hub plus all 7 direct specialist selector pills (Auto Router merged into Chat)', () => {
+    assert.equal(AGENT_SELECTOR_PILLS.length, 8);
     const ids = AGENT_SELECTOR_PILLS.map((p) => p.id);
     assert.deepEqual(ids, [
-      'auto',
       'chat',
       'search',
       'coding',

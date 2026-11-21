@@ -13,6 +13,11 @@
 
 import crypto from 'node:crypto';
 import type {
+  ChatResponseDepth,
+  ConversationHistoryTurn,
+  ConversationThreadContext,
+} from '@kartik/shared/contracts';
+import type {
   ChatModelProvider,
   CodingModelProvider,
   EmbeddingProvider,
@@ -23,6 +28,13 @@ import type {
   SearchResultItem,
   VisionProvider,
 } from '../models/index.js';
+import {
+  buildMultiTurnGeminiContents,
+  buildOfflineChatReply,
+  classifyChatMode,
+  normalizeChatResponseDepth,
+  type ChatReasoningMode,
+} from '../agents/chat/index.js';
 import {
   buildDeterministicFollowUps,
   cleanPublicSearchQuery,
@@ -477,6 +489,10 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
     readonly prompt: string;
     readonly systemInstruction?: string;
     readonly maxOutputTokens: number;
+    readonly conversationHistory?: readonly ConversationHistoryTurn[];
+    readonly threadContext?: ConversationThreadContext;
+    readonly responseDepth?: ChatResponseDepth;
+    readonly chatMode?: string;
   }): Promise<{ readonly content: string; readonly tokensUsed: number }> {
     const sysInstruction =
       input.systemInstruction ??
@@ -485,9 +501,13 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
     const ai = await createServerGeminiClient(this.apiKey);
     if (ai) {
       try {
+        const contents =
+          input.conversationHistory && input.conversationHistory.length > 0
+            ? buildMultiTurnGeminiContents(input.prompt, input.conversationHistory)
+            : input.prompt;
         const response = await ai.generateContent({
           model: DEFAULT_TEXT_MODEL,
-          contents: input.prompt,
+          contents,
           config: {
             systemInstruction: sysInstruction,
             maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 256),
@@ -505,22 +525,15 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
       }
     }
 
-    const cleanTopic = input.prompt.trim();
-    const synthesized = [
-      `### ${cleanTopic.slice(0, 90)}`,
-      '',
-      'Here is a structured technical breakdown:',
-      '',
-      '| Layer / Dimension | Core Responsibility | Production Guardrail |',
-      '| :--- | :--- | :--- |',
-      '| **Ingress & Gateway** | Single public entry point (`/api/v1/*`), session introspection & rate limiting | Strip untrusted headers; sign Ed25519 user-context assertions |',
-      '| **State & Concurrency** | Transactional PostgreSQL persistence & Redis sliding-window coordination | Preserve client `Idempotency-Key` as `requestId`; lock balance rows with `SELECT ... FOR UPDATE` |',
-      '| **Specialist Execution** | LangGraph routing across Chat, Search, Coding, PDF, PPT, Vision & Image | Validate all untrusted JSON outputs against strict schemas |',
-      '',
-      '#### Key Takeaways',
-      '1. **Separation of Ownership:** Each microservice owns its schema (`auth`, `chat`, `agent`, `billing`) and communicates strictly over versioned contracts.',
-      '2. **Deterministic Retries:** Replaying a request with the same `Idempotency-Key` returns the durable stored result without double-charging.',
-    ].join('\n');
+    const mode = (input.chatMode as ChatReasoningMode | undefined) ?? classifyChatMode(input.prompt);
+    const responseDepth = normalizeChatResponseDepth(input.responseDepth);
+    const synthesized = buildOfflineChatReply({
+      prompt: input.prompt,
+      mode,
+      responseDepth,
+      history: input.conversationHistory,
+      threadContext: input.threadContext,
+    });
 
     return {
       content: synthesized,

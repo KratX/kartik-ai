@@ -76,6 +76,11 @@ export interface ChatAreaProps {
     prompt: string,
     agent: SpecialistAgentName,
   ) => void;
+  readonly onRegenerate?: (message: PlatformMessage) => void;
+  readonly onHandoffToSpecialist?: (
+    target: 'pdf' | 'ppt' | 'search',
+    message: PlatformMessage,
+  ) => void;
   readonly onOpenCodeArtifact?: (artifact: ArtifactRecord) => void;
   readonly children?: React.ReactNode;
 }
@@ -85,6 +90,8 @@ export function ChatArea({
   isLoading,
   activeAgent,
   onQuickPromptSelect,
+  onRegenerate,
+  onHandoffToSpecialist,
   onOpenCodeArtifact,
   children,
 }: ChatAreaProps) {
@@ -147,10 +154,10 @@ export function ChatArea({
           <div className="py-16 text-center">
             <MessageSquare className="w-10 h-10 text-slate-600 mx-auto mb-3" />
             <h3 className="text-sm font-semibold text-slate-300">
-              Start a Multi-Agent Turn
+              Start a Conversation in Unified Chat
             </h3>
             <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-              Choose one of the quick-launch cards above or type a prompt below to route across Chat, Search, Coding, PDF, PPT, RAG, Vision, and Image agents.
+              Choose a quick-launch card above or ask anything in Chat — it adapts reasoning depth automatically and smart-delegates builds, documents, decks, research, and visuals when needed.
             </p>
           </div>
         ) : (
@@ -159,8 +166,10 @@ export function ChatArea({
             isLoading={isLoading}
             activeAgent={activeAgent}
             onFollowUpSearch={(query, agent) =>
-              onQuickPromptSelect?.(query, agent ?? 'search')
+              onQuickPromptSelect?.(query, agent ?? 'chat')
             }
+            onRegenerate={onRegenerate}
+            onHandoffToSpecialist={onHandoffToSpecialist}
             onOpenCodeArtifact={onOpenCodeArtifact}
             onOpenLightboxImage={(img) => setLightboxImage(img)}
           />

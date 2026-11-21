@@ -15,6 +15,8 @@ export type SpecialistAgentName =
   | 'vision'
   | 'image';
 
+export type ChatResponseDepth = 'concise' | 'balanced' | 'deep';
+
 export type FrontendErrorCode =
   | 'VALIDATION_FAILED'
   | 'INVALID_CURSOR'
@@ -231,6 +233,10 @@ export interface PlatformMessage {
   readonly role: 'user' | 'assistant';
   readonly content: string;
   readonly agentUsed?: SpecialistAgentName;
+  readonly routedFromChat?: boolean;
+  readonly routingReason?: string;
+  readonly chatMode?: string;
+  readonly responseDepth?: ChatResponseDepth;
   readonly requestId?: string;
   readonly creditsCharged?: number;
   readonly idempotentReplay?: boolean;

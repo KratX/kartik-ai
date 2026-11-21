@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Copy, Terminal } from 'lucide-react';
+import { Check, Copy, Terminal, WrapText } from 'lucide-react';
 import {
   tokenizeInlineMarkdown,
   tokenizeMarkdownBlocks,
@@ -20,6 +20,7 @@ function renderInlineFormattedText(
   text: string,
   citations?: readonly MessageCitation[],
   onCitationClick?: (citationZeroBasedIndex: number) => void,
+  depth = 0,
 ): React.ReactNode[] {
   const tokens = tokenizeInlineMarkdown(text);
   return tokens.map((token, idx) => {
@@ -37,7 +38,9 @@ function renderInlineFormattedText(
     if (token.type === 'bold') {
       return (
         <strong key={idx} className="font-semibold text-slate-100">
-          {token.text}
+          {depth < 2
+            ? renderInlineFormattedText(token.text, citations, onCitationClick, depth + 1)
+            : token.text}
         </strong>
       );
     }
@@ -109,41 +112,76 @@ function CodeBlockCard({
   readonly code: string;
 }) {
   const [copied, setCopied] = useState(false);
+  const [wrapLines, setWrapLines] = useState(false);
+  const lineCount = code ? code.split('\n').length : 0;
 
   const handleCopy = () => {
-    void navigator.clipboard?.writeText(code);
+    const clip = navigator.clipboard?.writeText(code);
+    if (clip && typeof clip.catch === 'function') {
+      clip.catch(() => {});
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
   };
 
   return (
-    <div className="my-3 rounded-lg overflow-hidden border border-slate-800 bg-[#070a12]">
-      <div className="flex items-center justify-between px-3.5 py-2 bg-slate-900/90 border-b border-slate-800 text-xs text-slate-400 font-mono">
-        <div className="flex items-center gap-2">
-          <Terminal className="w-3.5 h-3.5 text-sky-400" />
-          <span className="uppercase tracking-wider font-semibold text-slate-300">
+    <div
+      data-code-block="true"
+      className="my-3 rounded-lg overflow-hidden border border-slate-800 bg-[#070a12]"
+    >
+      <div className="flex items-center justify-between gap-2 px-3.5 py-2 bg-slate-900/90 border-b border-slate-800 text-xs text-slate-400 font-mono">
+        <div className="flex items-center gap-2 min-w-0">
+          <Terminal className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+          <span className="uppercase tracking-wider font-semibold text-slate-200 truncate">
             {language || 'code'}
           </span>
+          <span className="text-slate-600">·</span>
+          <span className="text-[11px] text-slate-400 tabular-nums whitespace-nowrap">
+            {lineCount} {lineCount === 1 ? 'line' : 'lines'}
+          </span>
         </div>
-        <button
-          type="button"
-          onClick={handleCopy}
-          className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors cursor-pointer"
-        >
-          {copied ? (
-            <>
-              <Check className="w-3 h-3 text-emerald-400" />
-              <span className="text-emerald-400">Copied</span>
-            </>
-          ) : (
-            <>
-              <Copy className="w-3 h-3" />
-              <span>Copy</span>
-            </>
-          )}
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setWrapLines((prev) => !prev)}
+            aria-pressed={wrapLines}
+            title={wrapLines ? 'Disable line wrapping' : 'Wrap long lines'}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-sans font-medium transition-colors cursor-pointer ${
+              wrapLines
+                ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-transparent'
+            }`}
+          >
+            <WrapText className="w-3 h-3" />
+            <span>Wrap</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleCopy}
+            data-code-copy-button="true"
+            className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 font-sans text-[11px] font-medium transition-colors cursor-pointer"
+          >
+            {copied ? (
+              <>
+                <Check className="w-3 h-3 text-emerald-400" />
+                <span className="text-emerald-400">Copied</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3 h-3" />
+                <span>Copy</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
-      <pre className="p-3.5 text-xs font-mono text-slate-200 overflow-x-auto leading-relaxed">
+      <pre
+        className={`p-3.5 text-xs font-mono text-slate-200 leading-relaxed ${
+          wrapLines
+            ? 'whitespace-pre-wrap break-words'
+            : 'whitespace-pre overflow-x-auto'
+        }`}
+      >
         <code>{code}</code>
       </pre>
     </div>
@@ -228,7 +266,7 @@ export function MarkdownRenderer({
           return (
             <blockquote
               key={index}
-              className="pl-3.5 py-1 border-l-2 border-sky-500/60 bg-sky-500/5 text-slate-300 italic rounded-r"
+              className="px-3.5 py-2 border border-sky-500/25 bg-sky-500/5 text-slate-300 text-xs italic rounded-lg"
             >
               {inline(block.text)}
             </blockquote>
@@ -236,17 +274,45 @@ export function MarkdownRenderer({
         }
 
         if (block.type === 'list') {
+          const isTaskList =
+            !block.ordered &&
+            block.items.some((item) => /^\[[ xX]?\]\s+/.test(item.trim()));
           const ListTag = block.ordered ? 'ol' : 'ul';
           return (
             <ListTag
               key={index}
-              className={`space-y-1.5 pl-5 ${
-                block.ordered ? 'list-decimal' : 'list-disc'
+              className={`space-y-1.5 ${
+                isTaskList
+                  ? 'list-none pl-0.5'
+                  : block.ordered
+                    ? 'list-decimal pl-5'
+                    : 'list-disc pl-5'
               } text-slate-200`}
             >
-              {block.items.map((item, iIdx) => (
-                <li key={iIdx}>{inline(item)}</li>
-              ))}
+              {block.items.map((item, iIdx) => {
+                const taskMatch = !block.ordered
+                  ? /^\[([ xX]?)\]\s+([\s\S]*)$/.exec(item.trim())
+                  : null;
+                if (taskMatch) {
+                  const checked = (taskMatch[1] ?? '').toLowerCase() === 'x';
+                  return (
+                    <li key={iIdx} className="flex items-start gap-2.5">
+                      <span
+                        aria-hidden="true"
+                        className={`mt-1 inline-flex items-center justify-center w-3.5 h-3.5 rounded border shrink-0 ${
+                          checked
+                            ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-300'
+                            : 'bg-slate-900/90 border-slate-600/80'
+                        }`}
+                      >
+                        {checked && <Check className="w-2.5 h-2.5" />}
+                      </span>
+                      <span className="min-w-0 flex-1">{inline(taskMatch[2] ?? '')}</span>
+                    </li>
+                  );
+                }
+                return <li key={iIdx}>{inline(item)}</li>;
+              })}
             </ListTag>
           );
         }

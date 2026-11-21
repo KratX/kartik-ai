@@ -12,11 +12,13 @@ import {
 } from 'lucide-react';
 import {
   AGENT_SELECTOR_PILLS,
+  CHAT_RESPONSE_DEPTH_OPTIONS,
   buildUploadedFileRawUrl,
   formatImageFileBadge,
   type AgentSelectorPillSpec,
 } from '../slide-deck-and-markdown.js';
 import type {
+  ChatResponseDepth,
   SpecialistAgentName,
   UploadedFileRecord,
 } from '../../types/index.js';
@@ -24,6 +26,8 @@ import type {
 export interface ChatInputProps {
   readonly selectedAgent: AgentSelectorPillSpec['id'];
   readonly onSelectAgent: (agent: AgentSelectorPillSpec['id']) => void;
+  readonly responseDepth: ChatResponseDepth;
+  readonly onSelectResponseDepth: (depth: ChatResponseDepth) => void;
   readonly attachedFiles: readonly UploadedFileRecord[];
   readonly onRemoveAttachedFile: (fileId: string) => void;
   readonly onUploadFile: (file: {
@@ -42,6 +46,8 @@ export interface ChatInputProps {
 export function ChatInput({
   selectedAgent,
   onSelectAgent,
+  responseDepth,
+  onSelectResponseDepth,
   attachedFiles,
   onRemoveAttachedFile,
   onUploadFile,
@@ -164,8 +170,10 @@ export function ChatInput({
     const trimmed = prompt.trim();
     if (!trimmed || isLoading || demoReadOnly) return;
 
+    // Fix #21: When unified Chat is active, omit preferredAgent so the smart hybrid router
+    // answers conceptual questions in Chat (1 cr) and seamlessly delegates specialist tasks.
     const preferred: SpecialistAgentName | undefined =
-      selectedAgent === 'auto' ? undefined : selectedAgent;
+      selectedAgent === 'chat' ? undefined : selectedAgent;
     setPrompt('');
     await onSendMessage(trimmed, preferred);
   };
@@ -195,35 +203,74 @@ export function ChatInput({
         </div>
       )}
 
-      {/* Specialist Agent Selector Pills */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-        {AGENT_SELECTOR_PILLS.map((pill) => {
-          const isSelected = pill.id === selectedAgent;
-          return (
-            <button
-              key={pill.id}
-              type="button"
-              onClick={() => onSelectAgent(pill.id)}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all shrink-0 cursor-pointer border ${
-                isSelected
-                  ? 'bg-sky-500/20 border-sky-400 text-sky-200 shadow-sm'
-                  : 'bg-slate-900/90 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
-              }`}
-            >
-              {pill.id === 'auto' && <Sparkles className="w-3 h-3 text-sky-400" />}
-              <span>{pill.label}</span>
-              <span
-                className={`text-[10px] font-mono px-1 rounded ${
+      {/* Specialist Agent Selector Pills + Chat Response Depth Control */}
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
+        <div
+          data-agent-selector-bar="true"
+          className="flex items-center gap-1.5 overflow-x-auto no-scrollbar min-w-0"
+        >
+          {AGENT_SELECTOR_PILLS.map((pill) => {
+            const isSelected = pill.id === selectedAgent;
+            return (
+              <button
+                key={pill.id}
+                type="button"
+                data-agent-pill={pill.id}
+                onClick={() => onSelectAgent(pill.id)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all shrink-0 whitespace-nowrap cursor-pointer border ${
                   isSelected
-                    ? 'bg-sky-500/30 text-sky-200'
-                    : 'bg-slate-800 text-slate-500'
+                    ? 'bg-sky-500/20 border-sky-400 text-sky-200 shadow-sm'
+                    : 'bg-slate-900/90 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
                 }`}
               >
-                {pill.creditCostLabel}
-              </span>
-            </button>
-          );
-        })}
+                {pill.id === 'chat' && <Sparkles className="w-3 h-3 text-sky-400" />}
+                <span>{pill.label}</span>
+                <span
+                  className={`text-[10px] font-mono tabular-nums px-1 rounded ${
+                    isSelected
+                      ? 'bg-sky-500/30 text-sky-200'
+                      : 'bg-slate-800 text-slate-500'
+                  }`}
+                >
+                  {pill.creditCostLabel}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {selectedAgent === 'chat' && (
+          <div
+            role="group"
+            aria-label="Chat response depth"
+            data-chat-depth-selector="true"
+            className="inline-flex items-center gap-0.5 p-0.5 rounded-lg bg-slate-900 border border-slate-800 shrink-0"
+          >
+            <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500 px-2 select-none">
+              Depth
+            </span>
+            {CHAT_RESPONSE_DEPTH_OPTIONS.map((opt) => {
+              const active = responseDepth === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  data-depth-option={opt.id}
+                  aria-pressed={active}
+                  title={opt.description}
+                  onClick={() => onSelectResponseDepth(opt.id)}
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                    active
+                      ? 'bg-sky-500/20 text-sky-200 border border-sky-500/40'
+                      : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Attached File Chips */}

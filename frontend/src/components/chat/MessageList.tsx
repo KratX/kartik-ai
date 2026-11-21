@@ -15,6 +15,11 @@ export interface MessageListProps {
     query: string,
     agent?: SpecialistAgentName,
   ) => void;
+  readonly onRegenerate?: (message: PlatformMessage) => void;
+  readonly onHandoffToSpecialist?: (
+    target: 'pdf' | 'ppt' | 'search',
+    message: PlatformMessage,
+  ) => void;
   readonly onOpenCodeArtifact?: (artifact: ArtifactRecord) => void;
   readonly onOpenLightboxImage?: (image: {
     readonly title: string;
@@ -28,6 +33,8 @@ export function MessageList({
   isLoading,
   activeAgent,
   onFollowUpSearch,
+  onRegenerate,
+  onHandoffToSpecialist,
   onOpenCodeArtifact,
   onOpenLightboxImage,
 }: MessageListProps) {
@@ -45,6 +52,8 @@ export function MessageList({
           message={msg}
           isLoading={isLoading}
           onFollowUpSearch={onFollowUpSearch}
+          onRegenerate={onRegenerate}
+          onHandoffToSpecialist={onHandoffToSpecialist}
           onOpenCodeArtifact={onOpenCodeArtifact}
           onOpenLightboxImage={onOpenLightboxImage}
         />

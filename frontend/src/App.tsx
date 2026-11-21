@@ -20,6 +20,7 @@ import {
 import type {
   ApiEnvelope,
   ArtifactRecord,
+  ChatResponseDepth,
   PlatformConversation,
   PlatformCreditPlan,
   PlatformLedgerEntry,
@@ -28,7 +29,10 @@ import type {
   SpecialistAgentName,
   UploadedFileRecord,
 } from './types/index.js';
-import type { AgentSelectorPillSpec } from './components/slide-deck-and-markdown.js';
+import {
+  buildChatHandoffPrompt,
+  type AgentSelectorPillSpec,
+} from './components/slide-deck-and-markdown.js';
 import { ArtifactPanel } from './components/artifacts/ArtifactPanel.js';
 import { AuthModal } from './components/auth/AuthModal.js';
 import { BillingDrawer } from './components/billing/BillingDrawer.js';
@@ -118,7 +122,9 @@ export function App() {
 
   // Turn Composer & Replay State
   const [selectedAgent, setSelectedAgent] =
-    useState<AgentSelectorPillSpec['id']>('auto');
+    useState<AgentSelectorPillSpec['id']>('chat');
+  const [responseDepth, setResponseDepth] =
+    useState<ChatResponseDepth>('balanced');
   const [attachedTurnFiles, setAttachedTurnFiles] = useState<
     readonly UploadedFileRecord[]
   >([]);
@@ -132,6 +138,7 @@ export function App() {
     readonly requestId: string;
     readonly prompt: string;
     readonly preferredAgent?: SpecialistAgentName;
+    readonly responseDepth?: ChatResponseDepth;
     readonly attachmentFileIds?: string[];
   } | null>(null);
 
@@ -338,6 +345,7 @@ export function App() {
     readonly requestId: string;
     readonly prompt: string;
     readonly preferredAgent?: SpecialistAgentName;
+    readonly responseDepth?: ChatResponseDepth;
     readonly attachmentFileIds?: string[];
   }) => {
     setIsTurnLoading(true);
@@ -357,6 +365,7 @@ export function App() {
           body: JSON.stringify({
             prompt: input.prompt,
             preferredAgent: input.preferredAgent,
+            responseDepth: input.responseDepth,
             attachmentFileIds: input.attachmentFileIds,
           }),
         },
@@ -435,6 +444,7 @@ export function App() {
       requestId: createClientIdempotencyKey(),
       prompt,
       preferredAgent,
+      responseDepth,
       attachmentFileIds: attachedTurnFiles.map((f) => f.fileId),
     });
   };
@@ -451,7 +461,66 @@ export function App() {
     agent: SpecialistAgentName,
   ) => {
     setSelectedAgent(agent);
-    await handleSendMessage(prompt, agent);
+    // Keep unified Chat smart hybrid routing active for Chat follow-ups
+    await handleSendMessage(prompt, agent === 'chat' ? undefined : agent);
+  };
+
+  const findPairedUserMessage = (
+    assistantMessageId: string,
+  ): PlatformMessage | undefined => {
+    const idx = messages.findIndex((m) => m.messageId === assistantMessageId);
+    if (idx <= 0) {
+      return undefined;
+    }
+    for (let i = idx - 1; i >= 0; i -= 1) {
+      if (messages[i]?.role === 'user') {
+        return messages[i];
+      }
+    }
+    return undefined;
+  };
+
+  const handleRegenerateMessage = async (assistantMessage: PlatformMessage) => {
+    const pairedUser = findPairedUserMessage(assistantMessage.messageId);
+    if (!pairedUser || isTurnLoading || demoReadOnly) {
+      return;
+    }
+    const preferredAgent: SpecialistAgentName | undefined =
+      assistantMessage.routedFromChat || assistantMessage.agentUsed === 'chat'
+        ? undefined
+        : assistantMessage.agentUsed;
+    await executeTurnRequest({
+      conversationId: activeConversationIdRef.current || 'conv_welcome_01',
+      requestId: createClientIdempotencyKey(),
+      prompt: pairedUser.content,
+      preferredAgent,
+      responseDepth,
+      attachmentFileIds: (pairedUser.attachedFiles ?? []).map((f) => f.fileId),
+    });
+  };
+
+  const handleHandoffToSpecialist = async (
+    target: 'pdf' | 'ppt' | 'search',
+    assistantMessage: PlatformMessage,
+  ) => {
+    if (isTurnLoading || demoReadOnly) {
+      return;
+    }
+    const pairedUser = findPairedUserMessage(assistantMessage.messageId);
+    const handoffPrompt = buildChatHandoffPrompt(
+      target,
+      assistantMessage.content,
+      pairedUser?.content,
+    );
+    setSelectedAgent(target);
+    await executeTurnRequest({
+      conversationId: activeConversationIdRef.current || 'conv_welcome_01',
+      requestId: createClientIdempotencyKey(),
+      prompt: handoffPrompt,
+      preferredAgent: target,
+      responseDepth,
+      attachmentFileIds: [],
+    });
   };
 
   // Upload PDF or Image for RAG / Multimodal Vision
@@ -807,9 +876,13 @@ export function App() {
           <ChatArea
             messages={messages}
             isLoading={isTurnLoading}
-            activeAgent={selectedAgent === 'auto' ? undefined : selectedAgent}
+            activeAgent={selectedAgent}
             onQuickPromptSelect={(prompt, agent) =>
               void handleQuickPromptSelect(prompt, agent)
+            }
+            onRegenerate={(msg) => void handleRegenerateMessage(msg)}
+            onHandoffToSpecialist={(target, msg) =>
+              void handleHandoffToSpecialist(target, msg)
             }
             onOpenCodeArtifact={(artifact) => {
               setActiveCodeArtifact(artifact);
@@ -819,6 +892,8 @@ export function App() {
             <ChatInput
               selectedAgent={selectedAgent}
               onSelectAgent={setSelectedAgent}
+              responseDepth={responseDepth}
+              onSelectResponseDepth={setResponseDepth}
               attachedFiles={attachedTurnFiles}
               onRemoveAttachedFile={handleRemoveAttachedFile}
               onUploadFile={handleUploadFile}

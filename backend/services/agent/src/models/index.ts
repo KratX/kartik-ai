@@ -3,6 +3,9 @@ import type {
   AgentCitation,
   AgentName,
   ArtifactManifestFile,
+  ChatResponseDepth,
+  ConversationHistoryTurn,
+  ConversationThreadContext,
   SearchImageGalleryItem,
 } from '@kartik/shared/contracts';
 
@@ -81,6 +84,10 @@ export interface ChatModelProvider {
     readonly prompt: string;
     readonly systemInstruction?: string;
     readonly maxOutputTokens: number;
+    readonly conversationHistory?: readonly ConversationHistoryTurn[];
+    readonly threadContext?: ConversationThreadContext;
+    readonly responseDepth?: ChatResponseDepth;
+    readonly chatMode?: string;
   }): Promise<{
     readonly content: string;
     readonly tokensUsed: number;

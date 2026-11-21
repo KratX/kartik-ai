@@ -2,11 +2,12 @@ import crypto from 'node:crypto';
 import { AppError } from '@kartik/shared/errors';
 import {
   assertAgentName,
-  isLiveWebSearchPrompt,
+  classifySpecialistRoute,
   type AgentExecuteRequest,
   type AgentExecuteResponse,
   type SearchImageGalleryItem,
   type SpecialistAgentName,
+  type SpecialistRoutingDecision,
 } from '@kartik/shared/contracts';
 import { validateArtifactManifest } from '@kartik/shared/validation';
 import { buildObjectStorageKey, type ObjectStorage } from '@kartik/shared/storage';
@@ -63,6 +64,13 @@ import {
   detectImageAspectRatio,
   type ImageStyleArchetype,
 } from '../agents/image/index.js';
+import {
+  buildChatSystemInstruction,
+  classifyChatMode,
+  normalizeChatResponseDepth,
+  parseChatReplyAndFollowUps,
+  sanitizeConversationHistory,
+} from '../agents/chat/index.js';
 import type { DailyLiveBudgetGuard } from '../services/budget-guard.js';
 import type { AgentSlidingWindowRateLimiter } from '../services/agent-rate-limiter.js';
 import {
@@ -79,18 +87,20 @@ export interface AgentMetadataStore {
 }
 
 /**
- * Deterministic Router Node (`routePromptToSpecialist`).
+ * Fix #21: Smart Hybrid Routing Decision (`resolveSpecialistRoutingDecision`).
  *
  * Precedence:
- * 1. Explicit `preferredAgent` validated against closed `SpecialistAgentName` union.
+ * 1. Explicit `preferredAgent` validated against closed `SpecialistAgentName` union (rejects `"router"`).
  * 2. Uploaded attachment MIME types (`application/pdf` -> `rag`; `image/*` -> `vision`).
- * 3. Deterministic intent classification over prompt keywords (`image`, `ppt`, `pdf`, `coding`, `search`, `rag`, default `chat`).
+ * 3. Canonical `classifySpecialistRoute` shared with `@kartik/chat` so conceptual technical
+ *    questions stay in Chat (`1 cr`) while explicit builds, documents, decks, artwork, and
+ *    live web lookups delegate cleanly with a human-readable attribution reason.
  */
-export function routePromptToSpecialist(input: {
+export function resolveSpecialistRoutingDecision(input: {
   readonly prompt: string;
   readonly preferredAgent?: SpecialistAgentName;
   readonly attachedFiles?: readonly UploadedFileRecord[];
-}): SpecialistAgentName {
+}): SpecialistRoutingDecision {
   if (input.preferredAgent !== undefined) {
     const validated = assertAgentName(input.preferredAgent, 'preferredAgent');
     if (validated === 'router') {
@@ -99,48 +109,32 @@ export function routePromptToSpecialist(input: {
         'preferredAgent must be a specialist agent, not "router"',
       );
     }
-    return validated;
+    return {
+      agent: validated,
+      routedFromChat: false,
+    };
   }
 
-  if (input.attachedFiles && input.attachedFiles.length > 0) {
-    const hasPdf = input.attachedFiles.some((f) => f.mimeType === 'application/pdf');
-    if (hasPdf) {
-      return 'rag';
-    }
-    const hasImage = input.attachedFiles.some((f) => f.mimeType.startsWith('image/'));
-    if (hasImage) {
-      return 'vision';
-    }
-  }
+  const hasPdfAttachment = Boolean(
+    input.attachedFiles?.some((f) => f.mimeType === 'application/pdf'),
+  );
+  const hasImageAttachment = Boolean(
+    input.attachedFiles?.some((f) => f.mimeType.startsWith('image/')),
+  );
 
-  const lower = input.prompt.toLowerCase();
-  if (
-    /\b(generate an? image|generate image|draw|illustration|create an? image|create image|make an? image|render a picture|render an? illustration|generate artwork|design a logo|generate a poster|concept art of|photorealistic image)\b/.test(
-      lower,
-    )
-  ) {
-    return 'image';
-  }
-  if (/\b(create a ppt|generate a ppt|presentation|slide deck|powerpoint|slides on)\b/.test(lower)) {
-    return 'ppt';
-  }
-  if (/\b(generate a pdf|create a pdf|pdf report|export pdf|write a pdf)\b/.test(lower)) {
-    return 'pdf';
-  }
-  if (/\b(build an app|write code|create a component|react component|html|sandbox|calculator|debug this|refactor)\b/.test(lower)) {
-    return 'coding';
-  }
-  if (isLiveWebSearchPrompt(input.prompt)) {
-    return 'search';
-  }
-  if (/\b(typescript|react)\b/.test(lower)) {
-    return 'coding';
-  }
-  if (/\b(in the uploaded pdf|according to the document|page number|uploaded file)\b/.test(lower)) {
-    return 'rag';
-  }
+  return classifySpecialistRoute({
+    prompt: input.prompt,
+    hasPdfAttachment,
+    hasImageAttachment,
+  });
+}
 
-  return 'chat';
+export function routePromptToSpecialist(input: {
+  readonly prompt: string;
+  readonly preferredAgent?: SpecialistAgentName;
+  readonly attachedFiles?: readonly UploadedFileRecord[];
+}): SpecialistAgentName {
+  return resolveSpecialistRoutingDecision(input).agent;
 }
 
 export interface AgentGraphDependencies {
@@ -222,11 +216,18 @@ export class AgentGraphExecutor {
       attachedFiles.push(record);
     }
 
-    const specialist = routePromptToSpecialist({
+    const routingDecision = resolveSpecialistRoutingDecision({
       prompt: trimmedPrompt,
       preferredAgent: request.preferredAgent,
       attachedFiles,
     });
+    const specialist = routingDecision.agent;
+    const routingAttribution = routingDecision.routedFromChat
+      ? {
+          routedFromChat: true as const,
+          ...(routingDecision.reason ? { routingReason: routingDecision.reason } : {}),
+        }
+      : {};
 
     if (this.deps.rateLimiter) {
       await this.deps.rateLimiter.checkAgentLimit({
@@ -248,15 +249,33 @@ export class AgentGraphExecutor {
     const promptTokens = Math.max(4, Math.ceil(trimmedPrompt.length / 4));
 
     if (specialist === 'chat') {
+      const chatMode = classifyChatMode(trimmedPrompt);
+      const responseDepth = normalizeChatResponseDepth(request.responseDepth);
+      const boundedHistory = sanitizeConversationHistory(request.conversationHistory);
+      const systemInstruction = buildChatSystemInstruction({
+        mode: chatMode,
+        responseDepth,
+        threadContext: request.threadContext,
+      });
       const reply = await this.deps.chatProvider.generateReply({
         prompt: trimmedPrompt,
+        systemInstruction,
         maxOutputTokens: this.deps.config.maxOutputTokens,
+        conversationHistory: boundedHistory,
+        threadContext: request.threadContext,
+        responseDepth,
+        chatMode,
       });
+      const parsed = parseChatReplyAndFollowUps(reply.content, trimmedPrompt, chatMode);
       return {
         executionId,
         requestId: request.requestId,
         agent: 'chat',
-        replyContent: `${fallbackNotice}${reply.content}`,
+        replyContent: `${fallbackNotice}${parsed.answer}`,
+        followUpQueries: parsed.followUpQueries,
+        routedFromChat: false,
+        chatMode,
+        responseDepth,
         usage: {
           promptTokens,
           completionTokens: reply.tokensUsed,
@@ -314,6 +333,7 @@ export class AgentGraphExecutor {
           citations: [],
           searchImages: [],
           followUpQueries: [],
+          ...routingAttribution,
           usage: {
             promptTokens,
             completionTokens: 24,
@@ -388,6 +408,7 @@ export class AgentGraphExecutor {
         citations,
         searchImages,
         followUpQueries,
+        ...routingAttribution,
         usage: {
           promptTokens,
           completionTokens: Math.ceil(replyContent.length / 4),
@@ -424,6 +445,7 @@ export class AgentGraphExecutor {
           agent: 'rag',
           replyContent: emptyReply,
           citations: [],
+          ...routingAttribution,
           usage: {
             promptTokens,
             completionTokens: 28,
@@ -478,6 +500,7 @@ export class AgentGraphExecutor {
         replyContent,
         citations,
         followUpQueries,
+        ...routingAttribution,
         usage: {
           promptTokens,
           completionTokens: Math.ceil(replyContent.length / 4),
@@ -515,6 +538,7 @@ export class AgentGraphExecutor {
           agent: 'coding',
           replyContent: `${fallbackNotice}${inlineMarkdown}`,
           followUpQueries: buildCodingFollowUps(trimmedPrompt, trimmedPrompt.slice(0, 48), codingIntent),
+          ...routingAttribution,
           usage: {
             promptTokens,
             completionTokens: Math.ceil(inlineMarkdown.length / 4),
@@ -539,6 +563,7 @@ export class AgentGraphExecutor {
           agent: 'coding',
           replyContent: `${fallbackNotice}Replayed validated coding artifact "${existingArtifact.title}".`,
           artifactIds: [existingArtifact.artifactId],
+          ...routingAttribution,
           usage: {
             promptTokens,
             completionTokens: 32,
@@ -644,6 +669,7 @@ export class AgentGraphExecutor {
           validatedManifest.title,
           'CODE_GENERATION',
         ),
+        ...routingAttribution,
         usage: {
           promptTokens,
           completionTokens: generated.tokensUsed,
@@ -668,6 +694,7 @@ export class AgentGraphExecutor {
           agent: 'pdf',
           replyContent: `${fallbackNotice}Replayed generated PDF document "${existingPdf.title}".`,
           artifactIds: [existingPdf.artifactId],
+          ...routingAttribution,
           usage: {
             promptTokens,
             completionTokens: 24,
@@ -745,6 +772,7 @@ export class AgentGraphExecutor {
         replyContent: `${fallbackNotice}${generatedPdf.summaryMarkdown}`,
         artifactIds: [artifactId],
         followUpQueries: buildPdfFollowUps(generatedPdf.spec, trimmedPrompt),
+        ...routingAttribution,
         usage: {
           promptTokens,
           completionTokens: generatedPdf.tokensUsed,
@@ -769,6 +797,7 @@ export class AgentGraphExecutor {
           agent: 'ppt',
           replyContent: `${fallbackNotice}Replayed generated PPT presentation "${existingPpt.title}".`,
           artifactIds: [existingPpt.artifactId],
+          ...routingAttribution,
           usage: {
             promptTokens,
             completionTokens: 24,
@@ -848,6 +877,7 @@ export class AgentGraphExecutor {
         replyContent: `${fallbackNotice}${generatedPpt.summaryMarkdown}`,
         artifactIds: [artifactId],
         followUpQueries: buildPptFollowUps(generatedPpt.spec, trimmedPrompt),
+        ...routingAttribution,
         usage: {
           promptTokens,
           completionTokens: generatedPpt.tokensUsed,
@@ -894,6 +924,7 @@ export class AgentGraphExecutor {
           trimmedPrompt,
           imageAttachment.originalFilename,
         ),
+        ...routingAttribution,
         usage: {
           promptTokens,
           completionTokens: visionResult.tokensUsed,
@@ -1029,6 +1060,7 @@ export class AgentGraphExecutor {
         finalStyle,
         finalAspectRatio,
       ),
+      ...routingAttribution,
       usage: {
         promptTokens,
         completionTokens: 64,

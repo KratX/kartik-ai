@@ -2,10 +2,14 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   AGENT_SELECTOR_PILLS,
+  CHAT_RESPONSE_DEPTH_OPTIONS,
   buildArtifactRawDownloadUrl,
+  buildChatHandoffPrompt,
   buildUploadedFileRawUrl,
+  formatChatModeAndDepthMeta,
   formatCitationRelevancePercent,
   formatImageFileBadge,
+  formatRoutingAttribution,
   parseImageArtifactSpec,
   parsePdfArtifactDocument,
   parsePptArtifactSlideDeck,
@@ -374,5 +378,56 @@ describe('@kartik/frontend SlideDeckPreview & MarkdownRenderer Tokenizers (9.4.a
     assert.ok(imagePill);
     assert.equal(imagePill.label, 'Image Gen');
     assert.ok(imagePill.placeholder.includes('16:9'));
+  });
+
+  it('Fix #21: merges Auto Router into unified Chat hub, formats subtle routing/mode metadata, and builds clean specialist handoff prompts', () => {
+    assert.equal(AGENT_SELECTOR_PILLS.length, 8);
+    assert.equal(AGENT_SELECTOR_PILLS[0]?.id, 'chat');
+    assert.equal(AGENT_SELECTOR_PILLS[0]?.label, 'Chat');
+    assert.equal(
+      AGENT_SELECTOR_PILLS.some((p) => (p.id as string) === 'auto'),
+      false,
+    );
+
+    assert.deepEqual(
+      CHAT_RESPONSE_DEPTH_OPTIONS.map((o) => o.id),
+      ['concise', 'balanced', 'deep'],
+    );
+
+    assert.equal(
+      formatRoutingAttribution('search', true, 'Live web lookup'),
+      'Routed via Chat → Web Search · Live web lookup',
+    );
+    assert.equal(formatRoutingAttribution('search', false, 'Live web lookup'), null);
+    assert.equal(formatRoutingAttribution('chat', true, 'Anything'), null);
+
+    assert.equal(
+      formatChatModeAndDepthMeta('technical_architecture', 'deep'),
+      'Technical & Architecture · Deep',
+    );
+    assert.equal(formatChatModeAndDepthMeta(undefined, undefined), null);
+
+    const pdfHandoff = buildChatHandoffPrompt(
+      'pdf',
+      '### MVCC Overview\nPostgreSQL maintains multiple row versions for concurrent readers.',
+      'Explain PostgreSQL MVCC',
+    );
+    assert.ok(pdfHandoff.startsWith('Generate a comprehensive multi-section PDF report'));
+    assert.ok(pdfHandoff.includes('Explain PostgreSQL MVCC'));
+
+    const pptHandoff = buildChatHandoffPrompt(
+      'ppt',
+      'Key points on zero-trust service mesh security.',
+      'Zero-trust service mesh',
+    );
+    assert.ok(pptHandoff.startsWith('Create a 6-slide presentation deck'));
+
+    const webHandoff = buildChatHandoffPrompt(
+      'search',
+      'Some summary',
+      'PostgreSQL 18 MVCC improvements',
+    );
+    assert.ok(webHandoff.startsWith('Search the web to verify and cite current sources for:'));
+    assert.ok(webHandoff.includes('PostgreSQL 18 MVCC improvements'));
   });
 });

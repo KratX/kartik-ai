@@ -17,6 +17,127 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-21',
+    title: 'Fix #21 — Unified Flagship Chat Orchestrator Overhaul (Auto Router Merged Into Chat, 5-Mode Adaptive Reasoning, Depth Control, Sliding-Window Memory, Handoffs & Upgraded Code Blocks)',
+    subtitle:
+      '21 files · Removes standalone Auto Router and upgrades Chat into the flagship default hub: single canonical classifySpecialistRoute smart hybrid router shared across @kartik/chat and @kartik/agent (keeps conceptual technical Q&A in Chat at 1 cr while auto-delegating explicit builds, documents, decks, artwork, live web lookups & file attachments with quiet unboxed header attribution), 5-mode adaptive reasoning engine (Direct Answer, Technical & Architecture, Writing & Editorial, Strategy & Trade-Offs, Guided Mentor), Concise/Balanced/Deep composer depth control, bounded 12-turn sliding-window multi-turn Gemini memory plus active thread file & artifact awareness, 3 contextual follow-up chips on every Chat reply, unified Copy Markdown + Regenerate message toolbar, one-click Chat handoffs to Export PDF / Build Slides / Verify on Web, upgraded code blocks with language header, tabular line count, Wrap toggle & clipboard-safe Copy, plus backend & frontend unit tests',
+    zipFilename: 'fix-21-unified-flagship-chat-orchestrator-memory-and-handoffs.zip',
+    zipHref: '/__downloads/fix-21-unified-flagship-chat-orchestrator-memory-and-handoffs.zip',
+    commitMessage: `feat(chat,agent,server,frontend): unify Auto Router into flagship Chat with 5-mode reasoning, depth control, multi-turn memory & specialist handoffs
+
+- Add canonical classifySpecialistRoute smart hybrid router and multi-turn/depth/routing fields in backend/shared/contracts/index.ts shared by @kartik/chat and @kartik/agent
+- Add backend/services/agent/src/agents/chat/index.ts with 5 adaptive reasoning modes, Concise/Balanced/Deep depth calibration, bounded 12-turn sliding-window memory sanitizer, thread file/artifact context formatter, Gemini multi-turn contents builder, FOLLOW_UP_QUESTIONS parser, and topic/depth/memory-aware offline synthesis
+- Upgrade LiveGeminiChatModelProvider, AgentGraphExecutor, KartikPlatformRuntime, and server.ts to pass responseDepth, conversationHistory, and threadContext into Chat and attach subtle routedFromChat/routingReason metadata on delegated specialist replies
+- Remove standalone Auto Router pill, make Chat the default unified hub with Concise/Balanced/Deep depth control, upgrade CodeBlockCard with tabular line count & Wrap toggle, add Copy Markdown + Regenerate toolbar and one-click Export PDF / Build Slides / Verify on Web handoffs, and add Fix #21 backend & frontend unit tests`,
+    changedFiles: [
+      {
+        path: 'backend/shared/contracts/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/shared/contracts/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/agents/chat/index.ts',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/agents/chat/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/models/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/models/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/services/live-gemini-providers.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/services/live-gemini-providers.ts',
+      },
+      {
+        path: 'backend/services/agent/src/graph/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/graph/index.ts',
+      },
+      {
+        path: 'backend/services/agent/src/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/agent/src/index.ts',
+      },
+      {
+        path: 'backend/services/chat/src/services/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/chat/src/services/index.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'server.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=server.ts',
+      },
+      {
+        path: 'frontend/src/types/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/types/index.ts',
+      },
+      {
+        path: 'frontend/src/components/slide-deck-and-markdown.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/slide-deck-and-markdown.ts',
+      },
+      {
+        path: 'frontend/src/components/chat/MarkdownRenderer.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MarkdownRenderer.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/ChatInput.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ChatInput.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageBubble.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageBubble.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageList.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageList.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/ChatArea.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ChatArea.tsx',
+      },
+      {
+        path: 'frontend/src/App.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/App.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+      {
+        path: 'backend/services/agent/tests/chat-orchestrator-engine.test.ts',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=backend/services/agent/tests/chat-orchestrator-engine.test.ts',
+      },
+      {
+        path: 'frontend/tests/slide-deck-and-markdown.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/tests/slide-deck-and-markdown.test.ts',
+      },
+      {
+        path: 'frontend/tests/multi-agent-workspace-ui.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/tests/multi-agent-workspace-ui.test.ts',
+      },
+    ],
+  },
+  {
     id: 'fix-20',
     title: 'Fix #20 — Image Gen Studio & Art-Direction Overhaul (6 Style Archetypes, Auto Aspect-Ratio Control, Multimodal Image-to-Image Restyling, Studio Card, Prompt Inspector & Lightbox)',
     subtitle:

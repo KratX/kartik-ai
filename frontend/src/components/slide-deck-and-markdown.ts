@@ -692,7 +692,7 @@ export function buildArtifactRawDownloadUrl(artifactId: string): string {
 }
 
 export interface AgentSelectorPillSpec {
-  readonly id: 'auto' | 'chat' | 'search' | 'coding' | 'pdf' | 'ppt' | 'rag' | 'vision' | 'image';
+  readonly id: 'chat' | 'search' | 'coding' | 'pdf' | 'ppt' | 'rag' | 'vision' | 'image';
   readonly label: string;
   readonly creditCostLabel: string;
   readonly placeholder: string;
@@ -700,16 +700,11 @@ export interface AgentSelectorPillSpec {
 
 export const AGENT_SELECTOR_PILLS: readonly AgentSelectorPillSpec[] = Object.freeze([
   {
-    id: 'auto',
-    label: 'Auto Router',
-    creditCostLabel: '1–10 cr',
-    placeholder: 'Ask anything — LangGraph Router will select the right specialist agent...',
-  },
-  {
     id: 'chat',
     label: 'Chat',
-    creditCostLabel: '1 cr',
-    placeholder: 'Ask a technical or architectural question...',
+    creditCostLabel: '1 cr+',
+    placeholder:
+      'Ask anything — Chat answers directly or smart-routes to Search, Coding, PDF, PPT, RAG, Vision & Image...',
   },
   {
     id: 'search',
@@ -754,6 +749,126 @@ export const AGENT_SELECTOR_PILLS: readonly AgentSelectorPillSpec[] = Object.fre
     placeholder: 'Describe the artwork, logo, diagram, or aspect ratio (16:9, 9:16, 4:3) to generate...',
   },
 ]);
+
+export interface ChatResponseDepthOption {
+  readonly id: 'concise' | 'balanced' | 'deep';
+  readonly label: string;
+  readonly description: string;
+}
+
+export const CHAT_RESPONSE_DEPTH_OPTIONS: readonly ChatResponseDepthOption[] = Object.freeze([
+  {
+    id: 'concise',
+    label: 'Concise',
+    description: 'Short, high-signal takeaways',
+  },
+  {
+    id: 'balanced',
+    label: 'Balanced',
+    description: 'Structured answer with examples',
+  },
+  {
+    id: 'deep',
+    label: 'Deep',
+    description: 'Senior deep dive, edge cases & checklists',
+  },
+]);
+
+const SPECIALIST_DISPLAY_LABELS: Readonly<Record<AgentSelectorPillSpec['id'], string>> =
+  Object.freeze({
+    chat: 'Chat',
+    search: 'Web Search',
+    coding: 'Coding',
+    pdf: 'PDF Gen',
+    ppt: 'PPT Gen',
+    rag: 'PDF RAG',
+    vision: 'Vision OCR',
+    image: 'Image Gen',
+  });
+
+const CHAT_MODE_DISPLAY_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  direct_concise: 'Direct Answer',
+  technical_architecture: 'Technical & Architecture',
+  writing_editorial: 'Writing & Editorial',
+  strategy_brainstorm: 'Strategy & Trade-Offs',
+  step_by_step_mentor: 'Guided Mentor',
+});
+
+const CHAT_DEPTH_DISPLAY_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  concise: 'Concise',
+  balanced: 'Balanced',
+  deep: 'Deep',
+});
+
+/**
+ * Formats a quiet, unboxed routing attribution line when unified Chat smart-delegates
+ * a turn to a specialist (e.g., `Routed via Chat → Web Search · Live web lookup`).
+ */
+export function formatRoutingAttribution(
+  agent: AgentSelectorPillSpec['id'] | undefined,
+  routedFromChat?: boolean,
+  routingReason?: string,
+): string | null {
+  if (!routedFromChat || !agent || agent === 'chat') {
+    return null;
+  }
+  const targetLabel = SPECIALIST_DISPLAY_LABELS[agent] ?? agent.toUpperCase();
+  const reason = routingReason?.trim();
+  return reason
+    ? `Routed via Chat → ${targetLabel} · ${reason}`
+    : `Routed via Chat → ${targetLabel}`;
+}
+
+/**
+ * Formats quiet inline Chat mode & response depth metadata (e.g. `Technical & Architecture · Deep`).
+ */
+export function formatChatModeAndDepthMeta(
+  chatMode?: string,
+  responseDepth?: string,
+): string | null {
+  const modeLabel = chatMode ? CHAT_MODE_DISPLAY_LABELS[chatMode] : undefined;
+  const depthLabel = responseDepth ? CHAT_DEPTH_DISPLAY_LABELS[responseDepth] : undefined;
+  const parts = [modeLabel, depthLabel].filter(Boolean);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+function trimAtWordBoundary(text: string, maxChars: number): string {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (clean.length <= maxChars) {
+    return clean;
+  }
+  const sliced = clean.slice(0, maxChars);
+  const lastSpace = sliced.lastIndexOf(' ');
+  return (lastSpace > Math.floor(maxChars * 0.5) ? sliced.slice(0, lastSpace) : sliced)
+    .replace(/[\s,.;:!?-]+$/, '')
+    .trim();
+}
+
+/**
+ * Builds a clean, focused specialist handoff prompt from a Chat reply (PDF, PPT, or Web Search).
+ */
+export function buildChatHandoffPrompt(
+  target: 'pdf' | 'ppt' | 'search',
+  answerMarkdown: string,
+  userPrompt?: string,
+): string {
+  const plainSummary = answerMarkdown
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/[*_`>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const topic = trimAtWordBoundary(userPrompt?.trim() || plainSummary, 90) || 'this topic';
+  const digest = trimAtWordBoundary(plainSummary, 260);
+
+  if (target === 'pdf') {
+    return `Generate a comprehensive multi-section PDF report on "${topic}" incorporating these key points: ${digest}`;
+  }
+  if (target === 'ppt') {
+    return `Create a 6-slide presentation deck on "${topic}" covering these key points: ${digest}`;
+  }
+  return `Search the web to verify and cite current sources for: ${topic}`;
+}
 
 /**
  * Combines a multi-file `code_bundle` (`index.html`, `styles.css`, `app.js`) into a single

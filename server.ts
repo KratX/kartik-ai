@@ -23,7 +23,10 @@ import {
   createSuccessEnvelope,
   mapErrorToHttpResponse,
 } from './backend/shared/errors/index.js';
-import type { SpecialistAgentName } from './backend/shared/contracts/index.js';
+import type {
+  ChatResponseDepth,
+  SpecialistAgentName,
+} from './backend/shared/contracts/index.js';
 import {
   assertRootRuntimeDemoOrLocalOnly,
   type KartikPlatformRuntime,
@@ -334,8 +337,15 @@ export function createKartikExpressApp(
         const body = (req.body ?? {}) as {
           prompt?: string;
           preferredAgent?: SpecialistAgentName;
+          responseDepth?: ChatResponseDepth;
           attachmentFileIds?: string[];
         };
+        const responseDepth: ChatResponseDepth | undefined =
+          body.responseDepth === 'concise' ||
+          body.responseDepth === 'balanced' ||
+          body.responseDepth === 'deep'
+            ? body.responseDepth
+            : undefined;
 
         const turn = await runtime.sendMessageTurn(actor, {
           conversationId: req.params.conversationId ?? '',
@@ -343,6 +353,7 @@ export function createKartikExpressApp(
           traceId,
           prompt: String(body.prompt ?? ''),
           preferredAgent: body.preferredAgent,
+          responseDepth,
           attachmentFileIds: body.attachmentFileIds,
         });
 

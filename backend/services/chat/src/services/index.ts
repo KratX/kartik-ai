@@ -3,8 +3,8 @@ import {
   AppError,
   REDIS_TTL_SECONDS,
   RedisKeys,
+  classifySpecialistRoute,
   computePayloadFingerprint,
-  isLiveWebSearchPrompt,
   validateIdempotencyKey,
   type AgentExecuteRequest,
   type AgentExecuteResponse,
@@ -55,64 +55,30 @@ export const DEFAULT_OPERATION_UNITS: Readonly<Record<BillingOperation, number>>
   });
 
 /**
- * Lightweight prompt classifier used by Chat prior to Billing reservation when the caller
- * does not explicitly specify `requestedAgent`, matching Agent's deterministic specialist router.
+ * Canonical prompt classifier used by Chat prior to Billing reservation when the caller
+ * does not explicitly specify `requestedAgent`, sharing `classifySpecialistRoute` with Agent
+ * so credit reservation and graph execution stay 100% synchronized.
  */
 export function resolveTargetSpecialist(input: {
   readonly prompt: string;
   readonly requestedAgent?: SpecialistAgentName;
   readonly attachmentFileIds?: readonly string[];
+  readonly hasPdfAttachment?: boolean;
   readonly hasImageBytes?: boolean;
 }): SpecialistAgentName {
-  if (input.requestedAgent) {
-    return input.requestedAgent;
-  }
-  if (input.hasImageBytes) {
-    return 'vision';
-  }
-  if (input.attachmentFileIds && input.attachmentFileIds.length > 0) {
-    return 'rag';
-  }
-  const lower = input.prompt.toLowerCase();
-  if (
-    lower.includes('generate image') ||
-    lower.includes('draw ') ||
-    lower.includes('create an image')
-  ) {
-    return 'image';
-  }
-  if (
-    lower.includes('create a ppt') ||
-    lower.includes('generate a ppt') ||
-    lower.includes('presentation') ||
-    lower.includes('slide deck') ||
-    lower.includes('powerpoint')
-  ) {
-    return 'ppt';
-  }
-  if (
-    lower.includes('generate a pdf') ||
-    lower.includes('create a pdf') ||
-    lower.includes('pdf report') ||
-    lower.includes('export pdf')
-  ) {
-    return 'pdf';
-  }
-  if (
-    lower.includes('build an app') ||
-    lower.includes('write code') ||
-    lower.includes('react component') ||
-    lower.includes('implement ')
-  ) {
-    return 'coding';
-  }
-  if (isLiveWebSearchPrompt(input.prompt)) {
-    return 'search';
-  }
-  if (lower.includes('typescript')) {
-    return 'coding';
-  }
-  return 'chat';
+  const hasPdfAttachment =
+    input.hasPdfAttachment ??
+    Boolean(
+      !input.hasImageBytes &&
+        input.attachmentFileIds &&
+        input.attachmentFileIds.length > 0,
+    );
+  return classifySpecialistRoute({
+    prompt: input.prompt,
+    preferredAgent: input.requestedAgent,
+    hasPdfAttachment,
+    hasImageAttachment: Boolean(input.hasImageBytes),
+  }).agent;
 }
 
 export interface ChatTurnResult {

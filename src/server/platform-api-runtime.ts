@@ -50,6 +50,9 @@ import {
 } from '../../backend/services/agent/src/index.js';
 import {
   computePayloadFingerprint,
+  type ChatResponseDepth,
+  type ConversationHistoryTurn,
+  type ConversationThreadContext,
   type SpecialistAgentName,
 } from '../../backend/shared/contracts/index.js';
 import {
@@ -82,6 +85,10 @@ export interface PlatformMessage {
   readonly role: 'user' | 'assistant';
   readonly content: string;
   readonly agentUsed?: SpecialistAgentName;
+  readonly routedFromChat?: boolean;
+  readonly routingReason?: string;
+  readonly chatMode?: string;
+  readonly responseDepth?: ChatResponseDepth;
   readonly requestId?: string;
   readonly creditsCharged?: number;
   readonly idempotentReplay?: boolean;
@@ -730,11 +737,11 @@ export class KartikPlatformRuntime {
         content: [
           '### Welcome to **Kartik.ai** — Multi-Agent AI Workspace',
           '',
-          'Select any specialist agent pill below or type naturally and the **LangGraph Router** will dispatch your turn automatically:',
+          'Start typing in **Chat** for adaptive multi-turn reasoning with smart specialist delegation, or pick any specialist pill below directly:',
           '',
           '| Specialist Agent | What It Produces | Cost / Rate Limit |',
           '| :--- | :--- | :--- |',
-          '| **Chat (`chat`)** | Multi-turn technical synthesis, Markdown tables & architecture reasoning | `1 credit` · `20 req/min` |',
+          '| **Chat (`chat`)** | Unified flagship hub: 5-mode adaptive reasoning, Concise/Balanced/Deep depth control, sliding-window thread memory & smart auto-delegation to every specialist | `1 credit+` · `20 req/min` |',
           '| **Web Search (`search`)** | Hybrid live Google Search + multi-source web reader with clickable `[1]` citations, rich source cards & follow-up research | `2 credits` · `5 req/min` |',
           '| **Coding (`coding`)** | 6-intent classifier: builds zero-CDN 3-file (`index.html`, `styles.css`, `app.js`) live editable sandbox apps with console capture & `.html` export, OR inline snippets/reviews/debugging | `5 credits` · `5 req/min` |',
           '| **PDF Generator (`pdf`)** | Publication-grade `%PDF-1.4` engine: 6 document archetypes, executive masthead, KPI metrics, vector tables, callouts & interactive in-chat Document/Native PDF viewer | `5 credits` · `5 req/min` |',
@@ -1126,6 +1133,7 @@ export class KartikPlatformRuntime {
       readonly traceId: string;
       readonly prompt: string;
       readonly preferredAgent?: SpecialistAgentName;
+      readonly responseDepth?: ChatResponseDepth;
       readonly attachmentFileIds?: readonly string[];
     },
   ) {
@@ -1173,6 +1181,7 @@ export class KartikPlatformRuntime {
       prompt: trimmedPrompt,
       requestedAgent: input.preferredAgent,
       attachmentFileIds,
+      hasPdfAttachment: attachedFiles.some((f) => f.mimeType === 'application/pdf'),
       hasImageBytes: attachedFiles.some((f) => f.mimeType.startsWith('image/')),
     });
 
@@ -1340,7 +1349,60 @@ export class KartikPlatformRuntime {
       createdAt: nowIso,
     };
 
-    // 5. Phase 2 — Execute Specialist Agent via LangGraph Router
+    // Fix #21: Build bounded sliding-window conversation memory (last 12 real turns)
+    // and compact thread file/artifact context strictly scoped to this authenticated user's thread.
+    const priorMessages = this.messagesByConversation.get(conv.conversationId) ?? [];
+    const conversationHistory: ConversationHistoryTurn[] = priorMessages
+      .filter((m) => !m.messageId.startsWith('msg_welcome_assistant_'))
+      .slice(-12)
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+        ...(m.agentUsed ? { agentUsed: m.agentUsed } : {}),
+      }));
+
+    const seenFileNames = new Set<string>();
+    const threadFiles: Array<{
+      readonly filename: string;
+      readonly mimeType: string;
+      readonly pageCount?: number | null;
+    }> = [];
+    const seenArtifactTitles = new Set<string>();
+    const threadArtifacts: Array<{
+      readonly title: string;
+      readonly artifactType: string;
+    }> = [];
+
+    for (const msg of priorMessages) {
+      for (const f of msg.attachedFiles ?? []) {
+        if (!seenFileNames.has(f.fileId)) {
+          seenFileNames.add(f.fileId);
+          threadFiles.push({
+            filename: f.originalFilename,
+            mimeType: f.mimeType,
+            pageCount: f.pageCount,
+          });
+        }
+      }
+      for (const art of msg.artifacts ?? []) {
+        if (!seenArtifactTitles.has(art.artifactId)) {
+          seenArtifactTitles.add(art.artifactId);
+          threadArtifacts.push({
+            title: art.title,
+            artifactType: art.artifactType,
+          });
+        }
+      }
+    }
+    const threadContext: ConversationThreadContext | undefined =
+      threadFiles.length > 0 || threadArtifacts.length > 0
+        ? {
+            files: threadFiles.slice(-6),
+            artifacts: threadArtifacts.slice(-6),
+          }
+        : undefined;
+
+    // 5. Phase 2 — Execute Specialist Agent via Unified Chat / LangGraph Router
     let execResult: Awaited<ReturnType<AgentGraphExecutor['execute']>>;
     try {
       execResult = await this.graphExecutor.execute({
@@ -1352,6 +1414,9 @@ export class KartikPlatformRuntime {
         prompt: trimmedPrompt,
         preferredAgent: input.preferredAgent,
         attachmentFileIds: effectiveAttachmentFileIds,
+        responseDepth: input.responseDepth,
+        conversationHistory,
+        threadContext,
       });
     } catch (err) {
       const failNowIso = new Date().toISOString();
@@ -1432,6 +1497,10 @@ export class KartikPlatformRuntime {
       role: 'assistant',
       content: execResult.replyContent,
       agentUsed: execResult.agent,
+      ...(execResult.routedFromChat ? { routedFromChat: true } : {}),
+      ...(execResult.routingReason ? { routingReason: execResult.routingReason } : {}),
+      ...(execResult.chatMode ? { chatMode: execResult.chatMode } : {}),
+      ...(execResult.responseDepth ? { responseDepth: execResult.responseDepth } : {}),
       requestId,
       creditsCharged: creditCost,
       idempotentReplay: false,
