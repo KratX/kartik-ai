@@ -1,19 +1,114 @@
 import React, { useState } from 'react';
-import { Check, Copy, Terminal, WrapText } from 'lucide-react';
+import { Check, Copy, ExternalLink, FileText, Globe, Terminal, WrapText } from 'lucide-react';
 import {
+  formatCitationRelevancePercent,
   tokenizeInlineMarkdown,
   tokenizeMarkdownBlocks,
   type MarkdownBlock,
 } from '../slide-deck-and-markdown.js';
 import type { MessageCitation } from '../../types/index.js';
 
-function formatCitationTooltip(citation: MessageCitation, index: number): string {
-  const domainPart = citation.domain
-    ? ` (${citation.domain})`
-    : /^https?:\/\//i.test(citation.urlOrPage)
-      ? ''
-      : ` (${citation.urlOrPage})`;
-  return `[${index}] ${citation.title}${domainPart}`;
+function resolveCitationHost(citation: MessageCitation): string {
+  if (citation.domain && citation.domain.trim()) {
+    return citation.domain.trim();
+  }
+  try {
+    return new URL(citation.urlOrPage).hostname.replace(/^www\./i, '');
+  } catch {
+    return citation.urlOrPage;
+  }
+}
+
+function InlineCitationBadge({
+  index,
+  citation,
+  onCitationClick,
+}: {
+  readonly index: number;
+  readonly citation: MessageCitation;
+  readonly onCitationClick?: (citationZeroBasedIndex: number) => void;
+}) {
+  const [isHovered, setIsHovered] = useState(false);
+  const citationZeroIdx = index - 1;
+  const isDocumentCitation =
+    citation.sourceType === 'document' ||
+    !/^https?:\/\//i.test(citation.urlOrPage);
+  const hostOrPage = resolveCitationHost(citation);
+  const matchPct = formatCitationRelevancePercent(citation.score);
+
+  return (
+    <sup
+      className="relative inline-block ml-0.5 align-super"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      onFocus={() => setIsHovered(true)}
+      onBlur={() => setIsHovered(false)}
+    >
+      <button
+        type="button"
+        onClick={() => onCitationClick?.(citationZeroIdx)}
+        data-inline-citation-badge={index}
+        aria-label={`Source ${index}: ${citation.title}`}
+        className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-mono font-semibold tabular-nums rounded border transition-colors cursor-pointer ${
+          isDocumentCitation
+            ? 'bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/35'
+            : 'bg-white/[0.09] hover:bg-white/[0.2] text-zinc-100 border-white/[0.18]'
+        }`}
+      >
+        {index}
+      </button>
+
+      {/* 21st.dev Inline Citation Hover Popover Card */}
+      {isHovered && (
+        <span
+          role="tooltip"
+          data-citation-hover-card={index}
+          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 w-72 max-w-[80vw] rounded-xl bg-[#111114]/98 backdrop-blur-xl border border-white/[0.14] shadow-[0_20px_50px_-10px_rgba(0,0,0,0.92)] p-3 text-left font-sans not-italic font-normal leading-snug block"
+        >
+          <span className="flex items-start gap-2">
+            <span className="w-5 h-5 rounded-md bg-white/[0.07] border border-white/[0.1] flex items-center justify-center shrink-0 mt-0.5">
+              {isDocumentCitation ? (
+                <FileText className="w-3 h-3 text-emerald-400" />
+              ) : (
+                <Globe className="w-3 h-3 text-zinc-200" />
+              )}
+            </span>
+            <span className="min-w-0 flex-1 block">
+              <span className="block text-[11.5px] font-semibold text-white line-clamp-2">
+                {citation.title}
+              </span>
+              <span className="block text-[10px] font-mono text-zinc-400 truncate mt-0.5 tabular-nums">
+                {hostOrPage}
+                {matchPct !== null ? ` · ${matchPct}% match` : ''}
+              </span>
+            </span>
+          </span>
+
+          {citation.snippet && (
+            <span className="block mt-2 pt-2 border-t border-white/[0.07] text-[11px] text-zinc-300 line-clamp-3 leading-relaxed">
+              &ldquo;{citation.snippet.trim()}&rdquo;
+            </span>
+          )}
+
+          <span className="mt-2 pt-1.5 border-t border-white/[0.06] flex items-center justify-between text-[10px] text-zinc-400">
+            <span>Click badge to jump</span>
+            {!isDocumentCitation && (
+              <a
+                href={citation.urlOrPage}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 text-white hover:underline"
+              >
+                <span>Open</span>
+                <ExternalLink className="w-2.5 h-2.5" />
+              </a>
+            )}
+          </span>
+        </span>
+      )}
+    </sup>
+  );
 }
 
 function renderInlineFormattedText(
@@ -83,26 +178,13 @@ function renderInlineFormattedText(
         return <React.Fragment key={idx}>{token.raw}</React.Fragment>;
       }
 
-      const isDocumentCitation =
-        matched.sourceType === 'document' ||
-        !/^https?:\/\//i.test(matched.urlOrPage);
-
       return (
-        <sup key={idx} className="ml-0.5 align-super">
-          <button
-            type="button"
-            onClick={() => onCitationClick?.(citationIdx)}
-            title={formatCitationTooltip(matched, token.index)}
-            aria-label={`Jump to source ${token.index}: ${matched.title}`}
-            className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-mono font-semibold tabular-nums rounded border transition-colors cursor-pointer ${
-              isDocumentCitation
-                ? 'bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/35'
-                : 'bg-white/[0.09] hover:bg-white/[0.18] text-zinc-100 border-white/[0.18]'
-            }`}
-          >
-            {token.index}
-          </button>
-        </sup>
+        <InlineCitationBadge
+          key={idx}
+          index={token.index}
+          citation={matched}
+          onCitationClick={onCitationClick}
+        />
       );
     }
 
@@ -198,20 +280,33 @@ export interface MarkdownRendererProps {
   readonly content: string;
   readonly citations?: readonly MessageCitation[];
   readonly onCitationClick?: (citationZeroBasedIndex: number) => void;
+  readonly isStreaming?: boolean;
 }
 
 export function MarkdownRenderer({
   content,
   citations,
   onCitationClick,
+  isStreaming = false,
 }: MarkdownRendererProps) {
   const blocks: readonly MarkdownBlock[] = tokenizeMarkdownBlocks(content);
   const inline = (text: string) =>
     renderInlineFormattedText(text, citations, onCitationClick);
 
+  const caret = isStreaming ? (
+    <span
+      aria-hidden="true"
+      data-stream-caret="true"
+      className="kartik-stream-caret inline-block w-[7px] h-[14px] ml-1 align-middle rounded-[2px] bg-white/90"
+    />
+  ) : null;
+
   return (
     <div className="space-y-3.5 text-[14.5px] text-zinc-200 leading-[1.68] tracking-[0.004em]">
       {blocks.map((block, index) => {
+        const isLastBlock = index === blocks.length - 1;
+        const flowClass = isStreaming ? 'kartik-flow-block' : '';
+
         if (block.type === 'heading') {
           const sizeClass =
             block.level === 1
@@ -220,19 +315,18 @@ export function MarkdownRenderer({
                 ? 'text-base font-semibold text-white tracking-tight mt-3.5'
                 : 'text-sm font-semibold text-zinc-100 mt-2.5';
           return (
-            <div key={index} className={sizeClass}>
+            <div key={index} className={`${sizeClass} ${flowClass}`}>
               {inline(block.text)}
+              {isLastBlock && caret}
             </div>
           );
         }
 
         if (block.type === 'code') {
           return (
-            <CodeBlockCard
-              key={index}
-              language={block.language}
-              code={block.code}
-            />
+            <div key={index} className={flowClass}>
+              <CodeBlockCard language={block.language} code={block.code} />
+            </div>
           );
         }
 
@@ -240,7 +334,7 @@ export function MarkdownRenderer({
           return (
             <div
               key={index}
-              className="my-4 overflow-x-auto rounded-xl border border-white/[0.08] bg-[#0e0e11]"
+              className={`my-4 overflow-x-auto rounded-xl border border-white/[0.08] bg-[#0e0e11] ${flowClass}`}
             >
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
@@ -272,9 +366,10 @@ export function MarkdownRenderer({
           return (
             <blockquote
               key={index}
-              className="px-4 py-2.5 border border-white/[0.1] bg-white/[0.03] text-zinc-300 text-xs italic rounded-xl"
+              className={`px-4 py-2.5 border border-white/[0.1] bg-white/[0.03] text-zinc-300 text-xs italic rounded-xl ${flowClass}`}
             >
               {inline(block.text)}
+              {isLastBlock && caret}
             </blockquote>
           );
         }
@@ -293,9 +388,10 @@ export function MarkdownRenderer({
                   : block.ordered
                     ? 'list-decimal pl-5'
                     : 'list-disc pl-5'
-              } text-zinc-200 marker:text-zinc-500`}
+              } text-zinc-200 marker:text-zinc-500 ${flowClass}`}
             >
               {block.items.map((item, iIdx) => {
+                const isLastItem = isLastBlock && iIdx === block.items.length - 1;
                 const taskMatch = !block.ordered
                   ? /^\[([ xX]?)\]\s+([\s\S]*)$/.exec(item.trim())
                   : null;
@@ -315,22 +411,30 @@ export function MarkdownRenderer({
                       </span>
                       <span className="min-w-0 flex-1">
                         {inline(taskMatch[2] ?? '')}
+                        {isLastItem && caret}
                       </span>
                     </li>
                   );
                 }
-                return <li key={iIdx}>{inline(item)}</li>;
+                return (
+                  <li key={iIdx}>
+                    {inline(item)}
+                    {isLastItem && caret}
+                  </li>
+                );
               })}
             </ListTag>
           );
         }
 
         return (
-          <p key={index} className="text-zinc-200">
+          <p key={index} className={`text-zinc-200 ${flowClass}`}>
             {inline(block.text)}
+            {isLastBlock && caret}
           </p>
         );
       })}
+      {isStreaming && blocks.length === 0 && caret}
     </div>
   );
 }

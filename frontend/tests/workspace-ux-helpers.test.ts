@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  HERO_SCRAMBLE_LINES,
   SLASH_COMMANDS,
   clampCanvasWidthPct,
   computeCreditCapacity,
+  computeScrambleFrame,
+  computeStreamStepChars,
   extractThreadArtifacts,
   filterCommandPaletteItems,
   filterCreditLedger,
@@ -12,6 +15,7 @@ import {
   formatPlanUnitPrice,
   getTimeOfDayGreeting,
   groupConversationsByDate,
+  inferConversationArtifactKind,
   matchSlashCommands,
   stripLeadingSlashCommand,
   summarizeCreditLedger,
@@ -325,4 +329,50 @@ test('computeCreditCapacity calculates exact per-specialist run capacity from av
   const zeroRows = computeCreditCapacity(-10);
   assert.equal(zeroRows.every((r) => r.estimatedRuns === 0), true);
 });
+
+test('HERO_SCRAMBLE_LINES provides 7 curated non-empty lines for Hero MotionScrambleText', () => {
+  assert.equal(HERO_SCRAMBLE_LINES.length, 7);
+  for (const line of HERO_SCRAMBLE_LINES) {
+    assert.ok(line.trim().length > 15);
+  }
+});
+
+test('computeScrambleFrame preserves spaces and settles to exact target at progress 1', () => {
+  const target = 'Eight specialists. One unified workspace.';
+  const start = computeScrambleFrame(target, 0, 1);
+  assert.equal(start.length, target.length);
+  assert.notEqual(start, target);
+  // Spaces preserved at identical indices
+  for (let i = 0; i < target.length; i += 1) {
+    if (target[i] === ' ') {
+      assert.equal(start[i], ' ');
+    }
+  }
+  const mid = computeScrambleFrame(target, 0.5, 4);
+  assert.equal(mid.slice(0, 10), target.slice(0, 10));
+  assert.equal(computeScrambleFrame(target, 1, 9), target);
+});
+
+test('computeStreamStepChars scales fluidly across short and long responses with zero guard', () => {
+  assert.equal(computeStreamStepChars(120, 0), 0);
+  const shortStep = computeStreamStepChars(120, 100);
+  const longStep = computeStreamStepChars(3000, 1000);
+  assert.equal(shortStep, 2);
+  assert.ok(longStep > shortStep);
+  assert.equal(computeStreamStepChars(3000, 5), 5);
+});
+
+test('inferConversationArtifactKind prioritizes recorded artifactType and falls back to title keywords', () => {
+  assert.equal(inferConversationArtifactKind('Random chat', 'code_bundle'), 'code_bundle');
+  assert.equal(inferConversationArtifactKind('Random chat', 'pdf_document'), 'pdf_document');
+  assert.equal(inferConversationArtifactKind('Random chat', 'ppt_presentation'), 'ppt_presentation');
+  assert.equal(inferConversationArtifactKind('Random chat', 'generated_image'), 'generated_image');
+
+  assert.equal(inferConversationArtifactKind('Build an interactive calculator app'), 'code_bundle');
+  assert.equal(inferConversationArtifactKind('Generate a PDF consensus report'), 'pdf_document');
+  assert.equal(inferConversationArtifactKind('Create a 6-slide presentation deck'), 'ppt_presentation');
+  assert.equal(inferConversationArtifactKind('Generate monochrome architectural artwork'), 'generated_image');
+  assert.equal(inferConversationArtifactKind('Explain PostgreSQL MVCC locking'), null);
+});
+
 

@@ -2,14 +2,17 @@ import React, { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Check,
+  Code2,
   Command,
   FileText,
+  Image as ImageIcon,
   LogOut,
   MessageSquare,
   Pencil,
   Pin,
   PinOff,
   Plus,
+  Presentation,
   Search,
   Trash2,
   UserCheck,
@@ -17,12 +20,19 @@ import {
   Zap,
 } from 'lucide-react';
 import type {
+  ArtifactRecord,
   PlatformConversation,
   PlatformUser,
   UploadedFileRecord,
 } from '../../types/index.js';
-import { groupConversationsByDate } from '../workspace-ux-helpers.js';
-import { ObsidianBrandMark } from '../motion/primitives.js';
+import {
+  groupConversationsByDate,
+  inferConversationArtifactKind,
+} from '../workspace-ux-helpers.js';
+import {
+  AnimatedBrandLogo,
+  ObsidianBrandMark,
+} from '../motion/primitives.js';
 
 export interface SidebarProps {
   readonly isCollapsed: boolean;
@@ -32,6 +42,9 @@ export interface SidebarProps {
   readonly activeConversationId: string | null;
   readonly pinnedIds: ReadonlySet<string>;
   readonly titleOverrides: Readonly<Record<string, string>>;
+  readonly threadArtifactTypes?: Readonly<
+    Record<string, ArtifactRecord['artifactType']>
+  >;
   readonly uploadedFiles: readonly UploadedFileRecord[];
   readonly user: PlatformUser | null;
   readonly availableCredits: number;
@@ -46,6 +59,35 @@ export interface SidebarProps {
   readonly onLogout: () => void;
 }
 
+function renderThreadIcon(
+  isPinned: boolean,
+  isActive: boolean,
+  title: string,
+  recordedType?: ArtifactRecord['artifactType'],
+) {
+  if (isPinned) {
+    return <Pin className="w-3 h-3 text-zinc-300 shrink-0" />;
+  }
+  const kind = inferConversationArtifactKind(title, recordedType);
+  const colorClass = isActive ? 'text-white' : 'text-zinc-500';
+  switch (kind) {
+    case 'code_bundle':
+      return <Code2 className={`w-3.5 h-3.5 shrink-0 ${colorClass}`} />;
+    case 'pdf_document':
+      return <FileText className={`w-3.5 h-3.5 shrink-0 ${colorClass}`} />;
+    case 'ppt_presentation':
+      return <Presentation className={`w-3.5 h-3.5 shrink-0 ${colorClass}`} />;
+    case 'generated_image':
+      return <ImageIcon className={`w-3.5 h-3.5 shrink-0 ${colorClass}`} />;
+    default:
+      return (
+        <MessageSquare
+          className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-white' : 'text-zinc-600'}`}
+        />
+      );
+  }
+}
+
 export function Sidebar({
   isCollapsed,
   isMobileOpen,
@@ -54,6 +96,7 @@ export function Sidebar({
   activeConversationId,
   pinnedIds,
   titleOverrides,
+  threadArtifactTypes,
   uploadedFiles,
   user,
   availableCredits,
@@ -104,17 +147,16 @@ export function Sidebar({
       {/* Top Brand, Pure White New Chat CTA & Filter */}
       <div className="p-3.5 space-y-3 border-b border-white/[0.07]">
         <div className="flex items-center justify-between px-1">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <ObsidianBrandMark size="md" />
-            <div className="min-w-0">
-              <div className="text-sm font-semibold tracking-tight text-white truncate">
-                Kartik.ai
-              </div>
-              <div className="text-[11px] text-zinc-500 truncate">
-                Multi-Agent Workspace
-              </div>
-            </div>
-          </div>
+          <AnimatedBrandLogo
+            size="md"
+            subtitle="Multi-Agent Workspace"
+            onClick={() => {
+              onCreateConversation();
+              if (isMobileDrawer) onCloseMobile();
+            }}
+            title="Kartik.ai — Return to fresh homepage"
+            dataTestAttr={isMobileDrawer ? 'sidebar-mobile' : 'sidebar'}
+          />
 
           {isMobileDrawer && (
             <button
@@ -248,14 +290,11 @@ export function Sidebar({
                             }}
                             className="relative z-10 flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer"
                           >
-                            {conv.isPinned ? (
-                              <Pin className="w-3 h-3 text-zinc-300 shrink-0" />
-                            ) : (
-                              <MessageSquare
-                                className={`w-3.5 h-3.5 shrink-0 ${
-                                  isActive ? 'text-white' : 'text-zinc-600'
-                                }`}
-                              />
+                            {renderThreadIcon(
+                              conv.isPinned,
+                              isActive,
+                              conv.displayTitle,
+                              threadArtifactTypes?.[conv.conversationId],
                             )}
                             <span className="truncate">{conv.displayTitle}</span>
                           </button>
@@ -403,7 +442,16 @@ export function Sidebar({
       className="flex flex-col h-full items-center justify-between py-3.5 px-2"
     >
       <div className="flex flex-col items-center gap-2.5">
-        <ObsidianBrandMark size="md" />
+        <button
+          type="button"
+          onClick={onCreateConversation}
+          title="Kartik.ai — Return to fresh homepage"
+          aria-label="Kartik.ai Home"
+          data-brand-home="rail"
+          className="rounded-xl transition-transform hover:scale-105 active:scale-95 cursor-pointer"
+        >
+          <ObsidianBrandMark size="md" />
+        </button>
         <button
           type="button"
           onClick={onCreateConversation}

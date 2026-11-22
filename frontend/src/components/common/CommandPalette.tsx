@@ -9,6 +9,7 @@ import {
   FolderArchive,
   Globe,
   Image as ImageIcon,
+  Keyboard,
   Layers,
   Lock,
   MessageSquare,
@@ -51,6 +52,7 @@ export interface CommandPaletteProps {
   readonly onSelectAgent: (agent: SpecialistAgentName) => void;
   readonly onSelectResponseDepth: (depth: ChatResponseDepth) => void;
   readonly onOpenBilling: () => void;
+  readonly onOpenShortcuts?: () => void;
   readonly onToggleArtifactCanvas: () => void;
   readonly onToggleDemoReadOnly: () => void;
   readonly onReplayLastTurn: () => void;
@@ -102,6 +104,7 @@ export function CommandPalette({
   onSelectAgent,
   onSelectResponseDepth,
   onOpenBilling,
+  onOpenShortcuts,
   onToggleArtifactCanvas,
   onToggleDemoReadOnly,
   onReplayLastTurn,
@@ -124,9 +127,9 @@ export function CommandPalette({
       {
         id: 'action:new-chat',
         section: 'Quick Actions',
-        label: 'New Chat',
-        subtitle: 'Start a fresh session in Unified Chat',
-        keywords: ['new', 'create', 'conversation', 'hero', 'fresh'],
+        label: 'New Chat · Return to Home',
+        subtitle: 'Start a fresh session on the Kartik.ai homepage',
+        keywords: ['new', 'create', 'conversation', 'hero', 'fresh', 'home', 'kartik'],
         icon: <Plus className="w-4 h-4" />,
         shortcut: 'N',
         onSelect: () => {
@@ -192,6 +195,22 @@ export function CommandPalette({
         onClose();
       },
     });
+
+    if (onOpenShortcuts) {
+      entries.push({
+        id: 'action:shortcuts',
+        section: 'Quick Actions',
+        label: 'Keyboard Shortcuts',
+        subtitle: 'View workspace shortcuts for Command Palette, Sidebar & Studios',
+        keywords: ['keyboard', 'shortcuts', 'keys', 'hotkeys', 'help', '?'],
+        icon: <Keyboard className="w-4 h-4" />,
+        shortcut: '?',
+        onSelect: () => {
+          onClose();
+          onOpenShortcuts();
+        },
+      });
+    }
 
     if (onOpenFixDownloads) {
       entries.push({
@@ -271,6 +290,7 @@ export function CommandPalette({
     onCreateConversation,
     onOpenBilling,
     onOpenFixDownloads,
+    onOpenShortcuts,
     onReplayLastTurn,
     onSelectAgent,
     onSelectConversation,

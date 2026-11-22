@@ -136,15 +136,76 @@
   will-change: transform, opacity;
 }
 
+/* 21st.dev Brand Logo Metallic Sheen & Fluid Streaming Text Flow */
+@keyframes kartik-brand-sheen {
+  0% {
+    background-position: 120% 50%;
+  }
+  100% {
+    background-position: -120% 50%;
+  }
+}
+
+@keyframes kartik-stream-caret-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  55%,
+  100% {
+    opacity: 0.18;
+  }
+}
+
+@keyframes kartik-flow-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.kartik-brand-wordmark {
+  background-image: linear-gradient(
+    112deg,
+    #e4e4e7 0%,
+    #ffffff 36%,
+    #a1a1aa 48%,
+    #ffffff 60%,
+    #e4e4e7 100%
+  );
+  background-size: 260% 100%;
+  background-position: 120% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: kartik-brand-sheen 4.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.kartik-stream-caret {
+  animation: kartik-stream-caret-blink 0.9s ease-in-out infinite;
+}
+
+.kartik-flow-block {
+  animation: kartik-flow-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .kartik-border-beam-spinner,
   .kartik-text-shimmer,
-  .kartik-beam-drift {
+  .kartik-beam-drift,
+  .kartik-brand-wordmark,
+  .kartik-stream-caret,
+  .kartik-flow-block {
     animation: none !important;
   }
 
-  .kartik-text-shimmer {
-    color: #e4e4e7;
+  .kartik-text-shimmer,
+  .kartik-brand-wordmark {
+    color: #fafafa;
     background-image: none;
   }
 }

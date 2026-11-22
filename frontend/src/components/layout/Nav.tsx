@@ -3,6 +3,7 @@ import {
   Check,
   Command,
   FolderArchive,
+  Keyboard,
   Layers,
   Lock,
   PanelLeft,
@@ -13,7 +14,10 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react';
-import { MorphingPopover } from '../motion/primitives.js';
+import {
+  AnimatedBrandLogo,
+  MorphingPopover,
+} from '../motion/primitives.js';
 
 export interface NavProps {
   readonly conversationTitle: string;
@@ -23,9 +27,11 @@ export interface NavProps {
   readonly artifactCount: number;
   readonly isArtifactPanelOpen: boolean;
   readonly canReplayLastTurn: boolean;
+  readonly onGoHome: () => void;
   readonly onToggleSidebar: () => void;
   readonly onRenameConversation?: (newTitle: string) => void;
   readonly onOpenCommandPalette: () => void;
+  readonly onOpenShortcuts?: () => void;
   readonly onToggleDemoReadOnly: () => void;
   readonly onReplayLastTurn: () => void;
   readonly onToggleArtifactPanel: () => void;
@@ -41,9 +47,11 @@ export function Nav({
   artifactCount,
   isArtifactPanelOpen,
   canReplayLastTurn,
+  onGoHome,
   onToggleSidebar,
   onRenameConversation,
   onOpenCommandPalette,
+  onOpenShortcuts,
   onToggleDemoReadOnly,
   onReplayLastTurn,
   onToggleArtifactPanel,
@@ -80,12 +88,12 @@ export function Nav({
 
   return (
     <header className="h-13 shrink-0 px-3 sm:px-5 bg-[#09090b]/95 border-b border-white/[0.07] flex items-center justify-between gap-3 relative z-30">
-      {/* Left: Sidebar Toggle & Inline-Editable Thread Title */}
-      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+      {/* Left: Sidebar Toggle, Clickable Animated Kartik.ai Brand & Inline-Editable Thread Title */}
+      <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
         <button
           type="button"
           onClick={onToggleSidebar}
-          title="Toggle Sidebar"
+          title="Toggle Sidebar (⌘B)"
           aria-label="Toggle Sidebar"
           data-toggle-sidebar="true"
           className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-white/[0.06] transition-colors shrink-0 cursor-pointer"
@@ -93,65 +101,81 @@ export function Nav({
           <PanelLeft className="w-4 h-4" />
         </button>
 
-        <div className="min-w-0 flex-1 flex items-center gap-2">
-          {isEditingTitle && !isHeroMode && onRenameConversation ? (
-            <div className="flex items-center gap-1.5 max-w-md w-full">
-              <input
-                ref={titleInputRef}
-                type="text"
-                value={draftTitle}
-                onChange={(e) => setDraftTitle(e.target.value)}
-                onBlur={commitTitleRename}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    commitTitleRename();
-                  } else if (e.key === 'Escape') {
-                    setDraftTitle(conversationTitle);
-                    setIsEditingTitle(false);
-                  }
-                }}
-                data-nav-title-input="true"
-                className="w-full px-2.5 py-1 rounded-md bg-[#16161b] border border-white/25 text-sm font-medium text-white focus:outline-none"
-              />
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={commitTitleRename}
-                aria-label="Save title"
-                className="p-1.5 rounded-md bg-white text-zinc-950 hover:bg-zinc-200 cursor-pointer shrink-0"
+        <div className="min-w-0 flex-1 flex items-center gap-2 overflow-hidden">
+          {/* Always-clickable 21st.dev Animated Kartik.ai Home Brand */}
+          <div className="shrink-0">
+            <AnimatedBrandLogo
+              size="sm"
+              onClick={onGoHome}
+              title="Kartik.ai — Return to fresh homepage"
+              dataTestAttr="nav"
+            />
+          </div>
+
+          {!isHeroMode && (
+            <>
+              <span
+                aria-hidden="true"
+                className="text-zinc-700 text-xs font-mono shrink-0 hidden sm:inline"
               >
-                <Check className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              disabled={isHeroMode || !onRenameConversation}
-              onClick={() => {
-                if (!isHeroMode && onRenameConversation) {
-                  setIsEditingTitle(true);
-                }
-              }}
-              data-nav-title-edit="true"
-              title={
-                isHeroMode
-                  ? 'Kartik.ai'
-                  : 'Click to rename conversation'
-              }
-              className={`group flex items-center gap-2 min-w-0 text-left ${
-                !isHeroMode && onRenameConversation
-                  ? 'cursor-pointer hover:text-white'
-                  : 'cursor-default'
-              }`}
-            >
-              <h1 className="text-sm font-medium text-zinc-100 truncate">
-                {isHeroMode ? 'Kartik.ai' : conversationTitle}
-              </h1>
-              {!isHeroMode && onRenameConversation && (
-                <Pencil className="w-3 h-3 text-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                /
+              </span>
+              {isEditingTitle && onRenameConversation ? (
+                <div className="flex items-center gap-1.5 max-w-md w-full min-w-0">
+                  <input
+                    ref={titleInputRef}
+                    type="text"
+                    value={draftTitle}
+                    onChange={(e) => setDraftTitle(e.target.value)}
+                    onBlur={commitTitleRename}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        commitTitleRename();
+                      } else if (e.key === 'Escape') {
+                        setDraftTitle(conversationTitle);
+                        setIsEditingTitle(false);
+                      }
+                    }}
+                    data-nav-title-input="true"
+                    className="w-full px-2.5 py-1 rounded-md bg-[#16161b] border border-white/25 text-sm font-medium text-white focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={commitTitleRename}
+                    aria-label="Save title"
+                    className="p-1.5 rounded-md bg-white text-zinc-950 hover:bg-zinc-200 cursor-pointer shrink-0"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!onRenameConversation}
+                  onClick={() => {
+                    if (onRenameConversation) {
+                      setIsEditingTitle(true);
+                    }
+                  }}
+                  data-nav-title-edit="true"
+                  title="Click to rename conversation"
+                  className={`group hidden sm:flex items-center gap-2 min-w-0 text-left ${
+                    onRenameConversation
+                      ? 'cursor-pointer hover:text-white'
+                      : 'cursor-default'
+                  }`}
+                >
+                  <h1 className="text-sm font-medium text-zinc-300 group-hover:text-white truncate transition-colors">
+                    {conversationTitle}
+                  </h1>
+                  {onRenameConversation && (
+                    <Pencil className="w-3 h-3 text-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                  )}
+                </button>
               )}
-            </button>
+            </>
           )}
         </div>
       </div>
@@ -165,10 +189,12 @@ export function Nav({
           data-open-command-palette="true"
           title="Open Command Palette (⌘K)"
           aria-label="Open Command Palette"
-          className="hidden sm:inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#111114] hover:bg-[#18181c] border border-white/[0.08] hover:border-white/[0.16] text-xs text-zinc-400 hover:text-zinc-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          className={`hidden sm:inline-flex items-center gap-1.5 rounded-lg bg-[#111114] hover:bg-[#18181c] border border-white/[0.08] hover:border-white/[0.16] text-xs text-zinc-400 hover:text-zinc-100 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+            isArtifactPanelOpen ? 'px-2 py-1.5' : 'px-2.5 py-1.5'
+          }`}
         >
           <Command className="w-3.5 h-3.5" />
-          <span className="hidden lg:inline">Command</span>
+          {!isArtifactPanelOpen && <span className="hidden lg:inline">Command</span>}
           <kbd className="text-[10px] font-mono text-zinc-500">⌘K</kbd>
         </button>
 
@@ -186,7 +212,7 @@ export function Nav({
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Canvas</span>
+            {!isArtifactPanelOpen && <span className="hidden sm:inline">Canvas</span>}
             <span
               className={`text-[10px] font-mono tabular-nums ${
                 isArtifactPanelOpen ? 'text-zinc-700' : 'text-zinc-400'
@@ -209,7 +235,7 @@ export function Nav({
           <span>{availableCredits} cr</span>
         </button>
 
-        {/* Developer Tools MorphingPopover (Houses Idempotency Replay, Read-Only, Ed25519 & Fix ZIPs) */}
+        {/* Developer Tools MorphingPopover (Houses Idempotency Replay, Read-Only, Shortcuts & Fix ZIPs) */}
         <div className="relative">
           <button
             ref={devToolsBtnRef}
@@ -218,8 +244,8 @@ export function Nav({
             data-dev-tools-trigger="true"
             aria-expanded={isDevToolsOpen}
             aria-label="Developer Tools"
-            title="Developer Tools & Diagnostics"
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+            title="Developer Tools & Shortcuts"
+            className={`inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               demoReadOnly
                 ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
                 : isDevToolsOpen
@@ -228,7 +254,7 @@ export function Nav({
             }`}
           >
             <Wrench className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Tools</span>
+            {!isArtifactPanelOpen && <span className="hidden md:inline">Tools</span>}
           </button>
 
           <MorphingPopover
@@ -299,6 +325,27 @@ export function Nav({
                   {demoReadOnly ? 'Frozen' : 'Live'}
                 </span>
               </button>
+
+              {/* Keyboard Shortcuts Sheet */}
+              {onOpenShortcuts && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDevToolsOpen(false);
+                    onOpenShortcuts();
+                  }}
+                  data-dev-shortcuts-button="true"
+                  className="w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg text-xs text-zinc-200 hover:bg-white/[0.07] transition-colors cursor-pointer text-left"
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <Keyboard className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                    <span className="truncate">Keyboard Shortcuts</span>
+                  </span>
+                  <kbd className="px-1.5 py-0.5 rounded bg-white/[0.06] border border-white/[0.08] text-[10px] font-mono text-zinc-400 shrink-0">
+                    ?
+                  </kbd>
+                </button>
+              )}
 
               {/* Fix & ZIP Downloads (Dev-only) */}
               {onOpenFixDownloads && (

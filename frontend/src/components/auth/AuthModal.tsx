@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { ShieldCheck, X } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
+import { CheckCircle2, ShieldCheck, X } from 'lucide-react';
+import { AnimatedBrandLogo, BorderBeam } from '../motion/primitives.js';
 
 export interface GoogleSignInPayload {
   readonly uid?: string;
@@ -276,9 +278,17 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
     }
   }, [isOpen]);
 
-  if (!isOpen) {
-    return null;
-  }
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const handleFirebasePopup = async () => {
     setIsPopupPending(true);
@@ -296,88 +306,135 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        className="max-w-md w-full bg-[#111114] border border-white/[0.12] rounded-2xl overflow-hidden shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-5 py-4 border-b border-white/[0.08] flex items-center justify-between bg-[#0c0c0f]">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-white" />
-            <h3 className="text-sm font-semibold text-white">
-              Sign in from Google
-            </h3>
-          </div>
-          <button
-            type="button"
-            aria-label="Close sign in modal"
-            onClick={onClose}
-            className="p-1.5 rounded-lg bg-[#18181c] hover:bg-white/[0.12] text-zinc-400 hover:text-white cursor-pointer"
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.16 }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Sign in to Kartik.ai"
+          data-auth-modal="true"
+          className="fixed inset-0 z-50 bg-black/82 backdrop-blur-md flex items-center justify-center p-4"
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 6 }}
+            transition={{ type: 'spring', stiffness: 450, damping: 34 }}
+            className="relative max-w-md w-full bg-[#111114] border border-white/[0.12] rounded-2xl overflow-hidden shadow-[0_28px_70px_-14px_rgba(0,0,0,0.92)]"
+            onClick={(e) => e.stopPropagation()}
           >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+            <BorderBeam durationSec={8} intensity={isPopupPending ? 'thinking' : 'idle'} />
 
-        <div className="p-5 space-y-4">
-          <p className="text-xs text-zinc-400 leading-relaxed">
-            Kartik.ai works out of the box without an account. Sign in with Google only if you want to link your profile to this session.
-          </p>
-
-          <button
-            type="button"
-            disabled={isPopupPending}
-            onClick={() => void handleFirebasePopup()}
-            className="gsi-material-button w-full py-2.5 px-4 rounded-xl bg-white hover:bg-zinc-200 disabled:opacity-60 text-zinc-950 font-semibold text-xs flex items-center justify-center gap-2.5 transition-colors cursor-pointer"
-          >
-            <svg
-              version="1.1"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 48 48"
-              className="w-4 h-4 shrink-0"
-            >
-              <path
-                fill="#EA4335"
-                d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+            {/* Obsidian Micro-Dot Hero Header */}
+            <div className="relative z-10 px-5 py-5 border-b border-white/[0.08] bg-[#0c0c0f] overflow-hidden">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 kartik-hero-dot-grid opacity-35"
               />
-              <path
-                fill="#4285F4"
-                d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
-              />
-              <path
-                fill="#34A853"
-                d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
-              />
-              <path fill="none" d="M0 0h48v48H0z" />
-            </svg>
-            <span className="gsi-material-button-contents">
-              {isPopupPending
-                ? 'Google Popup Open — Complete in Window…'
-                : 'Sign in from Google'}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-full py-2 px-4 rounded-xl bg-[#18181c] hover:bg-white/[0.1] border border-white/[0.08] text-zinc-300 hover:text-white font-medium text-xs transition-colors cursor-pointer"
-          >
-            Continue Without Signing In
-          </button>
-
-          {popupNotice && (
-            <div className="p-2.5 rounded-lg bg-amber-950/50 border border-amber-500/40 text-[11px] text-amber-200 leading-relaxed">
-              {popupNotice}
+              <div className="relative z-10 flex items-start justify-between gap-3">
+                <div className="space-y-2">
+                  <AnimatedBrandLogo
+                    size="md"
+                    subtitle="Sync workspace & credits"
+                    dataTestAttr="auth-modal"
+                  />
+                  <h3 className="text-base font-semibold tracking-tight text-white">
+                    Sign in to your workspace
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close sign in modal"
+                  onClick={onClose}
+                  className="p-1.5 rounded-lg bg-[#18181c] hover:bg-white/[0.12] text-zinc-400 hover:text-white transition-colors cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
-          )}
-        </div>
-      </div>
-    </div>
+
+            <div className="relative z-10 p-5 space-y-4">
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Kartik.ai works immediately without an account. Link Google anytime to keep your history and billing unified across devices.
+              </p>
+
+              {/* Clean Unboxed Benefit List */}
+              <ul className="space-y-2 py-1 text-xs text-zinc-300">
+                <li className="flex items-center gap-2.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>Persistent cloud threads &amp; split-screen artifacts</span>
+                </li>
+                <li className="flex items-center gap-2.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>Verified Razorpay credit wallet &amp; immutable ledger</span>
+                </li>
+                <li className="flex items-center gap-2.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>Firebase ID token verification &amp; strict tenant isolation</span>
+                </li>
+              </ul>
+
+              <div className="space-y-2 pt-1">
+                <button
+                  type="button"
+                  disabled={isPopupPending}
+                  onClick={() => void handleFirebasePopup()}
+                  className="gsi-material-button w-full py-2.5 px-4 rounded-xl bg-white hover:bg-zinc-200 disabled:opacity-60 text-zinc-950 font-semibold text-xs flex items-center justify-center gap-2.5 transition-colors cursor-pointer"
+                >
+                  <svg
+                    version="1.1"
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 48 48"
+                    className="w-4 h-4 shrink-0"
+                  >
+                    <path
+                      fill="#EA4335"
+                      d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+                    />
+                    <path
+                      fill="#4285F4"
+                      d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+                    />
+                    <path fill="none" d="M0 0h48v48H0z" />
+                  </svg>
+                  <span className="gsi-material-button-contents">
+                    {isPopupPending
+                      ? 'Google Popup Open — Complete in Window…'
+                      : 'Sign in with Google'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="w-full py-2 px-4 rounded-xl bg-[#18181c] hover:bg-white/[0.1] border border-white/[0.08] text-zinc-300 hover:text-white font-medium text-xs transition-colors cursor-pointer"
+                >
+                  Continue Without Signing In
+                </button>
+              </div>
+
+              {popupNotice && (
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 leading-relaxed">
+                  {popupNotice}
+                </div>
+              )}
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

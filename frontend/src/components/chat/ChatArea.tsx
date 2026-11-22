@@ -16,10 +16,15 @@ import type {
   ArtifactRecord,
   PlatformMessage,
   SpecialistAgentName,
+  UploadedFileRecord,
 } from '../../types/index.js';
-import { getTimeOfDayGreeting } from '../workspace-ux-helpers.js';
+import {
+  HERO_SCRAMBLE_LINES,
+  getTimeOfDayGreeting,
+} from '../workspace-ux-helpers.js';
 import {
   BackgroundBeams,
+  MotionScrambleText,
   ObsidianBrandMark,
   SpotlightCard,
 } from '../motion/primitives.js';
@@ -94,19 +99,23 @@ export interface ChatAreaProps {
   readonly isLoading: boolean;
   readonly activeAgent?: SpecialistAgentName;
   readonly userDisplayName?: string | null;
+  readonly streamingMessageIds?: ReadonlySet<string>;
   readonly activeCanvasArtifactId?: string | null;
   readonly isCanvasOpen?: boolean;
   readonly heroComposer?: React.ReactNode;
+  readonly onStreamComplete?: (messageId: string) => void;
   readonly onQuickPromptSelect?: (
     prompt: string,
     agent: SpecialistAgentName,
   ) => void;
   readonly onRegenerate?: (message: PlatformMessage) => void;
+  readonly onEditPrompt?: (prompt: string) => void;
   readonly onHandoffToSpecialist?: (
     target: 'pdf' | 'ppt' | 'search',
     message: PlatformMessage,
   ) => void;
   readonly onOpenArtifact?: (artifact: ArtifactRecord) => void;
+  readonly onOpenAttachment?: (file: UploadedFileRecord) => void;
   readonly onDropUploadFile?: (file: {
     readonly originalFilename: string;
     readonly declaredMimeType: string;
@@ -123,6 +132,7 @@ export interface ChatAreaProps {
     readonly sourceUrl?: string;
   }) => void;
   readonly onCloseLightboxImage?: () => void;
+  readonly onNotify?: (message: string, tone?: 'success' | 'info') => void;
   readonly children?: React.ReactNode;
 }
 
@@ -131,17 +141,22 @@ export function ChatArea({
   isLoading,
   activeAgent,
   userDisplayName,
+  streamingMessageIds,
   activeCanvasArtifactId,
   isCanvasOpen = false,
   heroComposer,
+  onStreamComplete,
   onQuickPromptSelect,
   onRegenerate,
+  onEditPrompt,
   onHandoffToSpecialist,
   onOpenArtifact,
+  onOpenAttachment,
   onDropUploadFile,
   lightboxImage: controlledLightbox,
   onOpenLightboxImage,
   onCloseLightboxImage,
+  onNotify,
   children,
 }: ChatAreaProps) {
   const [internalLightbox, setInternalLightbox] = useState<{
@@ -153,6 +168,7 @@ export function ChatArea({
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const dragDepthRef = useRef(0);
+  const isActivelyStreaming = (streamingMessageIds?.size ?? 0) > 0;
 
   const lightboxImage =
     controlledLightbox !== undefined ? controlledLightbox : internalLightbox;
@@ -207,6 +223,17 @@ export function ChatArea({
       top: scrollRef.current.scrollHeight,
       behavior: 'smooth',
     });
+  };
+
+  const handleStreamTick = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 140) {
+      el.scrollTop = el.scrollHeight;
+    } else if (distanceFromBottom > 240) {
+      setShowScrollToBottom(true);
+    }
   };
 
   const handleDragEnter = (event: React.DragEvent) => {
@@ -292,7 +319,7 @@ export function ChatArea({
         /* ── 21st.dev Centered Hero Empty State ── */
         <div
           data-hero-empty-state="true"
-          className="relative flex-1 overflow-y-auto flex flex-col items-center justify-center px-4 sm:px-6 py-10"
+          className="relative flex-1 overflow-y-auto flex flex-col items-center px-4 sm:px-6 py-8 sm:py-10"
         >
           <BackgroundBeams />
 
@@ -300,7 +327,7 @@ export function ChatArea({
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
-            className="relative z-10 w-full max-w-3xl mx-auto flex flex-col items-center"
+            className="relative z-10 w-full max-w-3xl mx-auto my-auto flex flex-col items-center"
           >
             <div className="mb-5">
               <ObsidianBrandMark size="lg" />
@@ -313,11 +340,12 @@ export function ChatArea({
               {greeting}. What are we building?
             </h2>
 
-            <p className="mt-2.5 text-sm text-zinc-400 text-center max-w-xl leading-relaxed">
-              Ask anything in Unified Chat — it adapts depth automatically and
-              smart-routes builds, PDFs, slide decks, live research, and visuals
-              to your split-screen Canvas.
-            </p>
+            <MotionScrambleText
+              lines={HERO_SCRAMBLE_LINES}
+              intervalMs={4200}
+              scrambleDurationMs={780}
+              className="mt-3 max-w-2xl"
+            />
 
             {/* Centered Floating BorderBeam Composer */}
             <div className="w-full mt-7">
@@ -381,15 +409,21 @@ export function ChatArea({
               messages={messages}
               isLoading={isLoading}
               activeAgent={activeAgent}
+              streamingMessageIds={streamingMessageIds}
               activeCanvasArtifactId={activeCanvasArtifactId}
               isCanvasOpen={isCanvasOpen}
+              onStreamComplete={onStreamComplete}
+              onStreamTick={handleStreamTick}
               onFollowUpSearch={(query, agent) =>
                 onQuickPromptSelect?.(query, agent ?? 'chat')
               }
               onRegenerate={onRegenerate}
+              onEditPrompt={onEditPrompt}
               onHandoffToSpecialist={onHandoffToSpecialist}
               onOpenArtifact={onOpenArtifact}
+              onOpenAttachment={onOpenAttachment}
               onOpenLightboxImage={openLightbox}
+              onNotify={onNotify}
             />
           </div>
 
@@ -404,10 +438,17 @@ export function ChatArea({
                 transition={{ duration: 0.16 }}
                 onClick={scrollToBottom}
                 aria-label="Scroll to bottom"
-                className="absolute bottom-36 left-1/2 -translate-x-1/2 z-20 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#18181c]/95 hover:bg-[#232329] border border-white/[0.14] text-xs font-medium text-zinc-100 shadow-xl backdrop-blur-md cursor-pointer"
+                data-jump-to-latest="true"
+                className="absolute bottom-36 left-1/2 -translate-x-1/2 z-20 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#18181c]/95 hover:bg-[#232329] border border-white/[0.14] text-xs font-medium text-zinc-100 shadow-xl backdrop-blur-md cursor-pointer"
               >
+                {isActivelyStreaming && (
+                  <span
+                    aria-hidden="true"
+                    className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"
+                  />
+                )}
                 <ArrowDown className="w-3.5 h-3.5" />
-                <span>Jump to latest</span>
+                <span>{isActivelyStreaming ? 'Streaming · Jump to latest' : 'Jump to latest'}</span>
               </motion.button>
             )}
           </AnimatePresence>

@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { motion } from 'motion/react';
 import {
   BookOpen,
   Check,
@@ -10,6 +11,8 @@ import {
   FileText,
   Layers,
   Sparkles,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import {
   buildArtifactRawDownloadUrl,
@@ -29,59 +32,54 @@ interface PdfArchetypeStyle {
   readonly accentBorderClass: string;
   readonly accentTextClass: string;
   readonly tintBgClass: string;
-  readonly pillActiveClass: string;
 }
 
 const ARCHETYPE_STYLES: Readonly<Record<ParsedPdfDocumentType, PdfArchetypeStyle>> = {
   technical_report: {
     badge: 'TECHNICAL REPORT',
-    bannerClass: 'bg-[#0f1c38] border-l-4 border-sky-400',
-    accentBorderClass: 'border-sky-500',
-    accentTextClass: 'text-sky-700',
-    tintBgClass: 'bg-sky-50/90 border-sky-200',
-    pillActiveClass: 'bg-sky-500/20 text-sky-300 border-sky-500/45',
+    bannerClass: 'bg-[#0b0b0f] border-l-4 border-zinc-200',
+    accentBorderClass: 'border-zinc-800',
+    accentTextClass: 'text-zinc-800',
+    tintBgClass: 'bg-zinc-50 border-zinc-200',
   },
   executive_brief: {
     badge: 'EXECUTIVE BRIEF',
-    bannerClass: 'bg-[#1a1740] border-l-4 border-indigo-400',
-    accentBorderClass: 'border-indigo-500',
-    accentTextClass: 'text-indigo-700',
-    tintBgClass: 'bg-indigo-50/90 border-indigo-200',
-    pillActiveClass: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/45',
+    bannerClass: 'bg-[#0d0d12] border-l-4 border-zinc-300',
+    accentBorderClass: 'border-zinc-800',
+    accentTextClass: 'text-zinc-800',
+    tintBgClass: 'bg-zinc-50 border-zinc-200',
   },
   proposal: {
     badge: 'PROJECT PROPOSAL',
-    bannerClass: 'bg-[#0a2e29] border-l-4 border-emerald-400',
-    accentBorderClass: 'border-emerald-600',
-    accentTextClass: 'text-emerald-700',
-    tintBgClass: 'bg-emerald-50/90 border-emerald-200',
-    pillActiveClass: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/45',
+    bannerClass: 'bg-[#091210] border-l-4 border-emerald-400',
+    accentBorderClass: 'border-emerald-700',
+    accentTextClass: 'text-emerald-800',
+    tintBgClass: 'bg-emerald-50/70 border-emerald-200',
   },
   research_paper: {
     badge: 'RESEARCH BRIEF',
-    bannerClass: 'bg-[#241f29] border-l-4 border-amber-400',
-    accentBorderClass: 'border-amber-600',
-    accentTextClass: 'text-amber-800',
-    tintBgClass: 'bg-amber-50/90 border-amber-200',
-    pillActiveClass: 'bg-amber-500/20 text-amber-300 border-amber-500/45',
+    bannerClass: 'bg-[#0d0d10] border-l-4 border-zinc-300',
+    accentBorderClass: 'border-zinc-700',
+    accentTextClass: 'text-zinc-800',
+    tintBgClass: 'bg-zinc-50 border-zinc-200',
   },
   playbook: {
     badge: 'OPERATIONAL PLAYBOOK',
-    bannerClass: 'bg-[#24143d] border-l-4 border-violet-400',
-    accentBorderClass: 'border-violet-600',
-    accentTextClass: 'text-violet-700',
-    tintBgClass: 'bg-violet-50/90 border-violet-200',
-    pillActiveClass: 'bg-violet-500/20 text-violet-300 border-violet-500/45',
+    bannerClass: 'bg-[#0c0c10] border-l-4 border-zinc-300',
+    accentBorderClass: 'border-zinc-800',
+    accentTextClass: 'text-zinc-800',
+    tintBgClass: 'bg-zinc-50 border-zinc-200',
   },
   resume: {
     badge: 'EXECUTIVE PROFILE',
-    bannerClass: 'bg-[#1c242e] border-l-4 border-slate-300',
-    accentBorderClass: 'border-slate-600',
-    accentTextClass: 'text-slate-700',
-    tintBgClass: 'bg-slate-100/90 border-slate-300',
-    pillActiveClass: 'bg-slate-500/20 text-slate-200 border-slate-500/45',
+    bannerClass: 'bg-[#0b0b0d] border-l-4 border-zinc-300',
+    accentBorderClass: 'border-zinc-700',
+    accentTextClass: 'text-zinc-800',
+    tintBgClass: 'bg-zinc-50 border-zinc-200',
   },
 };
+
+const ZOOM_STEPS = [90, 100, 112] as const;
 
 export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
   const specFile = artifact.filesManifest.find(
@@ -94,11 +92,12 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
   const style = ARCHETYPE_STYLES[doc.documentType];
 
   const [viewMode, setViewMode] = useState<'reader' | 'pages'>('reader');
-  // null = show full document stream; number = focus a single section index
   const [selectedSectionIdx, setSelectedSectionIdx] = useState<number | null>(null);
+  const [zoomIdx, setZoomIdx] = useState(1);
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
 
-  // Split sections into realistic A4 page sheets for Print/Page Preview (Page 1 has masthead + summary + KPIs + first 1-2 sections; continuation pages carry 2 sections each)
+  const zoomPct = ZOOM_STEPS[zoomIdx] ?? 100;
+
   const a4Pages = useMemo(() => {
     const pages: Array<{
       readonly pageNumber: number;
@@ -154,19 +153,22 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
   };
 
   return (
-    <div className="mt-3 rounded-xl border border-emerald-500/30 bg-[#0b1020] overflow-hidden shadow-lg">
-      {/* Header Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 bg-slate-900/95 border-b border-slate-800">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="w-7 h-7 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
-            <FileText className="w-3.5 h-3.5" />
+    <div
+      data-pdf-studio="true"
+      className="rounded-xl border border-white/[0.09] bg-[#0b0b0e] overflow-hidden"
+    >
+      {/* Obsidian Studio Header Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5 px-4 py-3 bg-[#111114] border-b border-white/[0.07]">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-white/[0.06] border border-white/[0.1] flex items-center justify-center text-white shrink-0">
+            <FileText className="w-4 h-4" />
           </div>
           <div className="min-w-0">
-            <div className="text-xs font-semibold text-slate-100 truncate">
+            <div className="text-xs font-semibold text-white truncate">
               {doc.title}
             </div>
-            <div className="text-[10px] font-mono text-slate-400 flex items-center gap-1.5 flex-wrap">
-              <span className="text-emerald-400">{style.badge}</span>
+            <div className="text-[10px] font-mono text-zinc-400 flex items-center gap-1.5 flex-wrap tabular-nums">
+              <span className="text-zinc-200">{style.badge}</span>
               <span>·</span>
               <span>
                 {doc.pageCount} {doc.pageCount === 1 ? 'Page' : 'Pages'}
@@ -174,37 +176,75 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
               <span>·</span>
               <span>{doc.sections.length} Sections</span>
               <span>·</span>
-              <span>{sizeKb} KB %PDF-1.4</span>
+              <span>{sizeKb} KB</span>
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-1.5 flex-wrap">
-          {/* Reader vs A4 Page Preview Toggle */}
-          <div className="inline-flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+          {/* Spring Segmented View Switcher */}
+          <div className="inline-flex items-center bg-[#09090b] p-0.5 rounded-lg border border-white/[0.08]">
+            {(
+              [
+                { id: 'reader', label: 'Reader', icon: BookOpen },
+                { id: 'pages', label: `A4 Sheets (${a4Pages.length})`, icon: Layers },
+              ] as const
+            ).map((tab) => {
+              const active = viewMode === tab.id;
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setViewMode(tab.id)}
+                  className="group relative isolate inline-flex items-center justify-center px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap cursor-pointer"
+                >
+                  {active && (
+                    <motion.span
+                      layoutId={`pdf-studio-view-${artifact.artifactId}`}
+                      transition={{ type: 'spring', stiffness: 520, damping: 38 }}
+                      className="absolute inset-0 z-0 rounded-md bg-white"
+                    />
+                  )}
+                  <span
+                    className={`relative z-10 inline-flex items-center gap-1 ${
+                      active
+                        ? 'text-[#09090b] font-semibold'
+                        : 'text-zinc-400 group-hover:text-zinc-100'
+                    }`}
+                  >
+                    <Icon className="w-3 h-3" />
+                    <span>{tab.label}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Zoom Controls */}
+          <div className="inline-flex items-center rounded-lg bg-[#16161b] border border-white/[0.08] overflow-hidden">
             <button
               type="button"
-              onClick={() => setViewMode('reader')}
-              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer ${
-                viewMode === 'reader'
-                  ? 'bg-emerald-500 text-slate-950'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
+              aria-label="Zoom out"
+              disabled={zoomIdx === 0}
+              onClick={() => setZoomIdx((i) => Math.max(0, i - 1))}
+              className="p-1.5 text-zinc-400 hover:text-white disabled:opacity-35 cursor-pointer"
             >
-              <BookOpen className="w-3 h-3" />
-              Document View
+              <ZoomOut className="w-3 h-3" />
             </button>
+            <span className="px-1.5 text-[10px] font-mono tabular-nums text-zinc-300">
+              {zoomPct}%
+            </span>
             <button
               type="button"
-              onClick={() => setViewMode('pages')}
-              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer ${
-                viewMode === 'pages'
-                  ? 'bg-emerald-500 text-slate-950'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
+              aria-label="Zoom in"
+              disabled={zoomIdx === ZOOM_STEPS.length - 1}
+              onClick={() =>
+                setZoomIdx((i) => Math.min(ZOOM_STEPS.length - 1, i + 1))
+              }
+              className="p-1.5 text-zinc-400 hover:text-white disabled:opacity-35 cursor-pointer"
             >
-              <Layers className="w-3 h-3" />
-              A4 Print Sheets ({a4Pages.length})
+              <ZoomIn className="w-3 h-3" />
             </button>
           </div>
 
@@ -212,12 +252,12 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
             type="button"
             onClick={() => void handleCopyMarkdown()}
             title="Copy structured document as Markdown"
-            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-md transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium bg-[#16161b] hover:bg-white/[0.1] border border-white/[0.08] text-zinc-200 rounded-lg transition-colors cursor-pointer"
           >
             {copiedMarkdown ? (
               <>
                 <Check className="w-3 h-3 text-emerald-400" />
-                <span className="text-emerald-400">Copied MD</span>
+                <span className="text-emerald-300">Copied</span>
               </>
             ) : (
               <>
@@ -230,58 +270,59 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
           <a
             href={downloadUrl}
             download={`${safeFilename}.pdf`}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-md transition-colors shrink-0"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white hover:bg-zinc-200 text-zinc-950 rounded-lg transition-colors shrink-0"
           >
             <Download className="w-3.5 h-3.5" />
-            Download .PDF
+            <span>.PDF</span>
           </a>
         </div>
       </div>
 
       {viewMode === 'pages' ? (
-        <div className="p-4 bg-slate-950/90 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] font-mono text-slate-400">
+        <div className="p-4 bg-[#09090b] space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] font-mono text-zinc-500">
             <span>
-              A4 Print Layout · {doc.pageCount} Compiled PDF{' '}
-              {doc.pageCount === 1 ? 'Page' : 'Pages'} · {sizeKb} KB %PDF-1.4 Binary Verified
+              A4 Print Layout · {doc.pageCount}{' '}
+              {doc.pageCount === 1 ? 'Page' : 'Pages'} · {sizeKb} KB %PDF-1.4
             </span>
             <a
               href={inlinePdfUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300 underline"
+              className="inline-flex items-center gap-1 text-zinc-200 hover:text-white underline underline-offset-4"
             >
               <span>Open Raw .PDF</span>
               <ExternalLink className="w-3 h-3" />
             </a>
           </div>
 
-          <div className="max-h-[540px] overflow-y-auto space-y-5 pr-1">
+          <div className="max-h-[560px] overflow-y-auto space-y-5 pr-1">
             {a4Pages.map((sheet) => (
               <div
                 key={sheet.pageNumber}
-                className="mx-auto max-w-[680px] rounded-lg bg-white text-slate-900 shadow-2xl border border-slate-700/70 overflow-hidden flex flex-col justify-between min-h-[420px]"
+                style={{ fontSize: `${zoomPct}%` }}
+                className="mx-auto max-w-[680px] rounded-lg bg-white text-zinc-900 shadow-2xl border border-white/15 overflow-hidden flex flex-col justify-between min-h-[420px]"
               >
                 <div>
                   {sheet.isCoverPage ? (
                     <div className={`px-6 py-4 text-white ${style.bannerClass}`}>
-                      <div className="text-[9px] font-mono font-bold tracking-widest text-sky-300/95 uppercase">
+                      <div className="text-[9px] font-mono font-bold tracking-widest text-zinc-400 uppercase">
                         {style.badge}
                       </div>
                       <h3 className="text-base sm:text-lg font-bold tracking-tight mt-0.5 text-white">
                         {doc.title}
                       </h3>
-                      <p className="text-xs italic text-slate-300 mt-0.5">
+                      <p className="text-xs italic text-zinc-300 mt-0.5">
                         {doc.subtitle}
                       </p>
-                      <div className="mt-2 pt-2 border-t border-white/15 flex flex-wrap items-center gap-x-3 text-[10px] font-mono text-slate-300">
+                      <div className="mt-2 pt-2 border-t border-white/15 flex flex-wrap items-center gap-x-3 text-[10px] font-mono text-zinc-400">
                         {doc.generatedDate && <span>{doc.generatedDate}</span>}
                         <span>{doc.author}</span>
                       </div>
                     </div>
                   ) : (
-                    <div className="px-6 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-[10px] font-mono text-slate-500">
-                      <span className="font-semibold text-slate-700 truncate">
+                    <div className="px-6 py-2.5 bg-zinc-50 border-b border-zinc-200 flex items-center justify-between text-[10px] font-mono text-zinc-500">
+                      <span className="font-semibold text-zinc-700 truncate">
                         {doc.title}
                       </span>
                       <span className={style.accentTextClass}>{style.badge}</span>
@@ -298,7 +339,7 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                         >
                           Executive Summary
                         </div>
-                        <p className="text-xs text-slate-800 leading-relaxed">
+                        <p className="text-xs text-zinc-800 leading-relaxed">
                           {doc.executiveSummary}
                         </p>
                       </div>
@@ -309,12 +350,12 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                         {doc.keyMetrics.map((metric, mIdx) => (
                           <div
                             key={`${metric.label}-${mIdx}`}
-                            className={`rounded-md border border-slate-200 bg-slate-50/80 p-2.5 border-t-2 ${style.accentBorderClass}`}
+                            className={`rounded-md border border-zinc-200 bg-zinc-50/80 p-2.5 border-t-2 ${style.accentBorderClass}`}
                           >
-                            <div className="text-[9px] font-semibold uppercase tracking-wide text-slate-500 line-clamp-2 leading-tight">
+                            <div className="text-[9px] font-semibold uppercase tracking-wide text-zinc-500 line-clamp-2 leading-tight">
                               {metric.label}
                             </div>
-                            <div className="text-sm font-bold text-slate-900 mt-1">
+                            <div className="text-sm font-bold text-zinc-900 mt-1">
                               {metric.value}
                             </div>
                             {metric.delta && (
@@ -331,13 +372,13 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
 
                     {sheet.sections.map((sec) => (
                       <section key={sec.sectionNumber} className="space-y-2">
-                        <div className="border-b border-slate-200 pb-1">
-                          <h4 className="text-sm font-bold text-slate-900">
+                        <div className="border-b border-zinc-200 pb-1">
+                          <h4 className="text-sm font-bold text-zinc-900">
                             {sec.sectionNumber}. {sec.heading}
                           </h4>
                         </div>
                         {sec.content && (
-                          <p className="text-xs text-slate-700 leading-relaxed">
+                          <p className="text-xs text-zinc-700 leading-relaxed">
                             {sec.content}
                           </p>
                         )}
@@ -346,9 +387,9 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                             {sec.bullets.map((b, bIdx) => (
                               <li
                                 key={bIdx}
-                                className="flex items-start gap-2 text-xs text-slate-700"
+                                className="flex items-start gap-2 text-xs text-zinc-700"
                               >
-                                <span className="w-1.5 h-1.5 rounded-[2px] bg-slate-700 mt-1.5 shrink-0" />
+                                <span className="w-1.5 h-1.5 rounded-[2px] bg-zinc-800 mt-1.5 shrink-0" />
                                 <span>{b}</span>
                               </li>
                             ))}
@@ -363,16 +404,16 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                             >
                               Key Takeaway
                             </div>
-                            <p className="text-[11px] italic text-slate-800 leading-relaxed">
+                            <p className="text-[11px] italic text-zinc-800 leading-relaxed">
                               {sec.callout}
                             </p>
                           </div>
                         )}
                         {sec.table && (
-                          <div className="overflow-x-auto rounded border border-slate-200">
+                          <div className="overflow-x-auto rounded border border-zinc-200">
                             <table className="w-full text-left border-collapse text-[11px]">
                               <thead>
-                                <tr className="bg-slate-900 text-white">
+                                <tr className="bg-zinc-950 text-white">
                                   {sec.table.headers.map((hdr, hIdx) => (
                                     <th key={hIdx} className="px-2.5 py-1.5 font-semibold">
                                       {hdr}
@@ -386,8 +427,8 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                                     key={rIdx}
                                     className={
                                       rIdx % 2 === 1
-                                        ? 'bg-slate-50 border-t border-slate-200'
-                                        : 'bg-white border-t border-slate-200'
+                                        ? 'bg-zinc-50 border-t border-zinc-200'
+                                        : 'bg-white border-t border-zinc-200'
                                     }
                                   >
                                     {row.map((cell, cIdx) => (
@@ -395,8 +436,8 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                                         key={cIdx}
                                         className={`px-2.5 py-1.5 ${
                                           cIdx === 0
-                                            ? 'font-semibold text-slate-900'
-                                            : 'text-slate-700'
+                                            ? 'font-semibold text-zinc-900'
+                                            : 'text-zinc-700'
                                         }`}
                                       >
                                         {cell}
@@ -413,9 +454,9 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                   </div>
                 </div>
 
-                <div className="px-6 py-2.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-[10px] font-mono text-slate-500">
+                <div className="px-6 py-2.5 bg-zinc-50 border-t border-zinc-200 flex items-center justify-between text-[10px] font-mono text-zinc-500">
                   <span>
-                    {doc.footer}  |  Sheet {sheet.pageNumber} of {a4Pages.length}
+                    {doc.footer} | Sheet {sheet.pageNumber} of {a4Pages.length}
                   </span>
                   <span>{doc.generatedDate ?? '%PDF-1.4'}</span>
                 </div>
@@ -424,17 +465,17 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
           </div>
         </div>
       ) : (
-        <div className="p-3.5 sm:p-4 space-y-3">
-          {/* Interactive Section Navigator Bar */}
+        <div className="p-3.5 sm:p-4 space-y-3 bg-[#09090b]">
+          {/* Section Outline Quick-Jump Bar */}
           {doc.sections.length > 1 && (
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
               <button
                 type="button"
                 onClick={() => setSelectedSectionIdx(null)}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-medium border whitespace-nowrap transition-colors cursor-pointer ${
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border whitespace-nowrap transition-colors cursor-pointer ${
                   selectedSectionIdx === null
-                    ? style.pillActiveClass
-                    : 'bg-slate-900/80 text-slate-400 border-slate-800 hover:text-slate-200'
+                    ? 'bg-white text-zinc-950 border-white font-semibold'
+                    : 'bg-[#141418] text-zinc-400 border-white/[0.08] hover:text-zinc-100'
                 }`}
               >
                 Full Report ({doc.sections.length})
@@ -444,10 +485,10 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                   key={sec.sectionNumber}
                   type="button"
                   onClick={() => setSelectedSectionIdx(idx)}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium border whitespace-nowrap transition-colors cursor-pointer ${
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border whitespace-nowrap transition-colors cursor-pointer ${
                     selectedSectionIdx === idx
-                      ? style.pillActiveClass
-                      : 'bg-slate-900/80 text-slate-400 border-slate-800 hover:text-slate-200'
+                      ? 'bg-white text-zinc-950 border-white font-semibold'
+                      : 'bg-[#141418] text-zinc-400 border-white/[0.08] hover:text-zinc-100'
                   }`}
                 >
                   {sec.sectionNumber}. {sec.heading.slice(0, 26)}
@@ -457,20 +498,22 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
             </div>
           )}
 
-          {/* Editorial Paper Sheet Preview (mirrors compiled %PDF-1.4 layout) */}
-          <div className="rounded-xl bg-white text-slate-900 shadow-xl overflow-hidden border border-slate-700/60 max-h-[540px] overflow-y-auto">
-            {/* Executive Masthead */}
+          {/* Crisp Editorial Paper Sheet Preview Framed in Obsidian Chrome */}
+          <div
+            style={{ fontSize: `${zoomPct}%` }}
+            className="rounded-xl bg-white text-zinc-900 shadow-2xl overflow-hidden border border-white/15 max-h-[560px] overflow-y-auto"
+          >
             <div className={`px-6 py-5 text-white ${style.bannerClass}`}>
-              <div className="text-[10px] font-mono font-bold tracking-widest text-sky-300/95 uppercase">
+              <div className="text-[10px] font-mono font-bold tracking-widest text-zinc-400 uppercase">
                 {style.badge}
               </div>
               <h3 className="text-lg sm:text-xl font-bold tracking-tight mt-1 text-white leading-snug">
                 {doc.title}
               </h3>
-              <p className="text-xs sm:text-sm italic text-slate-300 mt-1">
+              <p className="text-xs sm:text-sm italic text-zinc-300 mt-1">
                 {doc.subtitle}
               </p>
-              <div className="mt-3 pt-2.5 border-t border-white/15 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-mono text-slate-300">
+              <div className="mt-3 pt-2.5 border-t border-white/15 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-mono text-zinc-400">
                 {doc.generatedDate && <span>{doc.generatedDate}</span>}
                 <span>{doc.author}</span>
                 <span>
@@ -481,7 +524,6 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
             </div>
 
             <div className="p-5 sm:p-6 space-y-5">
-              {/* Executive Summary */}
               {selectedSectionIdx === null && doc.executiveSummary && (
                 <div
                   className={`rounded-lg border p-4 border-l-4 ${style.tintBgClass} ${style.accentBorderClass}`}
@@ -491,24 +533,23 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                   >
                     Executive Summary
                   </div>
-                  <p className="text-xs sm:text-sm text-slate-800 leading-relaxed">
+                  <p className="text-xs sm:text-sm text-zinc-800 leading-relaxed">
                     {doc.executiveSummary}
                   </p>
                 </div>
               )}
 
-              {/* KPI Metrics Strip */}
               {selectedSectionIdx === null && doc.keyMetrics.length > 0 && (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                   {doc.keyMetrics.map((metric, mIdx) => (
                     <div
                       key={`${metric.label}-${mIdx}`}
-                      className={`rounded-lg border border-slate-200 bg-slate-50/80 p-3 border-t-2 ${style.accentBorderClass}`}
+                      className={`rounded-lg border border-zinc-200 bg-zinc-50/80 p-3 border-t-2 ${style.accentBorderClass}`}
                     >
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 line-clamp-2 leading-tight">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 line-clamp-2 leading-tight">
                         {metric.label}
                       </div>
-                      <div className="text-base font-bold text-slate-900 mt-1 truncate">
+                      <div className="text-base font-bold text-zinc-900 mt-1 truncate">
                         {metric.value}
                       </div>
                       {metric.delta && (
@@ -523,17 +564,16 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                 </div>
               )}
 
-              {/* Sections */}
               {visibleSections.map((sec) => (
                 <section key={sec.sectionNumber} className="space-y-2.5">
-                  <div className="border-b border-slate-200 pb-1.5">
-                    <h4 className="text-sm sm:text-base font-bold text-slate-900">
+                  <div className="border-b border-zinc-200 pb-1.5">
+                    <h4 className="text-sm sm:text-base font-bold text-zinc-900">
                       {sec.sectionNumber}. {sec.heading}
                     </h4>
                   </div>
 
                   {sec.content && (
-                    <p className="text-xs sm:text-[13px] text-slate-700 leading-relaxed">
+                    <p className="text-xs sm:text-[13px] text-zinc-700 leading-relaxed">
                       {sec.content}
                     </p>
                   )}
@@ -543,9 +583,9 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                       {sec.bullets.map((b, bIdx) => (
                         <li
                           key={bIdx}
-                          className="flex items-start gap-2 text-xs sm:text-[13px] text-slate-700"
+                          className="flex items-start gap-2 text-xs sm:text-[13px] text-zinc-700"
                         >
-                          <span className="w-1.5 h-1.5 rounded-[2px] bg-slate-700 mt-1.5 shrink-0" />
+                          <span className="w-1.5 h-1.5 rounded-[2px] bg-zinc-800 mt-1.5 shrink-0" />
                           <span>{b}</span>
                         </li>
                       ))}
@@ -562,7 +602,7 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                         <Sparkles className="w-3 h-3" />
                         Key Takeaway
                       </div>
-                      <p className="text-xs italic text-slate-800 leading-relaxed">
+                      <p className="text-xs italic text-zinc-800 leading-relaxed">
                         {sec.callout}
                       </p>
                     </div>
@@ -571,14 +611,14 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                   {sec.table && (
                     <div className="pt-1">
                       {sec.table.caption && (
-                        <div className="text-[11px] font-semibold text-slate-600 mb-1.5">
+                        <div className="text-[11px] font-semibold text-zinc-600 mb-1.5">
                           {sec.table.caption}
                         </div>
                       )}
-                      <div className="overflow-x-auto rounded-lg border border-slate-200">
+                      <div className="overflow-x-auto rounded-lg border border-zinc-200">
                         <table className="w-full text-left border-collapse text-xs">
                           <thead>
-                            <tr className="bg-slate-900 text-white">
+                            <tr className="bg-zinc-950 text-white">
                               {sec.table.headers.map((hdr, hIdx) => (
                                 <th
                                   key={hIdx}
@@ -595,8 +635,8 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                                 key={rIdx}
                                 className={
                                   rIdx % 2 === 1
-                                    ? 'bg-slate-50 border-t border-slate-200'
-                                    : 'bg-white border-t border-slate-200'
+                                    ? 'bg-zinc-50 border-t border-zinc-200'
+                                    : 'bg-white border-t border-zinc-200'
                                 }
                               >
                                 {row.map((cell, cIdx) => (
@@ -604,8 +644,8 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                                     key={cIdx}
                                     className={`px-3 py-2 text-[11px] ${
                                       cIdx === 0
-                                        ? 'font-semibold text-slate-900'
-                                        : 'text-slate-700'
+                                        ? 'font-semibold text-zinc-900'
+                                        : 'text-zinc-700'
                                     }`}
                                   >
                                     {cell}
@@ -621,8 +661,7 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                 </section>
               ))}
 
-              {/* Paper Footer */}
-              <div className="pt-3 border-t border-slate-200 flex items-center justify-between text-[10px] font-mono text-slate-500">
+              <div className="pt-3 border-t border-zinc-200 flex items-center justify-between text-[10px] font-mono text-zinc-500">
                 <span>
                   {doc.footer} · {doc.pageCount}{' '}
                   {doc.pageCount === 1 ? 'Page' : 'Pages'}
@@ -632,7 +671,6 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
             </div>
           </div>
 
-          {/* Section Pager when focused on a single section */}
           {selectedSectionIdx !== null && (
             <div className="flex items-center justify-between">
               <button
@@ -641,12 +679,12 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                   setSelectedSectionIdx((i) => Math.max(0, (i ?? 0) - 1))
                 }
                 disabled={selectedSectionIdx === 0}
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-[#141418] border border-white/[0.08] text-zinc-200 hover:bg-white/[0.08] disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
-                Previous Section
+                <span>Previous Section</span>
               </button>
-              <span className="text-[11px] font-mono text-slate-400">
+              <span className="text-[11px] font-mono text-zinc-500">
                 Section {selectedSectionIdx + 1} of {doc.sections.length}
               </span>
               <button
@@ -657,9 +695,9 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                   )
                 }
                 disabled={selectedSectionIdx === doc.sections.length - 1}
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-[#141418] border border-white/[0.08] text-zinc-200 hover:bg-white/[0.08] disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
               >
-                Next Section
+                <span>Next Section</span>
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>

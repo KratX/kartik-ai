@@ -12,7 +12,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import type {
   ApiEnvelope,
   ArtifactRecord,
@@ -38,7 +38,14 @@ import { AuthModal } from './components/auth/AuthModal.js';
 import { BillingDrawer } from './components/billing/BillingDrawer.js';
 import { ChatArea } from './components/chat/ChatArea.js';
 import { ChatInput } from './components/chat/ChatInput.js';
+import { AttachmentLightbox } from './components/common/AttachmentLightbox.js';
 import { CommandPalette } from './components/common/CommandPalette.js';
+import { ShortcutsModal } from './components/common/ShortcutsModal.js';
+import {
+  ToastStack,
+  type WorkspaceToast,
+  type WorkspaceToastTone,
+} from './components/common/ToastStack.js';
 import { Nav } from './components/layout/Nav.js';
 import { Sidebar } from './components/layout/Sidebar.js';
 import { StepFileDownloads } from './components/common/StepFileDownloads.js';
@@ -192,9 +199,12 @@ export function App() {
     clampCanvasWidthPct(readStoredNumber(CANVAS_WIDTH_PCT_KEY, 48)),
   );
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
   const [isBillingDrawerOpen, setIsBillingDrawerOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isFixDownloadsOpen, setIsFixDownloadsOpen] = useState(false);
+  const [previewAttachment, setPreviewAttachment] =
+    useState<UploadedFileRecord | null>(null);
   const [lightboxImage, setLightboxImage] = useState<{
     readonly title: string;
     readonly imageUrl: string;
@@ -215,6 +225,12 @@ export function App() {
     null,
   );
   const [messages, setMessages] = useState<readonly PlatformMessage[]>([]);
+  const [streamingMessageIds, setStreamingMessageIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [threadArtifactTypes, setThreadArtifactTypes] = useState<
+    Readonly<Record<string, ArtifactRecord['artifactType']>>
+  >({});
   const [uploadedFiles, setUploadedFiles] = useState<
     readonly UploadedFileRecord[]
   >([]);
@@ -240,8 +256,8 @@ export function App() {
     null,
   );
   const [isTurnLoading, setIsTurnLoading] = useState(false);
-  const [errorBanner, setErrorBanner] = useState<string | null>(null);
-  const [statusBanner, setStatusBanner] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<readonly WorkspaceToast[]>([]);
+  const toastTimersRef = useRef<Map<string, number>>(new Map());
   const [lastTurnReplayPayload, setLastTurnReplayPayload] = useState<{
     readonly conversationId: string;
     readonly requestId: string;
@@ -255,9 +271,49 @@ export function App() {
   const messagesLoadSeqRef = useRef(0);
   const hasBootstrappedRef = useRef(false);
 
+  const dismissToast = useCallback((id: string) => {
+    const timer = toastTimersRef.current.get(id);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      toastTimersRef.current.delete(id);
+    }
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const pushToast = useCallback(
+    (message: string, tone: WorkspaceToastTone = 'info') => {
+      const id = `toast_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+      setToasts((prev) => [...prev.slice(-2), { id, message, tone }]);
+      const durationMs = tone === 'error' ? 6000 : 3800;
+      const timer = window.setTimeout(() => {
+        toastTimersRef.current.delete(id);
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, durationMs);
+      toastTimersRef.current.set(id, timer);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const timers = toastTimersRef.current;
+    return () => {
+      timers.forEach((timerId) => window.clearTimeout(timerId));
+      timers.clear();
+    };
+  }, []);
+
   const setActiveConversationIdSafe = useCallback((convId: string | null) => {
     activeConversationIdRef.current = convId;
     setActiveConversationId(convId);
+  }, []);
+
+  const handleStreamComplete = useCallback((messageId: string) => {
+    setStreamingMessageIds((prev) => {
+      if (!prev.has(messageId)) return prev;
+      const next = new Set(prev);
+      next.delete(messageId);
+      return next;
+    });
   }, []);
 
   // Re-sync persisted pins & renames when auth user switches
@@ -266,18 +322,6 @@ export function App() {
     setPinnedIds(new Set(prefs.pinnedIds));
     setTitleOverrides(prefs.titleOverrides);
   }, [prefsScopeKey]);
-
-  // Global Cmd+K / Ctrl+K Command Palette Shortcut
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        setIsCommandPaletteOpen((prev) => !prev);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   const threadArtifacts = useMemo(
     () => extractThreadArtifacts(messages),
@@ -314,6 +358,38 @@ export function App() {
     });
   }, []);
 
+  // Global Keyboard Shortcuts: ⌘K Command Palette, ⌘B Sidebar Rail, ? Shortcuts Sheet
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setIsCommandPaletteOpen((prev) => !prev);
+        return;
+      }
+      if (mod && event.key.toLowerCase() === 'b') {
+        event.preventDefault();
+        handleToggleSidebar();
+        return;
+      }
+      if (event.key === '?' && !mod && !event.altKey) {
+        const target = event.target as HTMLElement | null;
+        const tag = target?.tagName?.toLowerCase() ?? '';
+        const isEditable =
+          tag === 'input' ||
+          tag === 'textarea' ||
+          tag === 'select' ||
+          Boolean(target?.isContentEditable);
+        if (!isEditable) {
+          event.preventDefault();
+          setIsShortcutsModalOpen((prev) => !prev);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleToggleSidebar]);
+
   const handleResizeCanvasWidthPct = useCallback((nextPct: number) => {
     const clamped = clampCanvasWidthPct(nextPct);
     setCanvasWidthPct(clamped);
@@ -328,16 +404,18 @@ export function App() {
     (conversationId: string) => {
       setPinnedIds((prev) => {
         const next = new Set(prev);
-        if (next.has(conversationId)) {
+        const wasPinned = next.has(conversationId);
+        if (wasPinned) {
           next.delete(conversationId);
         } else {
           next.add(conversationId);
         }
         writeWorkspacePrefs(prefsScopeKey, next, titleOverrides);
+        pushToast(wasPinned ? 'Thread unpinned' : 'Thread pinned to top', 'info');
         return next;
       });
     },
-    [prefsScopeKey, titleOverrides],
+    [prefsScopeKey, pushToast, titleOverrides],
   );
 
   const handleRenameConversation = useCallback(
@@ -349,8 +427,9 @@ export function App() {
         writeWorkspacePrefs(prefsScopeKey, pinnedIds, next);
         return next;
       });
+      pushToast(`Renamed thread to "${trimmed}"`, 'success');
     },
-    [prefsScopeKey, pinnedIds],
+    [prefsScopeKey, pinnedIds, pushToast],
   );
 
   const refreshBillingAndAuth = useCallback(async () => {
@@ -410,9 +489,17 @@ export function App() {
       }
       if (json.ok) {
         const loadedMessages = json.data.messages ?? json.data.items ?? [];
+        setStreamingMessageIds(new Set());
         setMessages(loadedMessages);
         const extracted = extractThreadArtifacts(loadedMessages);
-        setActiveArtifact(extracted[extracted.length - 1] ?? null);
+        const latestArtifact = extracted[extracted.length - 1] ?? null;
+        setActiveArtifact(latestArtifact);
+        if (latestArtifact) {
+          setThreadArtifactTypes((prev) => ({
+            ...prev,
+            [convId]: latestArtifact.artifactType,
+          }));
+        }
         if (extracted.length === 0) {
           setIsArtifactPanelOpen(false);
         }
@@ -484,16 +571,15 @@ export function App() {
   }, [refreshBillingAndAuth, refreshConversations]);
 
   const handleSelectConversation = async (conversationId: string) => {
+    setStreamingMessageIds(new Set());
     setActiveConversationIdSafe(conversationId);
-    setErrorBanner(null);
     await loadConversationMessages(conversationId);
   };
 
-  // New Chat cleanly resets straight to the calm 21st.dev Hero Empty State
+  // New Chat / Brand Home cleanly resets straight to the calm 21st.dev Hero Empty State
   const handleCreateConversation = () => {
     messagesLoadSeqRef.current += 1;
-    setErrorBanner(null);
-    setStatusBanner(null);
+    setStreamingMessageIds(new Set());
     setActiveConversationIdSafe(null);
     setMessages([]);
     setAttachedTurnFiles([]);
@@ -530,7 +616,6 @@ export function App() {
   };
 
   const handleDeleteConversation = async (conversationId: string) => {
-    setErrorBanner(null);
     try {
       const res = await apiFetch(
         `/api/v1/conversations/${encodeURIComponent(conversationId)}`,
@@ -550,23 +635,26 @@ export function App() {
         };
       }>;
       if (!json.ok) {
-        setErrorBanner(`${json.error.code}: ${json.error.message}`);
+        pushToast(`${json.error.code}: ${json.error.message}`, 'error');
         return;
       }
       if (activeConversationIdRef.current === conversationId) {
+        setStreamingMessageIds(new Set());
         setActiveConversationIdSafe(null);
         setMessages([]);
         setActiveArtifact(null);
         setIsArtifactPanelOpen(false);
       }
-      setStatusBanner(
-        `Cascade deleted conversation (${json.data.purgedSummary.purgedVectorChunks} vector chunks & ${json.data.purgedSummary.purgedStorageKeys.length} private objects purged).`,
+      pushToast(
+        `Deleted thread (${json.data.purgedSummary.purgedVectorChunks} vector chunks & ${json.data.purgedSummary.purgedStorageKeys.length} objects purged).`,
+        'success',
       );
       await refreshConversations(undefined, { preserveHeroIfUnset: true });
       await refreshBillingAndAuth();
     } catch (err) {
-      setErrorBanner(
+      pushToast(
         err instanceof Error ? err.message : 'Failed to delete conversation.',
+        'error',
       );
     }
   };
@@ -581,8 +669,6 @@ export function App() {
     readonly attachmentFileIds?: string[];
   }) => {
     setIsTurnLoading(true);
-    setErrorBanner(null);
-    setStatusBanner(null);
 
     try {
       const targetConvId =
@@ -617,7 +703,7 @@ export function App() {
       }>;
 
       if (!json.ok) {
-        setErrorBanner(`${json.error.code}: ${json.error.message}`);
+        pushToast(`${json.error.code}: ${json.error.message}`, 'error');
         return;
       }
 
@@ -634,8 +720,9 @@ export function App() {
       setAttachedTurnFiles([]);
 
       if (json.data.idempotentReplay) {
-        setStatusBanner(
-          `Idempotent replay verified (requestId: ${json.data.requestId}) — 0 credits deducted.`,
+        pushToast(
+          `Idempotent replay verified (${json.data.requestId}) — 0 credits deducted.`,
+          'success',
         );
       }
 
@@ -645,10 +732,24 @@ export function App() {
       if (newestArtifact) {
         setActiveArtifact(newestArtifact);
         setIsArtifactPanelOpen(true);
+        setThreadArtifactTypes((prev) => ({
+          ...prev,
+          [resolvedConvId]: newestArtifact.artifactType,
+        }));
       }
 
       messagesLoadSeqRef.current += 1;
       setActiveConversationIdSafe(resolvedConvId);
+
+      // Stream newly generated assistant replies smoothly character-by-character
+      if (!json.data.idempotentReplay) {
+        setStreamingMessageIds((prev) => {
+          const next = new Set(prev);
+          next.add(json.data.assistantMessage.messageId);
+          return next;
+        });
+      }
+
       setMessages((prev) => {
         const exists = prev.some(
           (m) => m.messageId === json.data.assistantMessage.messageId,
@@ -664,8 +765,9 @@ export function App() {
         refreshBillingAndAuth(),
       ]);
     } catch (err) {
-      setErrorBanner(
+      pushToast(
         err instanceof Error ? err.message : 'Failed to execute agent turn.',
+        'error',
       );
     } finally {
       setIsTurnLoading(false);
@@ -684,6 +786,16 @@ export function App() {
       responseDepth,
       attachmentFileIds: attachedTurnFiles.map((f) => f.fileId),
     });
+  };
+
+  const handleEditPrompt = async (editedPrompt: string) => {
+    const trimmed = editedPrompt.trim();
+    if (!trimmed || isTurnLoading || demoReadOnly) return;
+    pushToast('Re-running edited prompt…', 'info');
+    await handleSendMessage(
+      trimmed,
+      selectedAgent === 'chat' ? undefined : selectedAgent,
+    );
   };
 
   const handleReplayLastTurn = async () => {
@@ -765,8 +877,6 @@ export function App() {
     readonly declaredMimeType: string;
     readonly contentBase64: string;
   }): Promise<void> => {
-    setErrorBanner(null);
-
     try {
       const targetConvId = await ensureActiveConversationId(
         `Analyze ${file.originalFilename}`,
@@ -790,7 +900,7 @@ export function App() {
         chunkCount: number;
       }>;
       if (!json.ok) {
-        setErrorBanner(`${json.error.code}: ${json.error.message}`);
+        pushToast(`${json.error.code}: ${json.error.message}`, 'error');
         return;
       }
 
@@ -804,15 +914,17 @@ export function App() {
       ) {
         setSelectedAgent('rag');
       }
-      setStatusBanner(
+      pushToast(
         uploadedFile.mimeType.startsWith('image/')
-          ? `Attached image "${uploadedFile.originalFilename}" (${Math.max(1, Math.round(uploadedFile.sizeBytes / 1024))} KB) — ready for Vision OCR & multimodal inspection.`
-          : `Indexed "${uploadedFile.originalFilename}" (${json.data.chunkCount} vector chunks stored in Qdrant user namespace).`,
+          ? `Attached "${uploadedFile.originalFilename}" — ready for Vision inspection.`
+          : `Indexed "${uploadedFile.originalFilename}" (${json.data.chunkCount} vector chunks).`,
+        'success',
       );
       await refreshBillingAndAuth();
     } catch (err) {
-      setErrorBanner(
+      pushToast(
         err instanceof Error ? err.message : 'File upload failed.',
+        'error',
       );
     }
   };
@@ -823,7 +935,6 @@ export function App() {
 
   // Toggle DEMO_READ_ONLY kill switch
   const handleToggleDemoReadOnly = async () => {
-    setErrorBanner(null);
     try {
       const res = await apiFetch('/api/v1/demo/toggle-read-only', {
         method: 'POST',
@@ -833,10 +944,11 @@ export function App() {
       const json = (await res.json()) as ApiEnvelope<{ demoReadOnly: boolean }>;
       if (json.ok) {
         setDemoReadOnly(json.data.demoReadOnly);
-        setStatusBanner(
+        pushToast(
           json.data.demoReadOnly
-            ? 'DEMO_READ_ONLY activated — mutating endpoints now return HTTP 403.'
-            : 'DEMO_READ_ONLY disabled — workspace mutations and specialist runs enabled.',
+            ? 'DEMO_READ_ONLY activated — mutations return HTTP 403.'
+            : 'DEMO_READ_ONLY disabled — workspace mutations enabled.',
+          json.data.demoReadOnly ? 'warning' : 'success',
         );
       }
     } catch {
@@ -943,8 +1055,9 @@ export function App() {
       orderId;
 
     setAvailableCredits(updatedBalance);
-    setStatusBanner(
-      `Razorpay HMAC-SHA256 verified (${verifiedPaymentId}) — +${creditsAdded} credits added to ledger.`,
+    pushToast(
+      `Razorpay HMAC-SHA256 verified (${verifiedPaymentId}) — +${creditsAdded} credits added.`,
+      'success',
     );
     await refreshBillingAndAuth();
   };
@@ -960,7 +1073,7 @@ export function App() {
     const resolvedIdToken = input.idToken?.trim() ?? '';
     if (!resolvedIdToken) {
       const msg = 'Verified Firebase ID token is required to sign in.';
-      setErrorBanner(msg);
+      pushToast(msg, 'error');
       throw new Error(msg);
     }
     const headers: Record<string, string> = {
@@ -994,7 +1107,7 @@ export function App() {
     if (!isSuccess || !json.data?.user) {
       const errMsg =
         json.error?.message ?? `Google sign-in failed (HTTP ${res.status})`;
-      setErrorBanner(errMsg);
+      pushToast(errMsg, 'error');
       throw new Error(errMsg);
     }
 
@@ -1007,14 +1120,14 @@ export function App() {
       planId: rawUser.planId ?? 'plan_free',
     };
     setUser(normalizedUser);
-    setErrorBanner(null);
     const sessionTag = (
       json.data.sessionId ??
       json.data.sessionExpiresAt ??
       'active'
     ).slice(0, 12);
-    setStatusBanner(
-      `Signed in as ${normalizedUser.displayName} (${normalizedUser.email} · session ${sessionTag}…).`,
+    pushToast(
+      `Signed in as ${normalizedUser.displayName} (${sessionTag}…).`,
+      'success',
     );
     await Promise.all([
       refreshBillingAndAuth(),
@@ -1032,13 +1145,12 @@ export function App() {
     };
     if (json.ok === true || (res.ok && !json.error)) {
       setUser(null);
+      setStreamingMessageIds(new Set());
       setActiveConversationIdSafe(null);
       setMessages([]);
       setActiveArtifact(null);
       setIsArtifactPanelOpen(false);
-      setStatusBanner(
-        'Signed out of Google session. Continuing in ready-to-use workspace.',
-      );
+      pushToast('Signed out. Continuing in guest workspace.', 'info');
       await Promise.all([
         refreshBillingAndAuth(),
         refreshConversations(undefined, { preserveHeroIfUnset: true }),
@@ -1063,6 +1175,7 @@ export function App() {
     onSelectResponseDepth: setResponseDepth,
     attachedFiles: attachedTurnFiles,
     onRemoveAttachedFile: handleRemoveAttachedFile,
+    onOpenAttachment: setPreviewAttachment,
     onUploadFile: handleUploadFile,
     onSendMessage: handleSendMessage,
     isLoading: isTurnLoading,
@@ -1082,6 +1195,7 @@ export function App() {
           activeConversationId={activeConversationId}
           pinnedIds={pinnedIds}
           titleOverrides={titleOverrides}
+          threadArtifactTypes={threadArtifactTypes}
           uploadedFiles={uploadedFiles}
           user={user}
           availableCredits={availableCredits}
@@ -1096,7 +1210,7 @@ export function App() {
           onLogout={() => void handleLogout()}
         />
 
-        {/* Center Pane: Razor-Clean Nav + Toast + Hero/Editorial Stream + Floating Composer */}
+        {/* Center Pane: Razor-Clean Nav + Hero/Editorial Stream + Floating Composer */}
         <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
           <Nav
             conversationTitle={resolvedActiveTitle}
@@ -1106,6 +1220,7 @@ export function App() {
             artifactCount={threadArtifacts.length}
             isArtifactPanelOpen={isArtifactPanelOpen && Boolean(activeArtifact)}
             canReplayLastTurn={Boolean(lastTurnReplayPayload)}
+            onGoHome={handleCreateConversation}
             onToggleSidebar={handleToggleSidebar}
             onRenameConversation={
               activeConversationId
@@ -1114,6 +1229,7 @@ export function App() {
                 : undefined
             }
             onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+            onOpenShortcuts={() => setIsShortcutsModalOpen(true)}
             onToggleDemoReadOnly={() => void handleToggleDemoReadOnly()}
             onReplayLastTurn={() => void handleReplayLastTurn()}
             onToggleArtifactPanel={() => {
@@ -1132,52 +1248,22 @@ export function App() {
             }
           />
 
-          {/* Refined Obsidian Status / Error Banner */}
-          {(errorBanner || statusBanner) && (
-            <div
-              className={`shrink-0 px-4 py-2 border-b flex items-center justify-between gap-3 text-xs ${
-                errorBanner
-                  ? 'bg-rose-950/50 border-rose-500/30 text-rose-200'
-                  : 'bg-[#111114] border-white/[0.08] text-zinc-200'
-              }`}
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                {errorBanner ? (
-                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                ) : (
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                )}
-                <span className="truncate font-medium">
-                  {errorBanner ?? statusBanner}
-                </span>
-              </div>
-              <button
-                type="button"
-                aria-label="Dismiss notification"
-                onClick={() => {
-                  setErrorBanner(null);
-                  setStatusBanner(null);
-                }}
-                className="p-1 rounded hover:bg-white/[0.08] text-zinc-400 hover:text-white cursor-pointer"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-
           {/* Hero Empty State or Active Editorial Conversation Stream */}
           <ChatArea
             messages={messages}
             isLoading={isTurnLoading}
             activeAgent={selectedAgent}
             userDisplayName={user?.displayName ?? null}
+            streamingMessageIds={streamingMessageIds}
             activeCanvasArtifactId={activeArtifact?.artifactId ?? null}
             isCanvasOpen={isArtifactPanelOpen && Boolean(activeArtifact)}
             heroComposer={<ChatInput variant="hero" {...sharedComposerProps} />}
+            onStreamComplete={handleStreamComplete}
             onQuickPromptSelect={(prompt, agent) =>
               void handleQuickPromptSelect(prompt, agent)
             }
             onRegenerate={(msg) => void handleRegenerateMessage(msg)}
+            onEditPrompt={(edited) => void handleEditPrompt(edited)}
             onHandoffToSpecialist={(target, msg) =>
               void handleHandoffToSpecialist(target, msg)
             }
@@ -1185,10 +1271,12 @@ export function App() {
               setActiveArtifact(artifact);
               setIsArtifactPanelOpen(true);
             }}
+            onOpenAttachment={setPreviewAttachment}
             onDropUploadFile={handleUploadFile}
             lightboxImage={lightboxImage}
             onOpenLightboxImage={setLightboxImage}
             onCloseLightboxImage={() => setLightboxImage(null)}
+            onNotify={(message, tone) => pushToast(message, tone ?? 'success')}
           >
             <ChatInput variant="dock" {...sharedComposerProps} />
           </ChatArea>
@@ -1230,6 +1318,7 @@ export function App() {
         onSelectAgent={setSelectedAgent}
         onSelectResponseDepth={setResponseDepth}
         onOpenBilling={() => setIsBillingDrawerOpen(true)}
+        onOpenShortcuts={() => setIsShortcutsModalOpen(true)}
         onToggleArtifactCanvas={() => {
           if (!activeArtifact && threadArtifacts.length > 0) {
             setActiveArtifact(
@@ -1245,6 +1334,18 @@ export function App() {
         onOpenFixDownloads={
           import.meta.env.DEV ? () => setIsFixDownloadsOpen(true) : undefined
         }
+      />
+
+      {/* Keyboard Shortcuts Reference Sheet (?) */}
+      <ShortcutsModal
+        isOpen={isShortcutsModalOpen}
+        onClose={() => setIsShortcutsModalOpen(false)}
+      />
+
+      {/* Uploaded Image & PDF Attachment Lightbox */}
+      <AttachmentLightbox
+        file={previewAttachment}
+        onClose={() => setPreviewAttachment(null)}
       />
 
       {/* Billing & Credits Drawer */}
@@ -1266,6 +1367,9 @@ export function App() {
         onClose={() => setIsAuthModalOpen(false)}
         onGoogleSignIn={handleLoginWithGoogle}
       />
+
+      {/* Global Spring Toast Notification Stack */}
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
       {/* Fix & Changed Files Download Modal (Dev-only) */}
       {import.meta.env.DEV && isFixDownloadsOpen && (

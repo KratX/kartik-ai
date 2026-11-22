@@ -66,6 +66,7 @@ export interface ChatInputProps {
   readonly onSelectResponseDepth: (depth: ChatResponseDepth) => void;
   readonly attachedFiles: readonly UploadedFileRecord[];
   readonly onRemoveAttachedFile: (fileId: string) => void;
+  readonly onOpenAttachment?: (file: UploadedFileRecord) => void;
   readonly onUploadFile: (file: {
     readonly originalFilename: string;
     readonly declaredMimeType: string;
@@ -87,6 +88,7 @@ export function ChatInput({
   onSelectResponseDepth,
   attachedFiles,
   onRemoveAttachedFile,
+  onOpenAttachment,
   onUploadFile,
   onSendMessage,
   isLoading,
@@ -360,27 +362,37 @@ export function ChatInput({
                   <div
                     key={file.fileId}
                     data-attached-image-chip="true"
-                    className="inline-flex items-center gap-2.5 pl-1.5 pr-2.5 py-1.5 rounded-xl bg-[#18181c] border border-white/[0.12] text-xs text-zinc-100"
+                    className="inline-flex items-center gap-2 pl-1.5 pr-2 py-1.5 rounded-xl bg-[#18181c] border border-white/[0.12] hover:border-white/[0.22] text-xs text-zinc-100 transition-colors"
                   >
-                    <div className="w-8 h-8 rounded-lg overflow-hidden border border-white/10 bg-[#09090b] flex items-center justify-center shrink-0">
-                      <img
-                        src={buildUploadedFileRawUrl(file.fileId)}
-                        alt={file.originalFilename}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-medium text-zinc-100 max-w-[180px] truncate text-xs">
-                        {file.originalFilename}
+                    <button
+                      type="button"
+                      onClick={() => onOpenAttachment?.(file)}
+                      title={`Inspect ${file.originalFilename}`}
+                      className="inline-flex items-center gap-2.5 text-left cursor-pointer"
+                    >
+                      <div className="w-8 h-8 rounded-lg overflow-hidden border border-white/10 bg-[#09090b] flex items-center justify-center shrink-0">
+                        <img
+                          src={buildUploadedFileRawUrl(file.fileId)}
+                          alt={file.originalFilename}
+                          className="w-full h-full object-cover"
+                        />
                       </div>
-                      <div className="text-[10px] font-mono tabular-nums text-zinc-400">
-                        {formatImageFileBadge(file.mimeType, file.sizeBytes)} · Vision
+                      <div className="min-w-0">
+                        <div className="font-medium text-zinc-100 max-w-[180px] truncate text-xs">
+                          {file.originalFilename}
+                        </div>
+                        <div className="text-[10px] font-mono tabular-nums text-zinc-400">
+                          {formatImageFileBadge(file.mimeType, file.sizeBytes)} · Vision
+                        </div>
                       </div>
-                    </div>
+                    </button>
                     <button
                       type="button"
                       aria-label={`Remove ${file.originalFilename}`}
-                      onClick={() => onRemoveAttachedFile(file.fileId)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveAttachedFile(file.fileId);
+                      }}
                       className="p-1 rounded-md hover:bg-white/[0.08] text-zinc-400 hover:text-white cursor-pointer"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -392,19 +404,29 @@ export function ChatInput({
               return (
                 <div
                   key={file.fileId}
-                  className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-[#18181c] border border-white/[0.1] text-xs text-zinc-200"
+                  className="inline-flex items-center gap-1.5 pl-2.5 pr-2 py-1.5 rounded-xl bg-[#18181c] border border-white/[0.1] hover:border-white/[0.22] text-xs text-zinc-200 transition-colors"
                 >
-                  <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span className="font-medium max-w-[180px] truncate">
-                    {file.originalFilename}
-                  </span>
-                  <span className="text-[10px] font-mono tabular-nums text-zinc-400">
-                    {file.pageCount ? `${file.pageCount}p · ${file.chunkCount} ch` : 'ready'}
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onOpenAttachment?.(file)}
+                    title={`Inspect ${file.originalFilename}`}
+                    className="inline-flex items-center gap-2 text-left cursor-pointer"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span className="font-medium max-w-[180px] truncate">
+                      {file.originalFilename}
+                    </span>
+                    <span className="text-[10px] font-mono tabular-nums text-zinc-400">
+                      {file.pageCount ? `${file.pageCount}p · ${file.chunkCount} ch` : 'ready'}
+                    </span>
+                  </button>
                   <button
                     type="button"
                     aria-label={`Remove ${file.originalFilename}`}
-                    onClick={() => onRemoveAttachedFile(file.fileId)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemoveAttachedFile(file.fileId);
+                    }}
                     className="p-0.5 rounded hover:bg-white/[0.1] text-zinc-400 hover:text-white cursor-pointer"
                   >
                     <X className="w-3 h-3" />
@@ -612,11 +634,7 @@ export function ChatInput({
                       aria-pressed={active}
                       title={opt.description}
                       onClick={() => onSelectResponseDepth(opt.id)}
-                      className={`relative px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                        active
-                          ? 'text-zinc-950'
-                          : 'text-zinc-400 hover:text-zinc-100'
-                      }`}
+                      className="group relative isolate px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap cursor-pointer"
                     >
                       {active && (
                         <motion.span
@@ -626,10 +644,18 @@ export function ChatInput({
                             stiffness: 500,
                             damping: 36,
                           }}
-                          className="absolute inset-0 rounded-md bg-white shadow-sm"
+                          className="absolute inset-0 z-0 rounded-md bg-white shadow-sm"
                         />
                       )}
-                      <span className="relative z-10">{opt.label}</span>
+                      <span
+                        className={`relative z-10 ${
+                          active
+                            ? 'text-[#09090b] font-semibold'
+                            : 'text-zinc-400 group-hover:text-zinc-100'
+                        }`}
+                      >
+                        {opt.label}
+                      </span>
                     </button>
                   );
                 })}

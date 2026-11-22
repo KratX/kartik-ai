@@ -17,6 +17,128 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-24',
+    title: 'Fix #24 — 21st.dev Studio Polish: Rotating Hero Scramble Text, Clickable Animated Kartik.ai Brand Home, Fluid Gemini-Style Streaming Reveal, Obsidian Artifact Studios, BorderBeam AuthModal, Citation Hover Cards, Edit & Re-run, Attachment Lightbox, Spring Toasts & Shortcuts Sheet',
+    subtitle:
+      '21 files · Replaces Hero subtitle with 21st.dev MotionScrambleText cycling 7 curated lines; adds clickable metallic-sheen AnimatedBrandLogo in Nav & Sidebar (plus collapsed rail) returning to fresh homepage; adds smooth letter-by-letter Gemini-style streaming text reveal with glowing platinum caret & Finish now skip; overhauls SlideDeckPreview (fullscreen present + keyboard arrows), PdfDocumentPreview (zoom + outline jump), ImageArtifactCard (darkroom lightbox), AuthModal (BorderBeam + spring modal), inline citation hover cards, user prompt Edit & Re-run, clickable AttachmentLightbox, global spring ToastStack, ShortcutsModal (? / ⌘B), Sidebar artifact micro-icons, and Obsidian StepFileDownloads',
+    zipFilename: 'fix-24-21st-dev-studio-scramble-streaming-ux.zip',
+    zipHref: '/__downloads/fix-24-21st-dev-studio-scramble-streaming-ux.zip',
+    commitMessage: `feat(frontend,ux): add 21st.dev Hero scramble text, animated brand home, fluid streaming text reveal & full Obsidian studio UX suite
+
+- Replace static Hero subtitle with rotating 21st.dev MotionScrambleText cycling 7 curated project lines (HERO_SCRAMBLE_LINES)
+- Add clickable AnimatedBrandLogo (spring-tilting ObsidianBrandMark + metallic sheen wordmark) in Nav, Sidebar, and collapsed rail returning to the fresh Homepage
+- Add fluid Gemini-style letter-by-letter streaming text reveal with adaptive pacing (computeStreamStepChars), glowing platinum caret, auto-follow scroll, and Finish now skip button for newly generated replies
+- Overhaul SlideDeckPreview (fullscreen present mode, ←/→ navigation, spring tabs), PdfDocumentPreview (zoom 90%/100%/112%, section outline quick-jump), ImageArtifactCard (darkroom stage, lightbox, prompt inspector), and AuthModal (BorderBeam, spring modal, Esc dismiss)
+- Add inline [1]/[2] citation hover popover cards, inline user prompt Edit & Re-run, clickable AttachmentLightbox for images & PDFs, bottom-right spring ToastStack, ShortcutsModal (? / ⌘B / ⌘K), monochrome Sidebar thread artifact micro-icons, Obsidian StepFileDownloads, and node:test unit tests`,
+    changedFiles: [
+      {
+        path: 'src/index.css',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/index.css',
+      },
+      {
+        path: 'frontend/src/components/workspace-ux-helpers.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/workspace-ux-helpers.ts',
+      },
+      {
+        path: 'frontend/src/components/motion/primitives.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/motion/primitives.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/ToastStack.tsx',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/ToastStack.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/ShortcutsModal.tsx',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/ShortcutsModal.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/AttachmentLightbox.tsx',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/AttachmentLightbox.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/SlideDeckPreview.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/SlideDeckPreview.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/PdfDocumentPreview.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/PdfDocumentPreview.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/ImageArtifactCard.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ImageArtifactCard.tsx',
+      },
+      {
+        path: 'frontend/src/components/auth/AuthModal.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/auth/AuthModal.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MarkdownRenderer.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MarkdownRenderer.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageBubble.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageBubble.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageList.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageList.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/ChatArea.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ChatArea.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/ChatInput.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ChatInput.tsx',
+      },
+      {
+        path: 'frontend/src/components/layout/Nav.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/layout/Nav.tsx',
+      },
+      {
+        path: 'frontend/src/components/layout/Sidebar.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/layout/Sidebar.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/CommandPalette.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/CommandPalette.tsx',
+      },
+      {
+        path: 'frontend/src/App.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/App.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+      {
+        path: 'frontend/tests/workspace-ux-helpers.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/tests/workspace-ux-helpers.test.ts',
+      },
+    ],
+  },
+  {
     id: 'fix-23',
     title: 'Fix #23 — Obsidian & White Credits & Billing Studio Drawer Overhaul (21st.dev BorderBeam Hero & Checkout, SpotlightCard Credit Packs, Searchable Ledger & Specialist Rate Card)',
     subtitle:
@@ -1705,23 +1827,23 @@ export function StepFileDownloads() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" data-fix-downloads-panel="true">
       {FIX_EXPORT_PACKAGES.map((pkg) => (
         <div
           key={pkg.id}
-          className="bg-slate-900/95 border border-emerald-500/40 text-slate-100 rounded-xl p-5 space-y-4 shadow-lg"
+          className="bg-[#111114] border border-white/[0.09] text-zinc-100 rounded-2xl p-5 space-y-4 shadow-[0_18px_50px_-14px_rgba(0,0,0,0.85)]"
         >
           {/* Header + Full ZIP Download */}
           <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="space-y-1">
-              <div className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-emerald-400">
+            <div className="space-y-1 max-w-2xl">
+              <div className="inline-flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-emerald-400">
                 <FolderArchive className="w-3.5 h-3.5" />
                 <span>Ready for Repo Drop-In Overwrite</span>
               </div>
-              <div className="text-sm sm:text-base font-bold text-white">
+              <div className="text-sm sm:text-base font-semibold text-white leading-snug">
                 {pkg.title}
               </div>
-              <div className="text-xs text-slate-400 font-mono">
+              <div className="text-xs text-zinc-400 font-mono leading-relaxed">
                 {pkg.subtitle}
               </div>
             </div>
@@ -1729,7 +1851,7 @@ export function StepFileDownloads() {
             <a
               href={pkg.zipHref}
               download={pkg.zipFilename}
-              className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold bg-emerald-500 text-slate-950 hover:bg-emerald-400 rounded-lg transition-colors whitespace-nowrap shrink-0 shadow"
+              className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold bg-white text-zinc-950 hover:bg-zinc-200 rounded-xl transition-colors whitespace-nowrap shrink-0 shadow-sm"
             >
               <Download className="w-4 h-4" />
               Download {pkg.zipFilename}
@@ -1737,16 +1859,16 @@ export function StepFileDownloads() {
           </div>
 
           {/* Git Commit Message Box */}
-          <div className="rounded-lg border border-slate-800 bg-slate-950/90 overflow-hidden">
-            <div className="flex items-center justify-between px-3.5 py-2 bg-slate-900 border-b border-slate-800 text-xs">
-              <div className="flex items-center gap-2 font-mono text-sky-300 font-semibold">
-                <GitCommit className="w-3.5 h-3.5 text-sky-400" />
+          <div className="rounded-xl border border-white/[0.08] bg-[#09090b] overflow-hidden">
+            <div className="flex items-center justify-between px-3.5 py-2 bg-[#16161b] border-b border-white/[0.07] text-xs">
+              <div className="flex items-center gap-2 font-mono text-zinc-200 font-medium">
+                <GitCommit className="w-3.5 h-3.5 text-zinc-400" />
                 <span>Git Commit Message</span>
               </div>
               <button
                 type="button"
                 onClick={() => handleCopyCommit(pkg.id, pkg.commitMessage)}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.07] hover:bg-white/[0.14] border border-white/[0.08] text-zinc-200 text-xs font-mono cursor-pointer transition-colors"
               >
                 {copiedId === pkg.id ? (
                   <>
@@ -1761,14 +1883,14 @@ export function StepFileDownloads() {
                 )}
               </button>
             </div>
-            <pre className="p-3.5 text-xs font-mono text-slate-200 whitespace-pre-wrap leading-relaxed">
+            <pre className="p-3.5 text-xs font-mono text-zinc-300 whitespace-pre-wrap leading-relaxed">
               {pkg.commitMessage}
             </pre>
           </div>
 
           {/* Individual Changed Files List */}
           <div className="space-y-2">
-            <div className="text-xs font-mono uppercase tracking-wider text-slate-400 font-semibold">
+            <div className="text-[11px] font-mono uppercase tracking-wider text-zinc-400 font-medium">
               Updated &amp; Changed Files ({pkg.changedFiles.length}) — Click any file to download individually
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
@@ -1777,19 +1899,19 @@ export function StepFileDownloads() {
                   key={file.path}
                   href={file.downloadHref}
                   download={file.path.split('/').pop()}
-                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-950/80 hover:bg-slate-800/90 border border-slate-800/90 hover:border-sky-500/40 text-xs transition-colors group"
+                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#0c0c0f] hover:bg-[#18181c] border border-white/[0.07] hover:border-white/[0.18] text-xs transition-colors group"
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                    <FileCode className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                    <span className="font-mono text-slate-200 truncate group-hover:text-sky-300">
+                    <FileCode className="w-3.5 h-3.5 text-zinc-400 group-hover:text-white shrink-0" />
+                    <span className="font-mono text-zinc-300 truncate group-hover:text-white">
                       {file.path}
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <span className="px-1.5 py-0.5 text-[10px] font-mono uppercase rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                    <span className="px-1.5 py-0.5 text-[10px] font-mono uppercase rounded bg-white/[0.06] text-zinc-300 border border-white/[0.08]">
                       {file.status}
                     </span>
-                    <Download className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-400" />
+                    <Download className="w-3.5 h-3.5 text-zinc-500 group-hover:text-white" />
                   </div>
                 </a>
               ))}

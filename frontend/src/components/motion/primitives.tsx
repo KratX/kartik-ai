@@ -351,3 +351,158 @@ export function ObsidianBrandMark({
     </div>
   );
 }
+
+export interface AnimatedBrandLogoProps {
+  readonly size?: 'sm' | 'md';
+  readonly subtitle?: string;
+  readonly onClick?: () => void;
+  readonly title?: string;
+  readonly dataTestAttr?: string;
+}
+
+/**
+ * 21st.dev interactive Kartik.ai brand lockup:
+ * Spring-tilting Obsidian emblem + metallic sheen-sweeping "Kartik.ai" wordmark.
+ */
+export function AnimatedBrandLogo({
+  size = 'sm',
+  subtitle,
+  onClick,
+  title = 'Return to Kartik.ai Home',
+  dataTestAttr = 'true',
+}: AnimatedBrandLogoProps) {
+  const inner = (
+    <span className="inline-flex items-center gap-2.5 min-w-0">
+      <motion.span
+        whileHover={{ rotate: -6, scale: 1.06 }}
+        whileTap={{ scale: 0.94 }}
+        transition={{ type: 'spring', stiffness: 460, damping: 24 }}
+        className="inline-flex shrink-0"
+      >
+        <ObsidianBrandMark size={size} />
+      </motion.span>
+      <span className="min-w-0 text-left">
+        <span
+          className={`kartik-brand-wordmark block font-semibold tracking-tight truncate ${
+            size === 'md' ? 'text-sm' : 'text-[13.5px]'
+          }`}
+        >
+          Kartik.ai
+        </span>
+        {subtitle && (
+          <span className="block text-[11px] text-zinc-500 truncate leading-tight">
+            {subtitle}
+          </span>
+        )}
+      </span>
+    </span>
+  );
+
+  if (!onClick) {
+    return (
+      <div data-brand-logo={dataTestAttr} className="inline-flex items-center min-w-0">
+        {inner}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      data-brand-home={dataTestAttr}
+      className="group inline-flex items-center min-w-0 rounded-xl px-1.5 py-1 -mx-1.5 hover:bg-white/[0.05] transition-colors cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-white/35"
+    >
+      {inner}
+    </button>
+  );
+}
+
+export interface MotionScrambleTextProps {
+  readonly lines: readonly string[];
+  readonly intervalMs?: number;
+  readonly scrambleDurationMs?: number;
+  readonly className?: string;
+}
+
+/**
+ * 21st.dev-inspired rotating MotionScrambleText (`@motiondotdev/components/motion-scramble-text`).
+ * Cycles smoothly through curated lines with crisp left-to-right glyph settling.
+ */
+export function MotionScrambleText({
+  lines,
+  intervalMs = 4200,
+  scrambleDurationMs = 780,
+  className = '',
+}: MotionScrambleTextProps) {
+  const safeLines = lines.length > 0 ? lines : ['Kartik.ai'];
+  const [lineIndex, setLineIndex] = React.useState(0);
+  const [displayText, setDisplayText] = React.useState(safeLines[0] ?? '');
+
+  useEffect(() => {
+    if (safeLines.length <= 1) return;
+    const timer = window.setInterval(() => {
+      setLineIndex((prev) => (prev + 1) % safeLines.length);
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [intervalMs, safeLines.length]);
+
+  useEffect(() => {
+    const target = safeLines[lineIndex] ?? '';
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+    if (prefersReducedMotion) {
+      setDisplayText(target);
+      return;
+    }
+
+    let frameId = 0;
+    let tick = 0;
+    const startTime = performance.now();
+    const CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789·/—';
+
+    const step = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / scrambleDurationMs);
+      tick += 1;
+
+      if (progress >= 1) {
+        setDisplayText(target);
+        return;
+      }
+
+      const settled = Math.floor(progress * target.length);
+      const chars = Array.from(target);
+      for (let i = settled; i < chars.length; i += 1) {
+        const ch = chars[i] ?? '';
+        if (ch === ' ' || ch === '.' || ch === ',' || ch === '&' || ch === '—') {
+          continue;
+        }
+        const idx = Math.abs((i * 17 + tick * 31 + settled * 7) % CHARSET.length);
+        chars[i] = CHARSET[idx] ?? ch;
+      }
+      setDisplayText(chars.join(''));
+      frameId = window.requestAnimationFrame(step);
+    };
+
+    frameId = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [lineIndex, safeLines, scrambleDurationMs]);
+
+  return (
+    <div
+      data-motion-scramble-text="true"
+      data-scramble-index={lineIndex}
+      className={`min-h-[2.75rem] sm:min-h-[1.75rem] flex items-center justify-center ${className}`}
+    >
+      <span className="font-mono text-xs sm:text-[13.5px] tracking-[0.01em] text-zinc-400 text-center leading-relaxed">
+        {displayText}
+      </span>
+    </div>
+  );
+}
+

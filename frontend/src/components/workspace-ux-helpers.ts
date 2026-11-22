@@ -543,3 +543,105 @@ export function computeCreditCapacity(
   );
 }
 
+/* ── Fix #24 Pure Helpers: Scramble Hero, Fluid Streaming Pacing & Thread Artifact Icons ── */
+
+export const HERO_SCRAMBLE_LINES: readonly string[] = Object.freeze([
+  'Unified intelligence that routes every prompt to the right specialist.',
+  'Build live HTML, CSS & JS sandboxes inside a split-screen studio.',
+  'Compile boardroom PDF reports and 16:9 keynote decks in seconds.',
+  'Ground every answer with live web search and verifiable citations.',
+  'Query dense PDFs with hybrid semantic and keyword retrieval.',
+  'Direct bespoke studio artwork and restyle visuals in real time.',
+  'Protected end-to-end by zero-charge idempotent replay and audit ledgers.',
+]);
+
+const DEFAULT_SCRAMBLE_CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789·/—';
+
+/**
+ * Computes a deterministic scramble-to-settle text frame (inspired by 21st.dev motion-scramble-text).
+ * Spaces and trailing punctuation stay stable so lines never jitter horizontally.
+ */
+export function computeScrambleFrame(
+  target: string,
+  progress: number,
+  seed = 0,
+  charset = DEFAULT_SCRAMBLE_CHARSET,
+): string {
+  const clamped = Math.max(0, Math.min(1, Number.isFinite(progress) ? progress : 1));
+  if (clamped >= 1 || target.length === 0) {
+    return target;
+  }
+
+  const settledCount = Math.floor(clamped * target.length);
+  const activeWindowEnd = Math.min(target.length, settledCount + 8);
+  const chars = Array.from(target);
+  const poolLen = Math.max(1, charset.length);
+
+  for (let i = settledCount; i < chars.length; i += 1) {
+    const ch = chars[i] ?? '';
+    if (ch === ' ' || ch === '.' || ch === ',' || ch === '&' || ch === '—') {
+      continue;
+    }
+    if (i < activeWindowEnd) {
+      const idx = Math.abs((i * 17 + seed * 31 + settledCount * 7) % poolLen);
+      chars[i] = charset[idx] ?? ch;
+    } else {
+      const idx = Math.abs((i * 13 + seed * 19) % poolLen);
+      chars[i] = charset[idx] ?? ch;
+    }
+  }
+
+  return chars.join('');
+}
+
+/**
+ * Adaptive character-per-frame pacing for fluid Gemini-like streaming text reveal.
+ * Short replies glide smoothly letter-by-letter; long technical briefs accelerate
+ * gently so reading feels effortless without stalling.
+ */
+export function computeStreamStepChars(
+  totalLength: number,
+  remainingChars: number,
+): number {
+  if (!Number.isFinite(totalLength) || !Number.isFinite(remainingChars) || remainingChars <= 0) {
+    return 0;
+  }
+  const baseStep =
+    totalLength <= 180
+      ? 2
+      : totalLength <= 650
+        ? 4
+        : totalLength <= 1600
+          ? 8
+          : 14;
+  return Math.min(remainingChars, baseStep);
+}
+
+/**
+ * Infers a subtle monochrome artifact badge for a sidebar conversation row
+ * from recorded thread artifacts or title keywords.
+ */
+export function inferConversationArtifactKind(
+  title: string,
+  recordedType?: ArtifactRecord['artifactType'] | null,
+): ArtifactRecord['artifactType'] | null {
+  if (recordedType) {
+    return recordedType;
+  }
+  const lower = title.toLowerCase();
+  if (/\b(pptx|slides?|deck|presentation|keynote)\b/.test(lower)) {
+    return 'ppt_presentation';
+  }
+  if (/\b(pdf|report|brief|whitepaper|proposal)\b/.test(lower)) {
+    return 'pdf_document';
+  }
+  if (/\b(image|artwork|poster|logo|render|illustration|pavilion|photo)\b/.test(lower)) {
+    return 'generated_image';
+  }
+  if (/\b(code|app|sandbox|calculator|dashboard|html|react|script|game)\b/.test(lower)) {
+    return 'code_bundle';
+  }
+  return null;
+}
+
+
