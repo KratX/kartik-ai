@@ -25,7 +25,6 @@ export type FrontendErrorCode =
   | 'UNAUTHENTICATED'
   | 'QUOTA_EXHAUSTED'
   | 'FORBIDDEN'
-  | 'DEMO_READ_ONLY'
   | 'NOT_FOUND'
   | 'RESOURCE_IN_USE'
   | 'IDEMPOTENCY_CONFLICT'
@@ -46,7 +45,6 @@ export type ClientRecoveryAction =
   | 'retry_new_key'
   | 'reauthenticate'
   | 'top_up_quota'
-  | 'read_only_mode'
   | 'back_off'
   | 'restart_list'
   | 'do_not_retry';

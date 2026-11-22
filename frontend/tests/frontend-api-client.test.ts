@@ -112,8 +112,8 @@ describe('@kartik/frontend Gateway API Client, Idempotency-Key & WorkspaceStore 
     assert.ok(sampleKey.length >= 20);
   });
 
-  it('maps all 19 normative error codes to exact client recovery actions (§5.5)', () => {
-    assert.equal(Object.keys(ERROR_RECOVERY_POLICY).length, 19);
+  it('maps all 18 normative error codes to exact client recovery actions (§5.5)', () => {
+    assert.equal(Object.keys(ERROR_RECOVERY_POLICY).length, 18);
     assert.equal(
       resolveClientRecoveryAction('BILLING_UNAVAILABLE'),
       'retry_same_key',
@@ -131,16 +131,12 @@ describe('@kartik/frontend Gateway API Client, Idempotency-Key & WorkspaceStore 
       'retry_new_key',
     );
     assert.equal(
-      resolveClientRecoveryAction('DEMO_READ_ONLY'),
-      'read_only_mode',
-    );
-    assert.equal(
       resolveClientRecoveryAction('QUOTA_EXHAUSTED'),
       'top_up_quota',
     );
   });
 
-  it('preserves the exact same Idempotency-Key across 503 BILLING_UNAVAILABLE retries and activates demoReadOnlyBanner on 403 DEMO_READ_ONLY in WorkspaceStore (§5.5, §12, Invariant #15)', async () => {
+  it('preserves the exact same Idempotency-Key across 503 BILLING_UNAVAILABLE retries and clears pendingTurnKey on 402 QUOTA_EXHAUSTED in WorkspaceStore (§5.5, Invariant #15)', async () => {
     const sentIdempotencyKeys: string[] = [];
     let attempt = 0;
 
@@ -212,15 +208,15 @@ describe('@kartik/frontend Gateway API Client, Idempotency-Key & WorkspaceStore 
         }
 
         return {
-          status: 403,
+          status: 402,
           json: async () => ({
             requestId: key,
-            traceId: 'trace_demo_ro',
+            traceId: 'trace_quota_empty',
             data: null,
             meta: { nextCursor: null },
             error: {
-              code: 'DEMO_READ_ONLY',
-              message: 'Demo is in read-only mode',
+              code: 'QUOTA_EXHAUSTED',
+              message: 'Insufficient workspace credits',
             },
           }),
         };
@@ -261,7 +257,7 @@ describe('@kartik/frontend Gateway API Client, Idempotency-Key & WorkspaceStore 
       2,
     );
 
-    // Attempt 3 encounters 403 DEMO_READ_ONLY -> activates demoReadOnlyBanner and clears pendingTurnKey
+    // Attempt 3 encounters 402 QUOTA_EXHAUSTED -> clears pendingTurnKey and records top_up_quota
     await assert.rejects(
       async () =>
         store.sendTurn({
@@ -269,9 +265,9 @@ describe('@kartik/frontend Gateway API Client, Idempotency-Key & WorkspaceStore 
           prompt: 'Another prompt',
         }),
       (err: unknown) =>
-        err instanceof GatewayApiError && err.code === 'DEMO_READ_ONLY',
+        err instanceof GatewayApiError && err.code === 'QUOTA_EXHAUSTED',
     );
-    assert.equal(store.getState().demoReadOnlyBanner, true);
+    assert.equal(store.getState().lastError?.recoveryAction, 'top_up_quota');
     assert.equal(store.getState().pendingTurnKey, null);
   });
 });

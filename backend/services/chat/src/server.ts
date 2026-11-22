@@ -574,7 +574,6 @@ export function buildChatBootstrapEnv(
       env.CHAT_TO_BILLING_TOKEN ?? DEV_SHARED_BOOTSTRAP_DEFAULTS.chatToBillingToken,
     CURSOR_SIGNING_SECRET:
       env.CURSOR_SIGNING_SECRET ?? DEV_SHARED_BOOTSTRAP_DEFAULTS.cursorSigningSecret,
-    DEMO_READ_ONLY: env.DEMO_READ_ONLY ?? 'false',
     ...env,
   };
 }

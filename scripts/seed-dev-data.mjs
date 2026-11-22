@@ -7,7 +7,6 @@
  * - Seeds `billing.plans` using integer paise (`amount_paise`) — never floating-point rupees (§11).
  * - Uses idempotent `ON CONFLICT (plan_id) DO NOTHING` / `ON CONFLICT DO NOTHING` semantics so
  *   running `pnpm db:seed` multiple times never duplicates rows or corrupts existing balances.
- * - Seeds a read-only demo conversation fixture so `DEMO_READ_ONLY=true` browsing works out of the box (§12).
  */
 
 import { fileURLToPath } from 'node:url';

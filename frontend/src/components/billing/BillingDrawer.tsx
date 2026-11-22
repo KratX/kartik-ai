@@ -45,7 +45,6 @@ export interface BillingDrawerProps {
   readonly activePlanId: string;
   readonly plans: readonly PlatformCreditPlan[];
   readonly ledger: readonly PlatformLedgerEntry[];
-  readonly demoReadOnly: boolean;
   readonly onCreateOrder: (planId: string) => Promise<{
     readonly orderId: string;
     readonly razorpayKeyId?: string;
@@ -142,7 +141,6 @@ export function BillingDrawer({
   activePlanId,
   plans,
   ledger,
-  demoReadOnly,
   onCreateOrder,
   onVerifyPayment,
 }: BillingDrawerProps) {
@@ -413,15 +411,6 @@ export function BillingDrawer({
             {/* Scrollable Stage */}
             <div className="flex-1 overflow-y-auto px-5 sm:px-6 py-6 space-y-6">
               {/* Persistent Alerts */}
-              {demoReadOnly && (
-                <div className="px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 flex items-center justify-between gap-3">
-                  <span>
-                    <strong className="font-semibold">Read-Only Freeze:</strong>{' '}
-                    New checkout orders are paused while <code className="font-mono">DEMO_READ_ONLY</code> is active.
-                  </span>
-                </div>
-              )}
-
               {errorMessage && (
                 <div className="px-4 py-3 rounded-xl bg-rose-500/12 border border-rose-500/30 text-xs text-rose-200 flex items-center justify-between gap-3">
                   <span>{errorMessage}</span>
@@ -693,7 +682,7 @@ export function BillingDrawer({
 
                               <button
                                 type="button"
-                                disabled={isProcessing || demoReadOnly}
+                                disabled={isProcessing}
                                 data-billing-buy-plan={plan.planId}
                                 onClick={() => void handleStartOrder(plan.planId)}
                                 className={`w-full py-2.5 px-4 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${

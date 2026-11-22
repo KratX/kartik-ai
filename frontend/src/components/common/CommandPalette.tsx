@@ -11,15 +11,12 @@ import {
   Image as ImageIcon,
   Keyboard,
   Layers,
-  Lock,
   MessageSquare,
   Plus,
   Presentation,
-  RotateCcw,
   Search,
   SlidersHorizontal,
   Sparkles,
-  Unlock,
   X,
 } from 'lucide-react';
 import type {
@@ -44,8 +41,6 @@ export interface CommandPaletteProps {
   readonly titleOverrides: Readonly<Record<string, string>>;
   readonly selectedAgent: SpecialistAgentName;
   readonly responseDepth: ChatResponseDepth;
-  readonly demoReadOnly: boolean;
-  readonly canReplayLastTurn: boolean;
   readonly hasArtifacts: boolean;
   readonly onSelectConversation: (conversationId: string) => void;
   readonly onCreateConversation: () => void;
@@ -54,8 +49,6 @@ export interface CommandPaletteProps {
   readonly onOpenBilling: () => void;
   readonly onOpenShortcuts?: () => void;
   readonly onToggleArtifactCanvas: () => void;
-  readonly onToggleDemoReadOnly: () => void;
-  readonly onReplayLastTurn: () => void;
   readonly onOpenFixDownloads?: () => void;
 }
 
@@ -96,8 +89,6 @@ export function CommandPalette({
   titleOverrides,
   selectedAgent,
   responseDepth,
-  demoReadOnly,
-  canReplayLastTurn,
   hasArtifacts,
   onSelectConversation,
   onCreateConversation,
@@ -106,8 +97,6 @@ export function CommandPalette({
   onOpenBilling,
   onOpenShortcuts,
   onToggleArtifactCanvas,
-  onToggleDemoReadOnly,
-  onReplayLastTurn,
   onOpenFixDownloads,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
@@ -165,36 +154,6 @@ export function CommandPalette({
         },
       });
     }
-
-    if (canReplayLastTurn) {
-      entries.push({
-        id: 'action:replay',
-        section: 'Quick Actions',
-        label: 'Replay Last Idempotency-Key',
-        subtitle: 'Verify 0-credit deduplication with identical requestId',
-        keywords: ['replay', 'idempotency', 'dev', 'verify'],
-        icon: <RotateCcw className="w-4 h-4" />,
-        onSelect: () => {
-          onReplayLastTurn();
-          onClose();
-        },
-      });
-    }
-
-    entries.push({
-      id: 'action:readonly',
-      section: 'Quick Actions',
-      label: demoReadOnly ? 'Disable Read-Only Freeze' : 'Enable Read-Only Freeze',
-      subtitle: demoReadOnly
-        ? 'Restore mutations across /api/v1/*'
-        : 'Simulate DEMO_READ_ONLY 403 protection',
-      keywords: ['read only', 'freeze', 'demo', 'lock', 'dev'],
-      icon: demoReadOnly ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />,
-      onSelect: () => {
-        onToggleDemoReadOnly();
-        onClose();
-      },
-    });
 
     if (onOpenShortcuts) {
       entries.push({
@@ -282,21 +241,17 @@ export function CommandPalette({
 
     return entries;
   }, [
-    canReplayLastTurn,
     conversations,
-    demoReadOnly,
     hasArtifacts,
     onClose,
     onCreateConversation,
     onOpenBilling,
     onOpenFixDownloads,
     onOpenShortcuts,
-    onReplayLastTurn,
     onSelectAgent,
     onSelectConversation,
     onSelectResponseDepth,
     onToggleArtifactCanvas,
-    onToggleDemoReadOnly,
     responseDepth,
     selectedAgent,
     titleOverrides,

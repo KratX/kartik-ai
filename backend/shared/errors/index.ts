@@ -4,7 +4,7 @@
  *
  * Pure TypeScript, zero external dependencies (ADR 0005).
  * Rules enforced:
- * 1. Exact 19 normative error codes with fixed HTTP status codes and client actions (§5.5).
+ * 1. Exact 18 normative error codes with fixed HTTP status codes and client actions (§5.5).
  * 2. Anti-enumeration rule: missing resources and foreign-owned resources both use `NOT_FOUND` (404).
  * 3. Single response envelope (`{ requestId?, traceId, data, meta: { nextCursor }, error }`) (§5.4).
  * 4. Unknown runtime exceptions map to `500 INTERNAL_ERROR` with a generic safe message — never leaking stack traces, provider messages, or database paths.
@@ -18,7 +18,6 @@ export const ERROR_CATALOGUE = {
   UNAUTHENTICATED: { httpStatus: 401, clientAction: 'Sign in again' },
   QUOTA_EXHAUSTED: { httpStatus: 402, clientAction: 'Top up or wait for the window' },
   FORBIDDEN: { httpStatus: 403, clientAction: 'Do not retry' },
-  DEMO_READ_ONLY: { httpStatus: 403, clientAction: 'Browse only; do not retry' },
   NOT_FOUND: { httpStatus: 404, clientAction: 'Do not retry' },
   RESOURCE_IN_USE: { httpStatus: 409, clientAction: 'Retry after it finishes' },
   IDEMPOTENCY_CONFLICT: { httpStatus: 409, clientAction: 'New key' },

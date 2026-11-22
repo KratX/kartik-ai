@@ -80,10 +80,6 @@ export const GATEWAY_CONFIG_SCHEMA: ConfigSchema = {
     type: 'string',
     default: 'http://localhost:5173,http://127.0.0.1:5173',
   },
-  DEMO_READ_ONLY: {
-    type: 'boolean',
-    default: false,
-  },
   UPSTREAM_TIMEOUT_MS: {
     type: 'int',
     default: 15_000,
@@ -106,7 +102,6 @@ export interface GatewayServiceConfig {
   readonly SESSION_COOKIE_NAME: string;
   readonly CORS_ALLOWED_ORIGINS: string;
   readonly allowedOrigins: readonly string[];
-  readonly DEMO_READ_ONLY: boolean;
   readonly UPSTREAM_TIMEOUT_MS: number;
 }
 

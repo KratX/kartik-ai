@@ -59,10 +59,6 @@ export const CHAT_CONFIG_SCHEMA: ConfigSchema = {
     secret: true,
     min: 16,
   },
-  DEMO_READ_ONLY: {
-    type: 'boolean',
-    default: false,
-  },
   MAX_MESSAGE_CHARS: {
     type: 'int',
     default: 16_000,
@@ -82,7 +78,6 @@ export interface ChatConfig {
   readonly chatToAgentToken: string;
   readonly chatToBillingToken: string;
   readonly cursorSigningSecret: string;
-  readonly demoReadOnly: boolean;
   readonly maxMessageChars: number;
 }
 
@@ -146,7 +141,6 @@ export function loadChatConfig(
     CHAT_TO_AGENT_TOKEN: string;
     CHAT_TO_BILLING_TOKEN: string;
     CURSOR_SIGNING_SECRET: string;
-    DEMO_READ_ONLY: boolean;
     MAX_MESSAGE_CHARS: number;
   };
 
@@ -192,7 +186,6 @@ export function loadChatConfig(
     chatToAgentToken: raw.CHAT_TO_AGENT_TOKEN,
     chatToBillingToken: raw.CHAT_TO_BILLING_TOKEN,
     cursorSigningSecret: raw.CURSOR_SIGNING_SECRET,
-    demoReadOnly: raw.DEMO_READ_ONLY,
     maxMessageChars: raw.MAX_MESSAGE_CHARS,
   });
 }

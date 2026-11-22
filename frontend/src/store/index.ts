@@ -20,7 +20,6 @@ export interface WorkspaceState {
   >;
   readonly selectedSpecialist: SpecialistAgentName;
   readonly availableCredits: number;
-  readonly demoReadOnlyBanner: boolean;
   readonly pendingTurnKey: string | null;
   readonly lastError: {
     readonly code: string;
@@ -37,7 +36,6 @@ export interface WorkspaceState {
  * - Auth session state (`anonymous` | `authenticated`)
  * - Conversation list, active conversation, and messages per conversation
  * - Credit balance updates from `SendMessageTurnResponse.remainingCredits`
- * - `DEMO_READ_ONLY` banner detection when a mutating call returns `403 DEMO_READ_ONLY` (§12)
  * - Safe `Idempotency-Key` retention (`pendingTurnKey`) when a turn fails with `503 BILLING_UNAVAILABLE`
  *   so retrying the turn reuses the exact same `Idempotency-Key` (Invariant #15).
  */
@@ -56,7 +54,6 @@ export class WorkspaceStore {
       messagesByConversation: Object.freeze({}),
       selectedSpecialist: 'chat',
       availableCredits: initialCredits,
-      demoReadOnlyBanner: false,
       pendingTurnKey: null,
       lastError: null,
     });
@@ -148,9 +145,6 @@ export class WorkspaceStore {
           err.recoveryAction === 'retry_same_key' ? idempotencyKey : null;
         this.setState({
           pendingTurnKey: nextPendingKey,
-          ...(err.code === 'DEMO_READ_ONLY'
-            ? { demoReadOnlyBanner: true }
-            : {}),
         });
       } else {
         this.setState({ pendingTurnKey: null });

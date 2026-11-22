@@ -1,7 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createDemoReadOnlyMiddleware,
   createErrorBoundaryMiddleware,
   createInternalAuthMiddleware,
   createRateLimitMiddleware,
@@ -77,22 +76,6 @@ describe('@kartik/shared/middleware pipeline & Phase 1 Exit Gate closure (1.9.a)
       missingErr = err;
     });
     assert.equal((missingErr as { code?: string }).code, 'IDEMPOTENCY_KEY_REQUIRED');
-  });
-
-  it('enforces DEMO_READ_ONLY kill switch on mutating methods while allowing GET (§12)', () => {
-    const demoGuard = createDemoReadOnlyMiddleware({ enabled: true });
-
-    let getErr: unknown = null;
-    demoGuard({ method: 'GET', path: '/api/v1/conversations', headers: {} }, createMockRes().res, (err) => {
-      getErr = err;
-    });
-    assert.equal(getErr, undefined);
-
-    let postErr: unknown = null;
-    demoGuard({ method: 'POST', path: '/api/v1/chat/messages', headers: {} }, createMockRes().res, (err) => {
-      postErr = err;
-    });
-    assert.equal((postErr as { code?: string }).code, 'DEMO_READ_ONLY');
   });
 
   it('enforces fixed-window rate limits (429 RATE_LIMITED with Retry-After) and fails closed (503 LIMITER_UNAVAILABLE) on store outage (§5.2 & §5.5)', async () => {

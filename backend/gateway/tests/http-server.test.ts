@@ -27,7 +27,6 @@ describe('@kartik/gateway Live node:http Server Adapter & Graceful Shutdown (8.4
       SERVICE_TO_SERVICE_TOKEN: 's2s-gateway-http-server-token-84a',
       USER_CONTEXT_SIGNING_KEY: privateKeyPem,
       CORS_ALLOWED_ORIGINS: 'https://app.kartik.ai',
-      DEMO_READ_ONLY: 'false',
     });
 
     let capturedRawWebhookBody = '';

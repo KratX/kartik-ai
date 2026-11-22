@@ -40,7 +40,6 @@ describe('@kartik/gateway config, Ed25519 key validation & service directory (3.
 
     assert.equal(config.PORT_GATEWAY, 8000);
     assert.equal(config.SESSION_COOKIE_NAME, 'kartik_session');
-    assert.equal(config.DEMO_READ_ONLY, false);
     assert.deepEqual(config.allowedOrigins, [
       'https://app.kartik.ai',
       'http://localhost:5173',

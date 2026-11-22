@@ -24,7 +24,6 @@ describe('@kartik/chat config, 0001_chat_core migration & ChatRepository cursor 
     });
 
     assert.equal(config.port, 4002);
-    assert.equal(config.demoReadOnly, false);
     assert.equal(config.maxMessageChars, 16_000);
     assert.equal(config.agentServiceUrl, 'http://localhost:4003');
     assert.equal(config.billingServiceUrl, 'http://localhost:4004');

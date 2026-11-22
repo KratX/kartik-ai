@@ -35,7 +35,6 @@ describe('@kartik/gateway Cross-Service E2E Pipeline, Free-Tier Readiness & Phas
       SERVICE_TO_SERVICE_TOKEN: 's2s-gateway-e2e-token-82a-secret',
       USER_CONTEXT_SIGNING_KEY: privateKeyPem,
       CORS_ALLOWED_ORIGINS: 'https://app.kartik.ai',
-      DEMO_READ_ONLY: 'false',
     });
 
     const session: IntrospectedSessionIdentity = {
@@ -334,7 +333,6 @@ describe('@kartik/gateway Cross-Service E2E Pipeline, Free-Tier Readiness & Phas
       MOCK_AI: 'true',
       IMAGE_PROVIDER: 'mock',
       BILLING_MODE: 'mock',
-      DEMO_READ_ONLY: 'false',
       DAILY_LIVE_CALL_BUDGET: '50',
     });
 

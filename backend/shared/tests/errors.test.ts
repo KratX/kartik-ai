@@ -8,14 +8,13 @@ import {
 } from '../errors/index.js';
 
 describe('@kartik/shared/errors catalogue, envelope & mapper (1.3.a)', () => {
-  it('defines all 19 normative error codes with exact HTTP statuses (§5.5)', () => {
+  it('defines all 18 normative error codes with exact HTTP statuses (§5.5)', () => {
     const codes = Object.keys(ERROR_CATALOGUE);
-    assert.equal(codes.length, 19);
+    assert.equal(codes.length, 18);
     assert.equal(ERROR_CATALOGUE.VALIDATION_FAILED.httpStatus, 400);
     assert.equal(ERROR_CATALOGUE.UNAUTHENTICATED.httpStatus, 401);
     assert.equal(ERROR_CATALOGUE.QUOTA_EXHAUSTED.httpStatus, 402);
     assert.equal(ERROR_CATALOGUE.FORBIDDEN.httpStatus, 403);
-    assert.equal(ERROR_CATALOGUE.DEMO_READ_ONLY.httpStatus, 403);
     assert.equal(ERROR_CATALOGUE.NOT_FOUND.httpStatus, 404);
     assert.equal(ERROR_CATALOGUE.IDEMPOTENCY_CONFLICT.httpStatus, 409);
     assert.equal(ERROR_CATALOGUE.EXECUTION_UNKNOWN.httpStatus, 409);

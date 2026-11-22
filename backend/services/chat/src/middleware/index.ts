@@ -3,7 +3,6 @@ import {
   verifyUserContextAssertion,
   type UserContextAssertionClaims,
 } from '@kartik/shared/auth';
-import { AppError } from '@kartik/shared/errors';
 import type { ChatConfig } from '../config/index.js';
 
 export type HttpHeaderMap = Readonly<
@@ -43,26 +42,4 @@ export function requireChatUserContext(
     expectedAudience: 'chat',
     ...(nowSeconds !== undefined ? { nowSeconds } : {}),
   });
-}
-
-/**
- * Enforces the `DEMO_READ_ONLY` kill switch on mutating HTTP methods (§12).
- * Browsing (`GET`, `HEAD`, `OPTIONS`) continues to work while `POST`/`PUT`/`PATCH`/`DELETE`
- * return `403 DEMO_READ_ONLY`.
- */
-export function enforceChatDemoReadOnly(
-  method: string,
-  config: Pick<ChatConfig, 'demoReadOnly'>,
-): void {
-  if (!config.demoReadOnly) {
-    return;
-  }
-  const upper = method.toUpperCase();
-  if (upper === 'GET' || upper === 'HEAD' || upper === 'OPTIONS') {
-    return;
-  }
-  throw new AppError(
-    'DEMO_READ_ONLY',
-    'Mutations are disabled while DEMO_READ_ONLY is enabled',
-  );
 }

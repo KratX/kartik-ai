@@ -17,7 +17,6 @@
  */
 
 import {
-  createDemoReadOnlyMiddleware,
   createInternalAuthMiddleware,
   createRateLimitMiddleware,
   createRequestContextMiddleware,
@@ -31,14 +30,6 @@ export function createBillingRequestContextMiddleware(logger?: Logger): Middlewa
   return createRequestContextMiddleware({
     role: 'service',
     ...(logger ? { logger } : {}),
-  });
-}
-
-export function createBillingDemoReadOnlyMiddleware(
-  config: Pick<BillingServiceConfig, 'DEMO_READ_ONLY'>,
-): MiddlewareHandler {
-  return createDemoReadOnlyMiddleware({
-    enabled: () => config.DEMO_READ_ONLY,
   });
 }
 

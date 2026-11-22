@@ -23,7 +23,6 @@ const KEY_SECRET = 'rzp_test_key_secret_phase4_exit_gate';
 const WEBHOOK_SECRET = 'rzp_test_webhook_secret_phase4_exit_gate';
 
 function createBillingTestHarness(overrides?: {
-  demoReadOnly?: boolean;
   maxBillingRequestsPerMinute?: number;
   checkReadiness?: () => Promise<boolean>;
 }) {
@@ -32,7 +31,6 @@ function createBillingTestHarness(overrides?: {
     BILLING_DATABASE_URL: 'postgresql://billing:secret@127.0.0.1:5432/kartik?schema=billing',
     REDIS_URL: 'redis://127.0.0.1:6379/0',
     BILLING_MODE: 'mock',
-    DEMO_READ_ONLY: overrides?.demoReadOnly ? 'true' : 'false',
     USER_CONTEXT_PUBLIC_KEY: TEST_KEYS.publicKeyPem,
     GATEWAY_TO_BILLING_TOKEN: 's2s_gateway_to_billing_token_0001',
     CHAT_TO_BILLING_TOKEN: 's2s_chat_to_billing_token_000001',
@@ -293,39 +291,23 @@ describe('@kartik/billing HTTP routes & Phase 4 Exit Gate closure (4.4.a)', () =
     assert.equal(wrongAudRes.body.error.code, 'UNAUTHENTICATED');
   });
 
-  it('enforces DEMO_READ_ONLY kill switch on mutating billing routes and requires Idempotency-Key (§12, Invariant #15)', async () => {
-    const { config, router } = createBillingTestHarness({ demoReadOnly: true });
+  it('requires Idempotency-Key on mutating billing routes (Invariant #15)', async () => {
+    const normalHarness = createBillingTestHarness();
     const userAssertion = mintAssertion('billing');
 
-    // GET /billing/balance still works in DEMO_READ_ONLY mode
-    const getRes = await router.execute({
+    const getRes = await normalHarness.router.execute({
       method: 'GET',
       path: '/billing/balance',
       headers: {
         [INTERNAL_AUTH_HEADERS.SERVICE_CALLER]: 'gateway',
-        [INTERNAL_AUTH_HEADERS.SERVICE_TOKEN]: config.GATEWAY_TO_BILLING_TOKEN,
+        [INTERNAL_AUTH_HEADERS.SERVICE_TOKEN]:
+          normalHarness.config.GATEWAY_TO_BILLING_TOKEN,
         [INTERNAL_AUTH_HEADERS.USER_CONTEXT]: userAssertion,
       },
     });
     assert.equal(getRes.statusCode, 200);
 
-    // POST /billing/orders is blocked with 403 DEMO_READ_ONLY
-    const postDemoRes = await router.execute<{ error: { code: string } }>({
-      method: 'POST',
-      path: '/billing/orders',
-      headers: {
-        [INTERNAL_AUTH_HEADERS.SERVICE_CALLER]: 'gateway',
-        [INTERNAL_AUTH_HEADERS.SERVICE_TOKEN]: config.GATEWAY_TO_BILLING_TOKEN,
-        [INTERNAL_AUTH_HEADERS.USER_CONTEXT]: userAssertion,
-        [INTERNAL_AUTH_HEADERS.REQUEST_ID]: 'idem_demo_blocked_0001',
-      },
-      body: { planId: 'starter_inr_499' },
-    });
-    assert.equal(postDemoRes.statusCode, 403);
-    assert.equal(postDemoRes.body.error.code, 'DEMO_READ_ONLY');
-
-    // When DEMO_READ_ONLY=false, missing Idempotency-Key returns 400 IDEMPOTENCY_KEY_REQUIRED
-    const normalHarness = createBillingTestHarness({ demoReadOnly: false });
+    // Missing Idempotency-Key returns 400 IDEMPOTENCY_KEY_REQUIRED
     const missingKeyRes = await normalHarness.router.execute<{
       error: { code: string };
     }>({

@@ -27,7 +27,6 @@ import {
 import type { BillingServiceConfig } from '../config/index.js';
 import { BillingController, type BillingHttpRequest } from '../controllers/index.js';
 import {
-  createBillingDemoReadOnlyMiddleware,
   createBillingRequestContextMiddleware,
   createBillingUserRateLimitMiddleware,
   createChatToBillingInternalMiddleware,
@@ -112,7 +111,6 @@ export function createBillingRouter(deps: BillingRouterDependencies): BillingRou
 
   const rateLimitStore = deps.rateLimitStore ?? new InMemoryRateLimitStore();
   const contextMw = createBillingRequestContextMiddleware(deps.logger);
-  const demoReadOnlyMw = createBillingDemoReadOnlyMiddleware(deps.config);
   const gatewayUserMw = createGatewayUserBillingMiddleware(deps.config, deps.nowSeconds);
   const gatewayWebhookMw = createGatewayWebhookBillingMiddleware(deps.config);
   const chatInternalMw = createChatToBillingInternalMiddleware(deps.config, deps.nowSeconds);
@@ -157,7 +155,7 @@ export function createBillingRouter(deps: BillingRouterDependencies): BillingRou
 
       if (method === 'POST' && routePath === '/billing/orders') {
         await runMiddlewareChain(
-          [demoReadOnlyMw, gatewayUserMw, userRateLimitMw],
+          [gatewayUserMw, userRateLimitMw],
           req,
           res,
         );
@@ -170,7 +168,7 @@ export function createBillingRouter(deps: BillingRouterDependencies): BillingRou
         (routePath === '/billing/verify' || routePath === '/billing/verify-checkout')
       ) {
         await runMiddlewareChain(
-          [demoReadOnlyMw, gatewayUserMw, userRateLimitMw],
+          [gatewayUserMw, userRateLimitMw],
           req,
           res,
         );

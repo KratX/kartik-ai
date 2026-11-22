@@ -157,7 +157,6 @@ export interface PortfolioFreeTierReadinessReport {
   readonly mockAiDefault: boolean;
   readonly imageProviderMode: 'mock' | 'live';
   readonly billingMode: 'mock' | 'razorpay_test';
-  readonly demoReadOnly: boolean;
   readonly dailyLiveBudgetPerProvider: number;
   readonly violations: readonly string[];
   readonly postureStatement: string;
@@ -200,11 +199,6 @@ export function verifyPortfolioFreeTierReadiness(
     );
   }
 
-  const demoReadOnlyRaw = (env.DEMO_READ_ONLY ?? 'false').trim().toLowerCase();
-  if (demoReadOnlyRaw !== 'true' && demoReadOnlyRaw !== 'false') {
-    violations.push('DEMO_READ_ONLY must be "true" or "false"');
-  }
-
   const budgetRaw = env.DAILY_LIVE_CALL_BUDGET ?? '50';
   const parsedBudget = Number(budgetRaw);
   if (!Number.isInteger(parsedBudget) || parsedBudget < 0 || parsedBudget > 500) {
@@ -231,7 +225,6 @@ export function verifyPortfolioFreeTierReadiness(
     mockAiDefault,
     imageProviderMode: imageProviderRaw as 'mock' | 'live',
     billingMode: billingModeRaw as 'mock' | 'razorpay_test',
-    demoReadOnly: demoReadOnlyRaw === 'true',
     dailyLiveBudgetPerProvider: parsedBudget,
     violations: Object.freeze([]),
     // Required phrasing per Blueprint §12:

@@ -245,7 +245,6 @@ export class KartikPlatformRuntime {
   public readonly ingestionService: FileIngestionAndArtifactService;
   public readonly graphExecutor: AgentGraphExecutor;
 
-  private demoReadOnly = false;
   private readonly hydratedUsers = new Set<string>();
   private readonly hydrationInFlight = new Map<string, Promise<void>>();
   private readonly pendingPersistenceWrites = new Set<Promise<void>>();
@@ -830,14 +829,12 @@ export class KartikPlatformRuntime {
       return {
         isAuthenticated: false,
         user: null,
-        demoReadOnly: this.demoReadOnly,
       };
     }
     const user = this.requireUser(identity);
     return {
       isAuthenticated: true,
       user,
-      demoReadOnly: this.demoReadOnly,
     };
   }
 
@@ -888,7 +885,6 @@ export class KartikPlatformRuntime {
       isAuthenticated: true,
       sessionId,
       user,
-      demoReadOnly: this.demoReadOnly,
       expiresAt,
     };
   }
@@ -898,24 +894,6 @@ export class KartikPlatformRuntime {
       this.sessionsById.delete(sessionId.trim());
     }
     return { loggedOut: true };
-  }
-
-  public toggleDemoReadOnly(
-    actor: VerifiedRequestIdentity | string,
-    enabled?: boolean,
-  ) {
-    this.requireUser(actor);
-    this.demoReadOnly = enabled ?? !this.demoReadOnly;
-    return { demoReadOnly: this.demoReadOnly };
-  }
-
-  private assertWritable(): void {
-    if (this.demoReadOnly) {
-      throw new AppError(
-        'DEMO_READ_ONLY',
-        'Demo read-only freeze is active: mutating endpoints are temporarily disabled while browsing remains available.',
-      );
-    }
   }
 
   public listConversations(actor: VerifiedRequestIdentity | string) {
@@ -933,7 +911,6 @@ export class KartikPlatformRuntime {
     actor: VerifiedRequestIdentity | string,
     title?: string,
   ) {
-    this.assertWritable();
     const user = this.requireUser(actor);
     const convId = `conv_${crypto.randomBytes(6).toString('hex')}`;
     const nowIso = new Date().toISOString();
@@ -995,7 +972,6 @@ export class KartikPlatformRuntime {
     actor: VerifiedRequestIdentity | string,
     conversationId: string,
   ) {
-    this.assertWritable();
     const user = await this.hydrateUserFromPersistence(actor);
     const resolvedId =
       conversationId === 'conv_welcome_01'
@@ -1067,7 +1043,6 @@ export class KartikPlatformRuntime {
       readonly contentBase64: string;
     },
   ) {
-    this.assertWritable();
     const user = await this.hydrateUserFromPersistence(actor);
     const resolvedConvId =
       !input.conversationId || input.conversationId === 'conv_welcome_01'
@@ -1137,7 +1112,6 @@ export class KartikPlatformRuntime {
       readonly attachmentFileIds?: readonly string[];
     },
   ) {
-    this.assertWritable();
     const user = await this.hydrateUserFromPersistence(actor);
 
     const requestId = (input.requestId ?? '').trim();
@@ -1617,7 +1591,6 @@ export class KartikPlatformRuntime {
       readonly reservedCredits: number;
     }
   > {
-    this.assertWritable();
     const user = await this.hydrateUserFromPersistence(actor);
     const requestId = (input.requestId ?? '').trim();
     const scopedKey = `${user.userId}:${requestId}`;
@@ -1712,7 +1685,6 @@ export class KartikPlatformRuntime {
       readonly requestId: string;
     },
   ) {
-    this.assertWritable();
     const user = await this.hydrateUserFromPersistence(actor);
     const requestId = (input.requestId ?? '').trim();
     if (!requestId) {
@@ -1860,7 +1832,6 @@ export class KartikPlatformRuntime {
       readonly requestId: string;
     },
   ) {
-    this.assertWritable();
     const user = this.requireUser(actor);
     const requestId = (input.requestId ?? '').trim();
     if (!requestId) {

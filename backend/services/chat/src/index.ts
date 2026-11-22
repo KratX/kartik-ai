@@ -46,7 +46,6 @@ export {
 export {
   readSingleHeader,
   requireChatUserContext,
-  enforceChatDemoReadOnly,
   type HttpHeaderMap,
 } from './middleware/index.js';
 

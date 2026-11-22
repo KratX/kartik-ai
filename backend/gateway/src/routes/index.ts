@@ -21,7 +21,6 @@
 
 import {
   AppError,
-  createDemoReadOnlyMiddleware,
   createErrorBoundaryMiddleware,
   createRateLimitMiddleware,
   createRequestContextMiddleware,
@@ -219,11 +218,6 @@ const IDEMPOTENCY_EXEMPT_GATEWAY_PATHS = [
   '/api/v1/webhooks/razorpay',
 ] as const;
 
-const DEMO_READ_ONLY_EXEMPT_PATHS = [
-  '/auth/logout',
-  '/api/v1/auth/logout',
-] as const;
-
 export function createGatewayRouter(deps: GatewayRouterDependencies): GatewayRouter {
   const upstreamClient =
     deps.upstreamClient ?? new FetchUpstreamHttpClient(deps.config);
@@ -244,11 +238,6 @@ export function createGatewayRouter(deps: GatewayRouterDependencies): GatewayRou
   const corsCsrfMw = createGatewayCorsAndCsrfMiddleware({
     allowedOrigins: deps.config.allowedOrigins,
     csrfExemptPaths: ['/webhooks/razorpay', '/api/v1/webhooks/razorpay'],
-  });
-
-  const demoReadOnlyMw = createDemoReadOnlyMiddleware({
-    enabled: () => deps.config.DEMO_READ_ONLY,
-    exemptPaths: DEMO_READ_ONLY_EXEMPT_PATHS,
   });
 
   const ipRateLimitMw = createRateLimitMiddleware({
@@ -307,9 +296,9 @@ export function createGatewayRouter(deps: GatewayRouterDependencies): GatewayRou
       // before requiring Idempotency-Key or session introspection.
       const resolvedRoute = resolvePublicGatewayRoute(method, rawUrl);
 
-      // 2. Run Gateway boundary middlewares (traceId/requestId, CORS/CSRF, DEMO_READ_ONLY, IP rate limit)
+      // 2. Run Gateway boundary middlewares (traceId/requestId, CORS/CSRF, IP rate limit)
       await runMiddlewareChain(
-        [requestContextMw, corsCsrfMw, demoReadOnlyMw, ipRateLimitMw],
+        [requestContextMw, corsCsrfMw, ipRateLimitMw],
         req,
         res,
       );

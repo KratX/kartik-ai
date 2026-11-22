@@ -31,7 +31,6 @@ export const ERROR_RECOVERY_POLICY: Readonly<
   UNAUTHENTICATED: 'reauthenticate',
   QUOTA_EXHAUSTED: 'top_up_quota',
   FORBIDDEN: 'do_not_retry',
-  DEMO_READ_ONLY: 'read_only_mode',
   NOT_FOUND: 'do_not_retry',
   RESOURCE_IN_USE: 'back_off',
   IDEMPOTENCY_CONFLICT: 'retry_new_key',

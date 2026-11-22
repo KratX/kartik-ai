@@ -44,10 +44,6 @@ export const BILLING_CONFIG_SCHEMA: ConfigSchema = {
     enumValues: ['mock', 'live'] as const,
     default: 'mock',
   },
-  DEMO_READ_ONLY: {
-    type: 'boolean',
-    default: false,
-  },
   FREE_TIER_INITIAL_CREDITS: {
     type: 'int',
     default: 100,
@@ -102,7 +98,6 @@ export interface BillingServiceConfig {
   readonly BILLING_DATABASE_URL: string;
   readonly REDIS_URL: string;
   readonly BILLING_MODE: 'mock' | 'live';
-  readonly DEMO_READ_ONLY: boolean;
   readonly FREE_TIER_INITIAL_CREDITS: number;
   readonly RESERVATION_TTL_SECONDS: number;
   readonly USER_CONTEXT_PUBLIC_KEY: string;

@@ -13,7 +13,6 @@ import { RedisKeys } from '@kartik/shared/redis';
 import type { ChatConfig } from '../config/index.js';
 import { ChatController } from '../controllers/index.js';
 import {
-  enforceChatDemoReadOnly,
   readSingleHeader,
   requireChatUserContext,
   type HttpHeaderMap,
@@ -65,7 +64,6 @@ function parseRoutePathAndQuery(rawPath: string): {
  * Enforces:
  * - Health & readiness probes (`GET /healthz`, `GET /readyz`)
  * - Ed25519 `x-user-context` verification (`aud === "chat"`) on all user routes (§6.4)
- * - `DEMO_READ_ONLY` kill switch on mutating methods (`POST`, `DELETE`) (§12)
  * - Per-user fixed-window rate limiting (`rate:user:{userId}:chat`, 429 `RATE_LIMITED` + `Retry-After`)
  * - Standard response envelope carrying `traceId`, `requestId`, and `nextCursor` (§5.4)
  */
@@ -134,9 +132,6 @@ export function createChatRouter(deps: ChatRouterDependencies) {
         deps.nowSeconds?.(),
       );
       const effectiveTraceId = claims.traceId || traceId;
-
-      // Enforce DEMO_READ_ONLY kill switch on mutating methods (§12)
-      enforceChatDemoReadOnly(method, deps.config);
 
       // Enforce per-user fixed-window rate limit (§5.2)
       await enforceUserRateLimit(claims.sub);

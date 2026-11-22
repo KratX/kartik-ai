@@ -4,11 +4,11 @@
  *
  * Connects exclusively to the API Gateway (`/api/v1/*`) (Blueprint Invariant #1):
  * - Left Pane: Spring-collapsible `Sidebar` (Date-grouped threads, Pin/Rename/Delete, Slim Icon Rail, Mobile Drawer, Thread Files, Balance & Auth)
- * - Center Pane: Razor-clean `Nav` (Inline title rename, ⌘K trigger, Canvas toggle, Credits, Developer Tools MorphingPopover)
+ * - Center Pane: Razor-clean `Nav` (Inline title rename, ⌘K trigger, Canvas toggle, Credits, Keyboard Shortcuts)
  *   + `ChatArea` (21st.dev Hero Empty State with BackgroundBeams + SpotlightCard starters, Editorial Borderless Stream, Drag-and-Drop Upload, Lightbox)
  *   + Floating `BorderBeam` `ChatInput` (Slash `/` Commands, Specialist MorphingPopover, Spring Depth Toggle)
  * - Right Pane: Auto-opening Universal Split-Screen `ArtifactPanel` (Code Sandbox IDE, Editorial PDF Reader, 16:9 Slide Studio, Artwork Studio + Draggable Resize + Multi-Artifact Switcher)
- * - Global Overlays: `CommandPalette` (⌘K / Ctrl+K), `BillingDrawer`, `AuthModal`, and Dev-only `StepFileDownloads`.
+ * - Global Overlays: `CommandPalette` (⌘K / Ctrl+K), `BillingDrawer`, `AuthModal`, `ShortcutsModal`, and Dev-only `StepFileDownloads`.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -213,7 +213,6 @@ export function App() {
 
   // Domain State from `/api/v1/*`
   const [user, setUser] = useState<PlatformUser | null>(null);
-  const [demoReadOnly, setDemoReadOnly] = useState(false);
   const [availableCredits, setAvailableCredits] = useState(250);
   const [plans, setPlans] = useState<readonly PlatformCreditPlan[]>([]);
   const [ledger, setLedger] = useState<readonly PlatformLedgerEntry[]>([]);
@@ -258,14 +257,6 @@ export function App() {
   const [isTurnLoading, setIsTurnLoading] = useState(false);
   const [toasts, setToasts] = useState<readonly WorkspaceToast[]>([]);
   const toastTimersRef = useRef<Map<string, number>>(new Map());
-  const [lastTurnReplayPayload, setLastTurnReplayPayload] = useState<{
-    readonly conversationId: string;
-    readonly requestId: string;
-    readonly prompt: string;
-    readonly preferredAgent?: SpecialistAgentName;
-    readonly responseDepth?: ChatResponseDepth;
-    readonly attachmentFileIds?: string[];
-  } | null>(null);
 
   const activeConversationIdRef = useRef<string | null>(activeConversationId);
   const messagesLoadSeqRef = useRef(0);
@@ -443,11 +434,9 @@ export function App() {
       const authJson = (await authRes.json()) as ApiEnvelope<{
         isAuthenticated: boolean;
         user: PlatformUser | null;
-        demoReadOnly: boolean;
       }>;
       if (authJson.ok) {
         setUser(authJson.data.user);
-        setDemoReadOnly(authJson.data.demoReadOnly);
       }
 
       const billingJson = (await billingRes.json()) as ApiEnvelope<{
@@ -708,14 +697,6 @@ export function App() {
       }
 
       const resolvedConvId = json.data.conversationId || targetConvId;
-      setLastTurnReplayPayload({
-        conversationId: resolvedConvId,
-        requestId: input.requestId,
-        prompt: input.prompt,
-        preferredAgent: input.preferredAgent,
-        responseDepth: input.responseDepth,
-        attachmentFileIds: input.attachmentFileIds,
-      });
       setAvailableCredits(json.data.remainingCredits);
       setAttachedTurnFiles([]);
 
@@ -790,19 +771,12 @@ export function App() {
 
   const handleEditPrompt = async (editedPrompt: string) => {
     const trimmed = editedPrompt.trim();
-    if (!trimmed || isTurnLoading || demoReadOnly) return;
+    if (!trimmed || isTurnLoading) return;
     pushToast('Re-running edited prompt…', 'info');
     await handleSendMessage(
       trimmed,
       selectedAgent === 'chat' ? undefined : selectedAgent,
     );
-  };
-
-  const handleReplayLastTurn = async () => {
-    if (!lastTurnReplayPayload) {
-      return;
-    }
-    await executeTurnRequest(lastTurnReplayPayload);
   };
 
   const handleQuickPromptSelect = async (
@@ -830,7 +804,7 @@ export function App() {
 
   const handleRegenerateMessage = async (assistantMessage: PlatformMessage) => {
     const pairedUser = findPairedUserMessage(assistantMessage.messageId);
-    if (!pairedUser || isTurnLoading || demoReadOnly) {
+    if (!pairedUser || isTurnLoading) {
       return;
     }
     const preferredAgent: SpecialistAgentName | undefined =
@@ -851,7 +825,7 @@ export function App() {
     target: 'pdf' | 'ppt' | 'search',
     assistantMessage: PlatformMessage,
   ) => {
-    if (isTurnLoading || demoReadOnly) {
+    if (isTurnLoading) {
       return;
     }
     const pairedUser = findPairedUserMessage(assistantMessage.messageId);
@@ -931,29 +905,6 @@ export function App() {
 
   const handleRemoveAttachedFile = (fileId: string) => {
     setAttachedTurnFiles((prev) => prev.filter((f) => f.fileId !== fileId));
-  };
-
-  // Toggle DEMO_READ_ONLY kill switch
-  const handleToggleDemoReadOnly = async () => {
-    try {
-      const res = await apiFetch('/api/v1/demo/toggle-read-only', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: !demoReadOnly }),
-      });
-      const json = (await res.json()) as ApiEnvelope<{ demoReadOnly: boolean }>;
-      if (json.ok) {
-        setDemoReadOnly(json.data.demoReadOnly);
-        pushToast(
-          json.data.demoReadOnly
-            ? 'DEMO_READ_ONLY activated — mutations return HTTP 403.'
-            : 'DEMO_READ_ONLY disabled — workspace mutations enabled.',
-          json.data.demoReadOnly ? 'warning' : 'success',
-        );
-      }
-    } catch {
-      // Ignore
-    }
   };
 
   // Billing Order & Razorpay Signature Verification
@@ -1179,7 +1130,6 @@ export function App() {
     onUploadFile: handleUploadFile,
     onSendMessage: handleSendMessage,
     isLoading: isTurnLoading,
-    demoReadOnly,
   };
 
   return (
@@ -1216,10 +1166,8 @@ export function App() {
             conversationTitle={resolvedActiveTitle}
             isHeroMode={isHeroMode}
             availableCredits={availableCredits}
-            demoReadOnly={demoReadOnly}
             artifactCount={threadArtifacts.length}
             isArtifactPanelOpen={isArtifactPanelOpen && Boolean(activeArtifact)}
-            canReplayLastTurn={Boolean(lastTurnReplayPayload)}
             onGoHome={handleCreateConversation}
             onToggleSidebar={handleToggleSidebar}
             onRenameConversation={
@@ -1230,8 +1178,6 @@ export function App() {
             }
             onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
             onOpenShortcuts={() => setIsShortcutsModalOpen(true)}
-            onToggleDemoReadOnly={() => void handleToggleDemoReadOnly()}
-            onReplayLastTurn={() => void handleReplayLastTurn()}
             onToggleArtifactPanel={() => {
               if (!activeArtifact && threadArtifacts.length > 0) {
                 setActiveArtifact(
@@ -1243,9 +1189,6 @@ export function App() {
               }
             }}
             onOpenBillingDrawer={() => setIsBillingDrawerOpen(true)}
-            onOpenFixDownloads={
-              import.meta.env.DEV ? () => setIsFixDownloadsOpen(true) : undefined
-            }
           />
 
           {/* Hero Empty State or Active Editorial Conversation Stream */}
@@ -1310,8 +1253,6 @@ export function App() {
         titleOverrides={titleOverrides}
         selectedAgent={selectedAgent}
         responseDepth={responseDepth}
-        demoReadOnly={demoReadOnly}
-        canReplayLastTurn={Boolean(lastTurnReplayPayload)}
         hasArtifacts={threadArtifacts.length > 0}
         onSelectConversation={(id) => void handleSelectConversation(id)}
         onCreateConversation={handleCreateConversation}
@@ -1329,8 +1270,6 @@ export function App() {
             setIsArtifactPanelOpen((prev) => !prev);
           }
         }}
-        onToggleDemoReadOnly={() => void handleToggleDemoReadOnly()}
-        onReplayLastTurn={() => void handleReplayLastTurn()}
         onOpenFixDownloads={
           import.meta.env.DEV ? () => setIsFixDownloadsOpen(true) : undefined
         }
@@ -1356,7 +1295,6 @@ export function App() {
         activePlanId={user?.planId ?? 'plan_free'}
         plans={plans}
         ledger={ledger}
-        demoReadOnly={demoReadOnly}
         onCreateOrder={handleCreateOrder}
         onVerifyPayment={handleVerifyPayment}
       />

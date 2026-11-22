@@ -6,7 +6,6 @@ export * from './features/citations/index.js';
 export * from './features/billing/index.js';
 export * from './features/files/index.js';
 export * from './app/workspace-shell.js';
-export * from './app/interactive-demo-harness.js';
 export * from './components/slide-deck-and-markdown.js';
 export * from './components/workspace-ux-helpers.js';
 export { App, default as FrontendApp } from './App.js';

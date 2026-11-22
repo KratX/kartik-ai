@@ -268,20 +268,7 @@ export function createKartikExpressApp(
     }
   });
 
-  // 3. Demo Read-Only Toggle (/api/v1/demo/toggle-read-only) — Request-Scoped (Auth or Guest)
-  app.post('/api/v1/demo/toggle-read-only', async (req, res) => {
-    try {
-      const actor = resolveWorkspaceIdentity(req);
-      await runtime.hydrateUserFromPersistence(actor);
-      const body = (req.body ?? {}) as { enabled?: boolean };
-      const result = runtime.toggleDemoReadOnly(actor, body.enabled);
-      sendEnvelope(req, res, 200, result);
-    } catch (err) {
-      sendError(req, res, err);
-    }
-  });
-
-  // 4. Conversations & Multi-Agent Turns — Request-Scoped (Auth or Guest)
+  // 3. Conversations & Multi-Agent Turns — Request-Scoped (Auth or Guest)
   app.get('/api/v1/conversations', async (req, res) => {
     try {
       const actor = resolveWorkspaceIdentity(req);

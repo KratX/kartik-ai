@@ -143,8 +143,6 @@ function buildLocalWebAppHtml() {
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <button id="replayBtn" onclick="replayLastTurn()" disabled class="px-2.5 py-1.5 rounded-lg text-xs font-medium border bg-slate-900 border-slate-800 text-slate-500 cursor-pointer">↻ 0-Charge Replay</button>
-          <button id="readOnlyBtn" onclick="toggleReadOnly()" class="px-2.5 py-1.5 rounded-lg text-xs font-mono border bg-slate-900 border-slate-700 text-slate-300 cursor-pointer">READ_WRITE</button>
           <button onclick="toggleBillingModal(true)" id="navCredits" class="px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-semibold cursor-pointer">⚡ 250 cr</button>
           <button id="sandboxToggleBtn" onclick="toggleSandboxPanel()" class="hidden px-2.5 py-1.5 rounded-lg bg-sky-500/20 border border-sky-500/40 text-sky-300 text-xs font-semibold cursor-pointer">Code Sandbox</button>
         </div>
@@ -298,7 +296,6 @@ function buildLocalWebAppHtml() {
       const d = json.data;
       document.getElementById('sidebarCredits').textContent = d.availableCredits + ' Credits';
       document.getElementById('navCredits').textContent = '⚡ ' + d.availableCredits + ' cr';
-      document.getElementById('readOnlyBtn').textContent = d.demoReadOnly ? 'DEMO_READ_ONLY' : 'READ_WRITE';
 
       const convList = document.getElementById('convList');
       convList.innerHTML = d.conversations.map(c => \`
@@ -391,9 +388,6 @@ function buildLocalWebAppHtml() {
         showToast(json.error.code + ': ' + json.error.message);
         return;
       }
-      lastReplayPayload = { prompt, preferredAgent, reqId };
-      document.getElementById('replayBtn').disabled = false;
-      document.getElementById('replayBtn').className = 'px-2.5 py-1.5 rounded-lg text-xs font-medium border bg-sky-500/15 border-sky-500/40 text-sky-300 cursor-pointer';
       attachedFileIds = [];
       document.getElementById('attachedChips').classList.add('hidden');
       if (json.data.idempotentReplay) {
@@ -413,11 +407,6 @@ function buildLocalWebAppHtml() {
     async function quickLaunch(prompt, agent) {
       selectAgent(agent);
       await sendTurn(prompt, agent);
-    }
-
-    async function replayLastTurn() {
-      if (!lastReplayPayload) return;
-      await sendTurn(lastReplayPayload.prompt, lastReplayPayload.preferredAgent, lastReplayPayload.reqId);
     }
 
     async function createNewConversation() {
@@ -529,15 +518,6 @@ function buildLocalWebAppHtml() {
       }
     }
 
-    async function toggleReadOnly() {
-      const res = await fetch('/api/v1/ui/demo/toggle-read-only', { method: 'POST' });
-      const json = await res.json();
-      if (json.ok) {
-        showToast(json.data.demoReadOnly ? 'DEMO_READ_ONLY enabled (mutations return 403).' : 'READ_WRITE enabled.');
-        await loadWorkspace();
-      }
-    }
-
     function toggleVoiceDictation() {
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SR) {
@@ -564,12 +544,11 @@ function buildLocalWebAppHtml() {
 /**
  * Starts the local multi-service Gateway HTTP server + 3-Pane Web UI.
  *
- * @param {{ port?: number; host?: string; demoReadOnly?: boolean }} [options]
+ * @param {{ port?: number; host?: string }} [options]
  */
 export async function startLocalStackServer(options = {}) {
   const port = options.port ?? Number(process.env.PORT ?? 8000);
   const host = options.host ?? '127.0.0.1';
-  let demoReadOnly = options.demoReadOnly ?? process.env.DEMO_READ_ONLY === 'true';
 
   const { privateKeyPem, publicKeyPem } = generateEd25519KeyPair();
 
@@ -581,7 +560,6 @@ export async function startLocalStackServer(options = {}) {
     USER_CONTEXT_SIGNING_KEY: privateKeyPem,
     CORS_ALLOWED_ORIGINS:
       process.env.CORS_ALLOWED_ORIGINS ?? 'http://localhost:3000,http://127.0.0.1:3000,http://127.0.0.1:8000,http://localhost:8000',
-    DEMO_READ_ONLY: demoReadOnly ? 'true' : 'false',
   });
 
   // Real @kartik/agent execution engine for interactive browser UI
@@ -879,7 +857,6 @@ export async function startLocalStackServer(options = {}) {
             ok: true,
             data: {
               availableCredits,
-              demoReadOnly,
               conversations: Array.from(uiConversations.values()).filter(
                 (c) => c.deletionState === 'active',
               ),
@@ -889,23 +866,7 @@ export async function startLocalStackServer(options = {}) {
         };
       }
 
-      if (pathname === '/api/v1/ui/demo/toggle-read-only' && req.method === 'POST') {
-        demoReadOnly = !demoReadOnly;
-        return {
-          statusCode: 200,
-          headers: {},
-          body: { ok: true, data: { demoReadOnly } },
-        };
-      }
-
       if (pathname === '/api/v1/ui/conversations' && req.method === 'POST') {
-        if (demoReadOnly) {
-          return {
-            statusCode: 403,
-            headers: {},
-            body: { ok: false, error: { code: 'DEMO_READ_ONLY', message: 'Demo is in read-only mode.' } },
-          };
-        }
         const convId = `conv_${crypto.randomBytes(4).toString('hex')}`;
         const conv = {
           conversationId: convId,
@@ -938,13 +899,6 @@ export async function startLocalStackServer(options = {}) {
           };
         }
         if (req.method === 'POST') {
-          if (demoReadOnly) {
-            return {
-              statusCode: 403,
-              headers: {},
-              body: { ok: false, error: { code: 'DEMO_READ_ONLY', message: 'Demo is in read-only mode.' } },
-            };
-          }
           const reqId = req.headers['idempotency-key'] ?? `req_${Date.now()}`;
           if (uiTurnsByRequestId.has(reqId)) {
             return {

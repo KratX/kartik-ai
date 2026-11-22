@@ -17,6 +17,222 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-25',
+    title: 'Fix #25 — Remove DEMO_READ_ONLY, Developer Tools Clutter & Unused Demo Harness Across Full Stack',
+    subtitle:
+      '31 files (2 deleted) · Removes DEMO_READ_ONLY kill switch, /api/v1/demo/toggle-read-only endpoint, Read-Only Freeze banners, Nav Developer Tools popover & Replay Idempotency-Key UI clutter, plus dead interactive-demo-harness.ts (~977 lines) across frontend, root runtime, local stack script, shared errors/middleware, gateway, chat, billing, docker-compose, and tests; replaces Nav Tools popover with a sleek Keyboard Shortcuts (?) icon button while keeping automatic client Idempotency-Key deduplication intact',
+    zipFilename: 'fix-25-remove-demo-read-only-and-unused-code.zip',
+    zipHref: '/__downloads/fix-25-remove-demo-read-only-and-unused-code.zip',
+    commitMessage: `refactor(fullstack): remove DEMO_READ_ONLY, Nav developer tools clutter & unused interactive demo harness
+
+- Remove DEMO_READ_ONLY error code, middleware, env config, and /api/v1/demo/toggle-read-only route across frontend, root Express runtime, shared, gateway, chat, billing, scripts, .env.example, and docker-compose.prod.yml
+- Remove Nav Developer Tools popover (Gateway Session Active telemetry, Read-Only Freeze toggle, manual Replay Idempotency-Key button) and replace with a clean Keyboard Shortcuts (?) trigger button
+- Remove Read-Only Freeze and Replay Last Idempotency-Key actions from CommandPalette and read-only banners from ChatInput & BillingDrawer (preserving automatic per-turn client Idempotency-Key deduplication under the hood)
+- Delete unused Phase 8 in-browser mock harness (frontend/src/app/interactive-demo-harness.ts & interactive-demo-harness.test.ts) and update unit tests across all workspaces`,
+    changedFiles: [
+      {
+        path: 'frontend/src/components/layout/Nav.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/layout/Nav.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/CommandPalette.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/CommandPalette.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/ChatInput.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ChatInput.tsx',
+      },
+      {
+        path: 'frontend/src/components/billing/BillingDrawer.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/billing/BillingDrawer.tsx',
+      },
+      {
+        path: 'frontend/src/App.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/App.tsx',
+      },
+      {
+        path: 'frontend/src/types/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/types/index.ts',
+      },
+      {
+        path: 'frontend/src/lib/api-client.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/lib/api-client.ts',
+      },
+      {
+        path: 'frontend/src/store/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/store/index.ts',
+      },
+      {
+        path: 'frontend/src/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/index.ts',
+      },
+      {
+        path: 'frontend/tests/frontend-api-client.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/tests/frontend-api-client.test.ts',
+      },
+      {
+        path: 'server.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=server.ts',
+      },
+      {
+        path: 'src/server/platform-api-runtime.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/server/platform-api-runtime.ts',
+      },
+      {
+        path: 'scripts/start-local-stack.mjs',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=scripts/start-local-stack.mjs',
+      },
+      {
+        path: 'scripts/seed-dev-data.mjs',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=scripts/seed-dev-data.mjs',
+      },
+      {
+        path: '.env.example',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=.env.example',
+      },
+      {
+        path: 'infra/aws/ec2-compose/docker-compose.prod.yml',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=infra/aws/ec2-compose/docker-compose.prod.yml',
+      },
+      {
+        path: 'backend/shared/errors/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/shared/errors/index.ts',
+      },
+      {
+        path: 'backend/shared/middleware/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/shared/middleware/index.ts',
+      },
+      {
+        path: 'backend/shared/tests/errors.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/shared/tests/errors.test.ts',
+      },
+      {
+        path: 'backend/shared/tests/middleware.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/shared/tests/middleware.test.ts',
+      },
+      {
+        path: 'backend/gateway/src/config/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/gateway/src/config/index.ts',
+      },
+      {
+        path: 'backend/gateway/src/routes/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/gateway/src/routes/index.ts',
+      },
+      {
+        path: 'backend/gateway/src/readiness/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/gateway/src/readiness/index.ts',
+      },
+      {
+        path: 'backend/gateway/tests/gateway-config.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/gateway/tests/gateway-config.test.ts',
+      },
+      {
+        path: 'backend/gateway/tests/gateway-routes.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/gateway/tests/gateway-routes.test.ts',
+      },
+      {
+        path: 'backend/gateway/tests/http-server.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/gateway/tests/http-server.test.ts',
+      },
+      {
+        path: 'backend/gateway/tests/e2e-readiness.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/gateway/tests/e2e-readiness.test.ts',
+      },
+      {
+        path: 'backend/services/chat/src/config/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/chat/src/config/index.ts',
+      },
+      {
+        path: 'backend/services/chat/src/middleware/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/chat/src/middleware/index.ts',
+      },
+      {
+        path: 'backend/services/chat/src/routes/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/chat/src/routes/index.ts',
+      },
+      {
+        path: 'backend/services/chat/src/server.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/chat/src/server.ts',
+      },
+      {
+        path: 'backend/services/chat/src/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/chat/src/index.ts',
+      },
+      {
+        path: 'backend/services/chat/tests/chat-repository.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/chat/tests/chat-repository.test.ts',
+      },
+      {
+        path: 'backend/services/chat/tests/chat-routes.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/chat/tests/chat-routes.test.ts',
+      },
+      {
+        path: 'backend/services/billing/src/config/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/billing/src/config/index.ts',
+      },
+      {
+        path: 'backend/services/billing/src/middleware/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/billing/src/middleware/index.ts',
+      },
+      {
+        path: 'backend/services/billing/src/routes/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/billing/src/routes/index.ts',
+      },
+      {
+        path: 'backend/services/billing/src/server.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/billing/src/server.ts',
+      },
+      {
+        path: 'backend/services/billing/tests/billing-routes.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=backend/services/billing/tests/billing-routes.test.ts',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+    ],
+  },
+  {
     id: 'fix-24',
     title: 'Fix #24 — 21st.dev Studio Polish: Rotating Hero Scramble Text, Clickable Animated Kartik.ai Brand Home, Fluid Gemini-Style Streaming Reveal, Obsidian Artifact Studios, BorderBeam AuthModal, Citation Hover Cards, Edit & Re-run, Attachment Lightbox, Spring Toasts & Shortcuts Sheet',
     subtitle:

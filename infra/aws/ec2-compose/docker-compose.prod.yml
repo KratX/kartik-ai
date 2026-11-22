@@ -46,7 +46,6 @@ services:
       USER_CONTEXT_SIGNING_KEY_FILE: /run/secrets/user_context_signing_key
       USER_CONTEXT_PUBLIC_KEY_FILE: /run/secrets/user_context_public_key
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
-      DEMO_READ_ONLY: ${DEMO_READ_ONLY:-false}
     depends_on:
       - auth
       - chat

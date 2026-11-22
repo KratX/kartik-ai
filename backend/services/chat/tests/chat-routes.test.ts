@@ -153,7 +153,6 @@ class RouteTestBillingAndAgentRig
 }
 
 function createTestChatRouter(options?: {
-  readonly demoReadOnly?: boolean;
   readonly maxRequestsPerMinute?: number;
   readonly checkReadiness?: () => Promise<boolean>;
 }) {
@@ -164,7 +163,6 @@ function createTestChatRouter(options?: {
     USER_CONTEXT_PUBLIC_KEY: publicKeyPem,
     CHAT_TO_AGENT_TOKEN: 'secret-chat-to-agent-token-63a',
     CHAT_TO_BILLING_TOKEN: 'secret-chat-to-billing-token-63a',
-    DEMO_READ_ONLY: options?.demoReadOnly ? 'true' : 'false',
   });
 
   const repository = new InMemoryChatRepository();
@@ -412,19 +410,14 @@ describe('@kartik/chat HTTP routes & Phase 6 Exit Gate closure (6.3.a)', () => {
     assert.equal(bobDelete.body.error.code, 'NOT_FOUND');
   });
 
-  it('enforces DEMO_READ_ONLY kill switch on mutating chat routes (403) while allowing GET browsing, and requires Idempotency-Key (§12, Invariant #15)', async () => {
-    const { router: writableRouter } = createTestChatRouter({
-      demoReadOnly: false,
-    });
-    const { router: readOnlyRouter } = createTestChatRouter({
-      demoReadOnly: true,
-    });
+  it('requires Idempotency-Key on mutating chat routes (Invariant #15)', async () => {
+    const { router: writableRouter } = createTestChatRouter();
 
     const aliceAssertion = signUserContextAssertion(
       {
         sub: 'usr_alice',
         aud: 'chat',
-        traceId: 'trace_demo_check',
+        traceId: 'trace_idem_check',
       },
       privateKeyPem,
     );
@@ -443,34 +436,6 @@ describe('@kartik/chat HTTP routes & Phase 6 Exit Gate closure (6.3.a)', () => {
     });
     assert.equal(missingIdem.statusCode, 400);
     assert.equal(missingIdem.body.error.code, 'IDEMPOTENCY_KEY_REQUIRED');
-
-    // In DEMO_READ_ONLY mode, GET /conversations succeeds (200) while POST /conversations returns 403 DEMO_READ_ONLY
-    const getReadOnly = await readOnlyRouter.execute<{
-      error: null;
-      data: { items: readonly ConversationRecord[] };
-    }>({
-      method: 'GET',
-      path: '/api/v1/conversations',
-      headers: {
-        [INTERNAL_AUTH_HEADERS.USER_CONTEXT]: aliceAssertion,
-      },
-    });
-    assert.equal(getReadOnly.statusCode, 200);
-
-    const postReadOnly = await readOnlyRouter.execute<{
-      data: null;
-      error: { code: string };
-    }>({
-      method: 'POST',
-      path: '/api/v1/conversations',
-      headers: {
-        [INTERNAL_AUTH_HEADERS.USER_CONTEXT]: aliceAssertion,
-        [INTERNAL_AUTH_HEADERS.REQUEST_ID]: 'req_readonly_blocked',
-      },
-      body: { title: 'Blocked in Demo Mode' },
-    });
-    assert.equal(postReadOnly.statusCode, 403);
-    assert.equal(postReadOnly.body.error.code, 'DEMO_READ_ONLY');
   });
 
   it('serves /healthz and /readyz (503 PROVIDER_UNAVAILABLE when down) and enforces per-user rate limits (429 RATE_LIMITED with Retry-After)', async () => {

@@ -1,6 +1,6 @@
 /**
  * @kartik/shared/middleware — Request Context, Run-Identity Enforcement, Rate Limiting,
- * DEMO_READ_ONLY Kill-Switch, Internal Service Auth & Error Boundary
+ * Request Context, Rate Limiting, Internal Service Auth & Error Boundary
  * (Blueprint §5.2, §5.4, §5.5, §6.3, §6.4, §12 & Architecture Invariants #14, #15).
  */
 import { randomUUID } from 'node:crypto';
@@ -149,40 +149,6 @@ export function createRequestContextMiddleware(
     } catch (err) {
       next(err);
     }
-  };
-}
-
-export interface DemoReadOnlyOptions {
-  readonly enabled: boolean | (() => boolean);
-  readonly exemptPaths?: readonly string[];
-}
-
-/**
- * Enforces the `DEMO_READ_ONLY` kill switch (§12):
- * Read-only methods (`GET`, `HEAD`, `OPTIONS`) pass; mutating methods return `403 DEMO_READ_ONLY`.
- */
-export function createDemoReadOnlyMiddleware(options: DemoReadOnlyOptions): MiddlewareHandler {
-  const exempt = new Set(options.exemptPaths ?? []);
-
-  return (req, _res, next) => {
-    const isEnabled = typeof options.enabled === 'function' ? options.enabled() : options.enabled;
-    if (!isEnabled) {
-      next();
-      return;
-    }
-
-    const routePath = (req.path ?? req.url ?? '').split('?')[0] ?? '';
-    if (isMutatingMethod(req.method) && !exempt.has(routePath)) {
-      next(
-        new AppError(
-          'DEMO_READ_ONLY',
-          'Demo is currently in read-only mode; mutating requests are disabled',
-        ),
-      );
-      return;
-    }
-
-    next();
   };
 }
 

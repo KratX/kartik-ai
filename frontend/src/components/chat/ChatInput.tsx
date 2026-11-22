@@ -77,7 +77,6 @@ export interface ChatInputProps {
     preferredAgent?: SpecialistAgentName,
   ) => Promise<void>;
   readonly isLoading: boolean;
-  readonly demoReadOnly: boolean;
 }
 
 export function ChatInput({
@@ -92,7 +91,6 @@ export function ChatInput({
   onUploadFile,
   onSendMessage,
   isLoading,
-  demoReadOnly,
 }: ChatInputProps) {
   const [prompt, setPrompt] = useState('');
   const [isFocused, setIsFocused] = useState(false);
@@ -110,7 +108,7 @@ export function ChatInput({
     AGENT_SELECTOR_PILLS[0]!;
 
   const slashMatches = useMemo(() => matchSlashCommands(prompt), [prompt]);
-  const isSlashMenuVisible = slashMatches.length > 0 && !demoReadOnly;
+  const isSlashMenuVisible = slashMatches.length > 0;
 
   useEffect(() => {
     setSlashIndex(0);
@@ -234,7 +232,7 @@ export function ChatInput({
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const trimmed = prompt.trim();
-    if (!trimmed || isLoading || demoReadOnly) return;
+    if (!trimmed || isLoading) return;
 
     const preferred: SpecialistAgentName | undefined =
       selectedAgent === 'chat' ? undefined : selectedAgent;
@@ -247,16 +245,6 @@ export function ChatInput({
   const composerBody = (
     <div className="w-full max-w-3xl mx-auto relative">
       {/* Alerts */}
-      {demoReadOnly && (
-        <div className="mb-2.5 px-3.5 py-2 rounded-xl bg-amber-500/12 border border-amber-500/30 text-xs text-amber-200 flex items-center justify-between">
-          <span>
-            <strong className="font-semibold">Read-Only Freeze Active:</strong> Mutating
-            requests return <code className="font-mono">403 DEMO_READ_ONLY</code> while
-            browsing remains enabled.
-          </span>
-        </div>
-      )}
-
       {uploadError && (
         <div className="mb-2.5 px-3.5 py-2 rounded-xl bg-rose-500/12 border border-rose-500/30 text-xs text-rose-200 flex items-center justify-between">
           <span>{uploadError}</span>
@@ -478,7 +466,6 @@ export function ChatInput({
                 void handleSubmit();
               }
             }}
-            disabled={demoReadOnly}
             placeholder={
               selectedAgent === 'chat'
                 ? 'Ask anything, or type / for specialists (Code, PDF, Slides, Search, Image)…'
@@ -495,7 +482,7 @@ export function ChatInput({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading || demoReadOnly}
+              disabled={isUploading}
               title="Attach PDF (RAG) or Image (Vision OCR)"
               aria-label="Attach file"
               className="h-8 w-8 rounded-lg bg-transparent hover:bg-white/[0.07] text-zinc-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-40 cursor-pointer shrink-0"
@@ -510,7 +497,6 @@ export function ChatInput({
             <button
               type="button"
               onClick={handleToggleVoice}
-              disabled={demoReadOnly}
               title="Voice dictation"
               aria-label="Voice dictation"
               className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer shrink-0 ${
@@ -664,7 +650,7 @@ export function ChatInput({
 
             <button
               type="submit"
-              disabled={!prompt.trim() || isLoading || demoReadOnly}
+              disabled={!prompt.trim() || isLoading}
               aria-label="Send message"
               data-composer-send="true"
               className="h-8 w-8 rounded-full bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 flex items-center justify-center transition-colors cursor-pointer disabled:cursor-not-allowed shrink-0"

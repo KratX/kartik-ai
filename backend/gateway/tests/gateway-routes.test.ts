@@ -9,7 +9,7 @@
  * 2. Missing `Idempotency-Key` on mutating authenticated route fails with 400 `IDEMPOTENCY_KEY_REQUIRED`.
  * 3. Any browser request targeting `/internal/*` or `/api/v1/internal/*` returns 404 `NOT_FOUND`
  *    without forwarding upstream (Phase 3 Exit Gate & Invariants #14, #20).
- * 4. Raw body preservation on `POST /api/v1/webhooks/razorpay` (§11) & `DEMO_READ_ONLY` kill switch (§12).
+ * 4. Raw body preservation on `POST /api/v1/webhooks/razorpay` (§11).
  */
 
 import { describe, it } from 'node:test';
@@ -28,7 +28,7 @@ import {
   type IntrospectedSessionIdentity,
 } from '../src/index.js';
 
-function createGatewayTestHarness(overrides?: { demoReadOnly?: boolean }) {
+function createGatewayTestHarness() {
   const { privateKeyPem, publicKeyPem } = generateEd25519KeyPair();
   const nowSec = 1_762_860_000;
 
@@ -38,7 +38,6 @@ function createGatewayTestHarness(overrides?: { demoReadOnly?: boolean }) {
     SERVICE_TO_SERVICE_TOKEN: 's2s-gateway-token-at-least-16-chars',
     USER_CONTEXT_SIGNING_KEY: privateKeyPem,
     CORS_ALLOWED_ORIGINS: 'https://app.kartik.ai,http://localhost:5173',
-    DEMO_READ_ONLY: overrides?.demoReadOnly ? 'true' : 'false',
   });
 
   const sampleSession: IntrospectedSessionIdentity = {
@@ -315,10 +314,8 @@ describe('@kartik/gateway public route table & Phase 3 Exit Gate closure (3.3.a)
     assert.equal(verifyAliasRes.statusCode, 200);
   });
 
-  it('preserves exact rawBody on POST /api/v1/webhooks/razorpay (§11) and enforces DEMO_READ_ONLY kill switch (§12)', async () => {
-    const { sampleSession, upstream, router } = createGatewayTestHarness({
-      demoReadOnly: false,
-    });
+  it('preserves exact rawBody on POST /api/v1/webhooks/razorpay (§11)', async () => {
+    const { upstream, router } = createGatewayTestHarness();
 
     const rawWebhookPayload = '{"event":"payment.captured","payload":{"payment":{"entity":{"id":"pay_123"}}}}';
 
@@ -341,35 +338,5 @@ describe('@kartik/gateway public route table & Phase 3 Exit Gate closure (3.3.a)
       rawBody: rawWebhookPayload,
     });
     assert.equal(webhookRes.statusCode, 200);
-
-    // Verify DEMO_READ_ONLY blocks mutating requests with 403 DEMO_READ_ONLY while allowing GET
-    const readOnlyHarness = createGatewayTestHarness({ demoReadOnly: true });
-    readOnlyHarness.upstream.registerHandler('chat', 'GET', '/conversations', () => ({
-      statusCode: 200,
-      headers: {},
-      body: createSuccessEnvelope('trc_ro', { items: [] }),
-    }));
-
-    const blockedMutate = await readOnlyHarness.router.execute<{ error: { code: string } }>({
-      method: 'POST',
-      path: '/api/v1/conversations',
-      headers: {
-        origin: 'https://app.kartik.ai',
-        cookie: `kartik_session=${sampleSession.sessionId}`,
-        [IDEMPOTENCY_KEY_HEADER]: 'idem_readonly_test_0001',
-      },
-      body: { title: 'Blocked' },
-    });
-    assert.equal(blockedMutate.statusCode, 403);
-    assert.equal(blockedMutate.body.error.code, 'DEMO_READ_ONLY');
-
-    const allowedGet = await readOnlyHarness.router.execute({
-      method: 'GET',
-      path: '/api/v1/conversations',
-      headers: {
-        cookie: `kartik_session=${sampleSession.sessionId}`,
-      },
-    });
-    assert.equal(allowedGet.statusCode, 200);
   });
 });
