@@ -38,6 +38,36 @@ interface ThemeVisualTokens {
 }
 
 const DECK_THEME_TOKENS: Readonly<Record<ParsedPptDeckTheme, ThemeVisualTokens>> = {
+  editorial_story: {
+    label: 'Editorial Presentation',
+    canvasBg: 'bg-[#0a0a0e]',
+    surfaceBg: 'bg-[#13141b]',
+    surfaceAltBg: 'bg-[#191b24]',
+    border: 'border-white/[0.09]',
+    accentBar: 'bg-amber-300',
+    accentText: 'text-amber-200',
+    accentBorder: 'border-amber-300/35',
+  },
+  educational_explainer: {
+    label: 'Educational Explainer',
+    canvasBg: 'bg-[#081012]',
+    surfaceBg: 'bg-[#0f1c20]',
+    surfaceAltBg: 'bg-[#14252b]',
+    border: 'border-white/[0.09]',
+    accentBar: 'bg-teal-400',
+    accentText: 'text-teal-300',
+    accentBorder: 'border-teal-400/35',
+  },
+  creative_showcase: {
+    label: 'Creative & Cultural Showcase',
+    canvasBg: 'bg-[#100b0d]',
+    surfaceBg: 'bg-[#1a1216]',
+    surfaceAltBg: 'bg-[#22181d]',
+    border: 'border-white/[0.09]',
+    accentBar: 'bg-rose-400',
+    accentText: 'text-rose-300',
+    accentBorder: 'border-rose-400/35',
+  },
   pitch_deck: {
     label: 'Investor Pitch Deck',
     canvasBg: 'bg-[#09090c]',
@@ -103,9 +133,9 @@ const DECK_THEME_TOKENS: Readonly<Record<ParsedPptDeckTheme, ThemeVisualTokens>>
 const LAYOUT_SHORT_LABELS: Readonly<Record<string, string>> = {
   cover: 'Cover',
   closing: 'Closing',
-  metrics: 'KPI Grid',
+  metrics: 'Key Facts',
   two_column: 'Comparison',
-  process: 'Process',
+  process: 'Journey',
   spotlight: 'Spotlight',
   bullets: 'Editorial',
 };
@@ -368,7 +398,7 @@ export function SlideDeckPreview({ artifact }: SlideDeckPreviewProps) {
     () => parsePptArtifactSlideDeck(specFile?.content, artifact.title),
     [specFile?.content, artifact.title],
   );
-  const tokens = DECK_THEME_TOKENS[deck.theme] ?? DECK_THEME_TOKENS.technical_architecture;
+  const tokens = DECK_THEME_TOKENS[deck.theme] ?? DECK_THEME_TOKENS.editorial_story;
 
   const [activeIndex, setActiveIndex] = useState(0);
   const [viewMode, setViewMode] = useState<'stage' | 'grid'>('stage');

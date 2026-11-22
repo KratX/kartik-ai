@@ -342,7 +342,7 @@ export function ChatArea({
 
             <MotionScrambleText
               lines={HERO_SCRAMBLE_LINES}
-              intervalMs={4200}
+              intervalMs={4800}
               scrambleDurationMs={780}
               className="mt-3 max-w-2xl"
             />

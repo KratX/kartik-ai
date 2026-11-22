@@ -36,6 +36,9 @@ export const MAX_PPT_STEPS_PER_SLIDE = 4;
 export const MAX_PPT_COLUMN_POINTS = 4;
 
 export const PDF_DOCUMENT_TYPES = [
+  'general_guide',
+  'educational_explainer',
+  'creative_editorial',
   'technical_report',
   'executive_brief',
   'proposal',
@@ -47,6 +50,9 @@ export const PDF_DOCUMENT_TYPES = [
 export type PdfDocumentType = (typeof PDF_DOCUMENT_TYPES)[number];
 
 export const PPT_DECK_THEMES = [
+  'editorial_story',
+  'educational_explainer',
+  'creative_showcase',
   'pitch_deck',
   'technical_architecture',
   'product_launch',
@@ -269,7 +275,7 @@ export function validatePdfDocumentSpec(rawInput: unknown): PdfDocumentSpec {
 
   const subtitle =
     sanitizePrintableText(obj.subtitle, MAX_PDF_SUBTITLE_CHARS) ||
-    'Comprehensive Technical Reference & Architecture Guide';
+    'Structured Guide & Editorial Reference';
 
   if (!Array.isArray(obj.sections) || obj.sections.length === 0) {
     throw new AppError(
@@ -301,7 +307,7 @@ export function validatePdfDocumentSpec(rawInput: unknown): PdfDocumentSpec {
     sections.push(
       Object.freeze({
         heading: heading || `Section ${sections.length + 1}`,
-        content: content || 'Key details and operational considerations for this section.',
+        content: content || 'Key details, context, and takeaways for this section.',
         bullets: Object.freeze(bullets),
         ...(callout ? { callout } : {}),
         ...(table ? { table } : {}),
@@ -472,7 +478,7 @@ export function validatePptPresentationSpec(rawInput: unknown): PptPresentationS
 
   const subtitle =
     sanitizePrintableText(obj.subtitle, MAX_PPT_SUBTITLE_CHARS) ||
-    'Executive Briefing & Architecture Presentation';
+    'Structured Visual Presentation';
 
   if (!Array.isArray(obj.slides) || obj.slides.length === 0) {
     throw new AppError(
@@ -563,7 +569,7 @@ export function validatePptPresentationSpec(rawInput: unknown): PptPresentationS
             ? steps.map((st) => `${st.step}. ${st.title} — ${st.detail}`)
             : columns
               ? columns.map((c) => `${c.heading}: ${c.points[0] ?? ''}`).filter(Boolean)
-              : ['Core architectural insight and implementation takeaway.'];
+              : ['Key insight and core takeaway.'];
 
     contentSlides.push(
       Object.freeze({

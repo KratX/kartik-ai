@@ -37,6 +37,7 @@ export interface PdfDocumentProvider {
 
 interface PdfThemePalette {
   readonly label: string;
+  readonly summaryLabel: string;
   readonly bannerRgb: readonly [number, number, number];
   readonly accentRgb: readonly [number, number, number];
   readonly tintRgb: readonly [number, number, number];
@@ -44,8 +45,33 @@ interface PdfThemePalette {
 }
 
 const PDF_THEMES: Readonly<Record<PdfDocumentType, PdfThemePalette>> = {
+  general_guide: {
+    label: 'EDITORIAL GUIDE & BRIEF',
+    summaryLabel: 'OVERVIEW',
+    bannerRgb: [0.09, 0.1, 0.14],
+    accentRgb: [0.24, 0.35, 0.62],
+    tintRgb: [0.95, 0.96, 0.99],
+    borderRgb: [0.8, 0.84, 0.93],
+  },
+  educational_explainer: {
+    label: 'STUDY GUIDE & EXPLAINER',
+    summaryLabel: 'AT A GLANCE',
+    bannerRgb: [0.05, 0.16, 0.18],
+    accentRgb: [0.05, 0.52, 0.52],
+    tintRgb: [0.93, 0.98, 0.98],
+    borderRgb: [0.74, 0.89, 0.89],
+  },
+  creative_editorial: {
+    label: 'FEATURED ESSAY & STORY',
+    summaryLabel: 'SYNOPSIS',
+    bannerRgb: [0.16, 0.1, 0.09],
+    accentRgb: [0.72, 0.32, 0.18],
+    tintRgb: [0.99, 0.96, 0.94],
+    borderRgb: [0.93, 0.82, 0.76],
+  },
   technical_report: {
     label: 'TECHNICAL ARCHITECTURE REPORT',
+    summaryLabel: 'EXECUTIVE SUMMARY',
     bannerRgb: [0.06, 0.11, 0.22],
     accentRgb: [0.05, 0.48, 0.78],
     tintRgb: [0.94, 0.97, 1.0],
@@ -53,6 +79,7 @@ const PDF_THEMES: Readonly<Record<PdfDocumentType, PdfThemePalette>> = {
   },
   executive_brief: {
     label: 'EXECUTIVE STRATEGY BRIEF',
+    summaryLabel: 'EXECUTIVE SUMMARY',
     bannerRgb: [0.1, 0.09, 0.25],
     accentRgb: [0.31, 0.27, 0.85],
     tintRgb: [0.95, 0.95, 1.0],
@@ -60,6 +87,7 @@ const PDF_THEMES: Readonly<Record<PdfDocumentType, PdfThemePalette>> = {
   },
   proposal: {
     label: 'BUSINESS & PROJECT PROPOSAL',
+    summaryLabel: 'EXECUTIVE SUMMARY',
     bannerRgb: [0.04, 0.18, 0.16],
     accentRgb: [0.04, 0.56, 0.42],
     tintRgb: [0.93, 0.99, 0.96],
@@ -67,13 +95,15 @@ const PDF_THEMES: Readonly<Record<PdfDocumentType, PdfThemePalette>> = {
   },
   research_paper: {
     label: 'RESEARCH & ANALYSIS BRIEF',
+    summaryLabel: 'ABSTRACT',
     bannerRgb: [0.14, 0.12, 0.16],
     accentRgb: [0.76, 0.44, 0.08],
     tintRgb: [0.99, 0.97, 0.93],
     borderRgb: [0.94, 0.84, 0.71],
   },
   playbook: {
-    label: 'OPERATIONAL PLAYBOOK & SOP',
+    label: 'STEP-BY-STEP PLAYBOOK & GUIDE',
+    summaryLabel: 'OVERVIEW',
     bannerRgb: [0.14, 0.08, 0.24],
     accentRgb: [0.52, 0.24, 0.82],
     tintRgb: [0.97, 0.95, 1.0],
@@ -81,6 +111,7 @@ const PDF_THEMES: Readonly<Record<PdfDocumentType, PdfThemePalette>> = {
   },
   resume: {
     label: 'CURRICULUM VITAE / PROFILE',
+    summaryLabel: 'PROFILE SUMMARY',
     bannerRgb: [0.11, 0.14, 0.18],
     accentRgb: [0.18, 0.36, 0.56],
     tintRgb: [0.95, 0.96, 0.98],
@@ -89,8 +120,9 @@ const PDF_THEMES: Readonly<Record<PdfDocumentType, PdfThemePalette>> = {
 };
 
 /**
- * Classifies a user PDF prompt into one of 6 editorial document archetypes so layout palette,
- * system prompt instructions, and section framing match the document's purpose.
+ * Classifies a user PDF prompt into one of 9 domain-adaptive document archetypes so layout palette,
+ * editorial voice, and section framing match the actual topic — defaulting to domain-neutral `general_guide`
+ * rather than forcing a technical architecture tone onto non-technical subjects.
  */
 export function classifyPdfDocumentType(prompt: string): PdfDocumentType {
   const lower = prompt.toLowerCase();
@@ -100,16 +132,37 @@ export function classifyPdfDocumentType(prompt: string): PdfDocumentType {
   if (/\b(proposal|rfp|pitch|business case|client offer|quote|sow|statement of work)\b/.test(lower)) {
     return 'proposal';
   }
-  if (/\b(playbook|runbook|sop|standard operating procedure|incident response|onboarding guide|checklist|handbook)\b/.test(lower)) {
+  if (/\b(playbook|runbook|sop|standard operating procedure|incident response|onboarding guide|checklist|handbook|routine|training plan|workout plan|meal plan|recipe book)\b/.test(lower)) {
     return 'playbook';
   }
-  if (/\b(research|whitepaper|white paper|literature review|benchmark study|empirical|comparative study|academic)\b/.test(lower)) {
+  if (/\b(research|whitepaper|white paper|literature review|benchmark study|empirical|comparative study|academic|thesis|scientific study)\b/.test(lower)) {
     return 'research_paper';
   }
-  if (/\b(executive|board|quarterly|q[1-4]|strategy|market analysis|investor|briefing|roadmap|okr)\b/.test(lower)) {
+  if (/\b(executive|board|quarterly|q[1-4]|strategy|market analysis|investor|briefing|roadmap|okr|financial review|business plan)\b/.test(lower)) {
     return 'executive_brief';
   }
-  return 'technical_report';
+  if (
+    /\b(architecture|system design|microservice|distributed system|service mesh|zero[- ]trust|kubernetes|docker|devops|api design|database|sql|postgresql|redis|cloud infrastructure|backend|frontend|software engineering|cybersecurity|protocol|algorithm|compiler|sla|latency|scalability|llm architecture|rag pipeline)\b/.test(
+      lower,
+    )
+  ) {
+    return 'technical_report';
+  }
+  if (
+    /\b(study guide|explainer|explain|how .* works|beginner|101|crash course|lesson|curriculum|syllabus|tutorial|revision notes|cheat sheet|physics|chemistry|biology|astronomy|economics|psychology|math|anatomy|neuroscience)\b/.test(
+      lower,
+    )
+  ) {
+    return 'educational_explainer';
+  }
+  if (
+    /\b(travel|itinerary|trip|city guide|history|ancient|biography|essay|story|cinema|film|music|art|literature|philosophy|culture|food|coffee|cooking|cuisine|fashion|photography|architecture tour|sports|book summary|lifestyle|mythology)\b/.test(
+      lower,
+    )
+  ) {
+    return 'creative_editorial';
+  }
+  return 'general_guide';
 }
 
 /**
@@ -120,6 +173,12 @@ export function buildPdfSystemInstruction(
   todayIso: string,
 ): string {
   const archetypeGuidance: Record<PdfDocumentType, string> = {
+    general_guide:
+      'Write as a clear, authoritative non-fiction editor completely tailored to the user’s subject. Use natural, vivid, domain-authentic vocabulary — NEVER inject software engineering, cloud architecture, or corporate jargon unless the prompt itself is technical. Include optional keyMetrics (key facts, dates, or figures) and a table ONLY when they genuinely clarify the subject.',
+    educational_explainer:
+      'Write as an engaging educator crafting a clear study guide or explainer. Build concepts step-by-step from intuition to deeper understanding, use memorable examples and analogies, and include a summary/comparison table or key-fact cards where helpful. Avoid corporate or software jargon unless the topic is computer science.',
+    creative_editorial:
+      'Write as a magazine feature editor crafting an evocative, richly detailed editorial piece, cultural essay, or curated guide. Prioritize narrative flow, vivid specificity, historical or sensory context, and curated highlights. Include keyMetrics (e.g. dates, places, quick facts) or a structured table (e.g. itinerary, timeline, tasting notes) ONLY if it fits naturally.',
     technical_report:
       'Write with the precision of a Principal Systems Architect. Include concrete architecture boundaries, trade-offs, operational metrics, and at least one structured comparison or SLA table.',
     executive_brief:
@@ -127,33 +186,70 @@ export function buildPdfSystemInstruction(
     proposal:
       'Write a persuasive, concrete project proposal covering scope, deliverables, milestones/timeline table, investment/resource breakdown, and success KPIs.',
     research_paper:
-      'Write a rigorous analytical research brief covering methodology, empirical findings, comparative benchmarks table, limitations, and actionable recommendations.',
+      'Write a rigorous analytical research brief tailored to the prompt’s actual discipline (science, humanities, economics, medicine, or technology). Cover methodology, evidence/findings, a comparative table, limitations, and recommendations.',
     playbook:
-      'Write a crisp, step-by-step operational runbook/SOP with owners, escalation thresholds, verification checklists, and a severity/response matrix table.',
+      'Write a crisp, practical step-by-step guide or SOP tailored strictly to the user’s domain (whether operations, fitness, cooking, travel prep, or engineering) with clear steps, checkpoints, and a reference schedule/matrix table.',
     resume:
-      'Write an executive-ready structured profile highlighting impact metrics, core competencies, experience milestones, and measurable achievements.',
+      'Write a polished, achievement-oriented structured profile highlighting impact metrics, core strengths, experience milestones, and measurable outcomes.',
   };
 
   return [
-    `You are Kartik.ai Editorial PDF Architect (Today's UTC date: ${todayIso}).`,
+    `You are Kartik.ai Editorial PDF Author (Today's UTC date: ${todayIso}).`,
     archetypeGuidance[documentType],
-    'Use concrete, domain-specific details — never filler boilerplate. Keep every bullet crisp and high-signal, populate 3–4 realistic quantified keyMetrics, include an executiveSummary, and include a structured table on 1–2 sections where comparisons, milestones, or specifications belong.',
+    'Match the tone, terminology, and structure 100% to the user’s actual topic — never use filler boilerplate or unrelated tech/business clichés. Keep bullets crisp and high-signal.',
   ].join(' ');
 }
 
 /**
- * Builds 3 contextual follow-up prompts for PDF turns so users can refine or expand generated documents.
+ * Builds 3 contextual, domain-aware follow-up prompts for PDF turns so users can refine or expand generated documents.
  */
 export function buildPdfFollowUps(
   spec: PdfDocumentSpec,
   prompt: string,
 ): readonly string[] {
   const cleanTitle = (spec.title || prompt).trim().slice(0, 52);
-  const firstHeading = spec.sections[0]?.heading?.slice(0, 40) || 'the architecture';
+  const firstHeading = spec.sections[0]?.heading?.slice(0, 40) || 'the core topic';
+  const docType = spec.documentType ?? 'general_guide';
+
+  if (docType === 'technical_report') {
+    return Object.freeze([
+      `Expand "${cleanTitle}" PDF with a failure-mode matrix, cost breakdown table, and rollout checklist`,
+      `Regenerate "${cleanTitle}" as a concise 1-page executive summary with key SLA targets`,
+      `Add a deep-dive technical appendix on ${firstHeading} to the "${cleanTitle}" PDF`,
+    ]);
+  }
+  if (docType === 'executive_brief' || docType === 'proposal') {
+    return Object.freeze([
+      `Expand "${cleanTitle}" PDF with a risk matrix, budget breakdown table, and 90-day timeline`,
+      `Condense "${cleanTitle}" into a crisp 1-page decision brief for leadership`,
+      `Create a companion presentation deck highlighting the key takeaways from "${cleanTitle}"`,
+    ]);
+  }
+  if (docType === 'resume') {
+    return Object.freeze([
+      `Tailor "${cleanTitle}" into a sharper 1-page profile focused on quantified achievements`,
+      `Add a skills matrix and selected project highlights section to "${cleanTitle}"`,
+      `Write a matching cover letter PDF aligned with "${cleanTitle}"`,
+    ]);
+  }
+  if (docType === 'educational_explainer' || docType === 'research_paper') {
+    return Object.freeze([
+      `Expand "${cleanTitle}" PDF with a quick-reference glossary, comparison table, and practice questions`,
+      `Distill "${cleanTitle}" into a 1-page visual cheat sheet summarizing the main concepts`,
+      `Write a deeper companion PDF exploring ${firstHeading} with real-world examples`,
+    ]);
+  }
+  if (docType === 'creative_editorial') {
+    return Object.freeze([
+      `Expand "${cleanTitle}" PDF with a curated timeline, notable highlights table, and insider tips`,
+      `Rewrite "${cleanTitle}" as a vivid 1-page pocket guide for quick reading`,
+      `Create a deeper companion feature PDF focusing specifically on ${firstHeading}`,
+    ]);
+  }
   return Object.freeze([
-    `Expand "${cleanTitle}" PDF with a detailed risk matrix, cost breakdown table, and 90-day rollout plan`,
-    `Regenerate "${cleanTitle}" as a concise 1-page executive board brief with KPI targets`,
-    `Add a deep-dive technical appendix on ${firstHeading} to the "${cleanTitle}" PDF`,
+    `Expand "${cleanTitle}" PDF with concrete real-world examples and a quick-reference comparison table`,
+    `Condense "${cleanTitle}" into a concise 1-page summary sheet highlighting the key takeaways`,
+    `Create a deeper follow-up PDF diving further into ${firstHeading}`,
   ]);
 }
 
@@ -452,7 +548,7 @@ function renderExecutiveSummaryBox(
     theme.accentRgb,
     MARGIN_X + 14,
     y,
-    'EXECUTIVE SUMMARY',
+    theme.summaryLabel,
   );
   y -= 4;
 
@@ -752,7 +848,7 @@ export function buildPdfBinaryBuffer(rawSpec: PdfDocumentSpec): {
   readonly spec: PdfDocumentSpec;
 } {
   const spec = validatePdfDocumentSpec(rawSpec);
-  const theme = PDF_THEMES[spec.documentType ?? 'technical_report'];
+  const theme = PDF_THEMES[spec.documentType ?? 'general_guide'];
   const canvas = new PdfPageCanvas();
 
   // 1. Page 1 Masthead
@@ -1032,14 +1128,20 @@ export function formatPdfSummaryMarkdown(spec: PdfDocumentSpec, pageCount: numbe
     `**${spec.sections.length} sections**`,
   ];
   if (metricCount > 0) {
-    highlights.push(`**${metricCount} KPI metrics**`);
+    const metricWord =
+      spec.documentType === 'technical_report' ||
+      spec.documentType === 'executive_brief' ||
+      spec.documentType === 'proposal'
+        ? 'key metrics'
+        : 'quick facts';
+    highlights.push(`**${metricCount} ${metricWord}**`);
   }
   if (tableCount > 0) {
-    highlights.push(`**${tableCount} data table${tableCount === 1 ? '' : 's'}**`);
+    highlights.push(`**${tableCount} table${tableCount === 1 ? '' : 's'}**`);
   }
 
   const lines: string[] = [
-    `Compiled **${spec.title}** (${highlights.join(' · ')}) into a publication-ready \`%PDF-1.4\` binary.`,
+    `Compiled **${spec.title}** (${highlights.join(' · ')}) into a downloadable PDF document.`,
   ];
 
   if (spec.executiveSummary) {
@@ -1051,6 +1153,7 @@ export function formatPdfSummaryMarkdown(spec: PdfDocumentSpec, pageCount: numbe
 
 /**
  * Deterministic PDF Document Provider for offline unit tests and `MOCK_AI=true` environments.
+ * Adapts cleanly to the classified archetype so non-technical topics never receive software/infra boilerplate.
  */
 export class MockPdfDocumentProvider implements PdfDocumentProvider {
   public readonly providerName = 'mock-pdf';
@@ -1063,79 +1166,148 @@ export class MockPdfDocumentProvider implements PdfDocumentProvider {
     const cleanTopic =
       input.prompt
         .replace(
-          /^(generate|create|write|build|export|compile)\s+(a\s+)?(multi-page\s+)?(pdf|report|document|proposal|playbook|brief)\s*(on|about|for)?\s*/i,
+          /^(generate|create|write|build|export|compile|make|draft)\s+(a\s+)?(multi-page\s+)?(pdf|report|document|proposal|playbook|brief|guide|essay|study guide)\s*(on|about|for)?\s*/i,
           '',
         )
-        .trim() || 'Multi-Agent System Architecture';
+        .trim() || 'Featured Subject Overview';
 
     const titleTopic =
       cleanTopic.charAt(0).toUpperCase() + cleanTopic.slice(1).slice(0, 80);
     const todayIso = new Date().toISOString().slice(0, 10);
 
-    const sections: PdfSectionSpec[] = [
-      {
-        heading: 'Executive Overview & Problem Statement',
-        content: `This structured document examines ${titleTopic}, outlining the core architectural principles, service boundaries, and operational trade-offs required for production reliability at scale.`,
-        bullets: [
-          `Primary domain scope and measurable reliability objectives for ${titleTopic}`,
-          'Separation of concerns across stateless API gateways and stateful datastores',
-          'Predictable failure handling with idempotent client-owned retry keys',
-        ],
-        callout: `Standardizing ${titleTopic} behind explicit schema boundaries reduces incident recovery time and eliminates silent drift across environments.`,
-      },
-      {
-        heading: 'Core Architecture & Comparative Matrix',
-        content: `A resilient implementation of ${titleTopic} isolates external dependencies behind strict adapter contracts, enforces schema validation at every ingress boundary, and tracks latency budgets across tiers.`,
-        bullets: [
-          'Ingress validation and cryptographic Ed25519 request context propagation',
-          'Transactional persistence with row-level locking on mutable state',
-          'Short-lived signed URLs for private binary artifact delivery',
-        ],
-        table: {
-          caption: 'Table 1: Reference Service Layer & SLA Targets',
-          headers: ['Layer', 'Primary Responsibility', 'Target SLA', 'Failure Mode'],
-          rows: [
-            ['API Gateway', 'Auth, rate limiting & idempotency', '< 25ms p95', '429 Retry-After'],
-            ['Orchestrator', 'Specialist routing & schema checks', '< 1.2s p95', 'Graceful fallback'],
-            ['Persistence', 'Transactional ACID state storage', '99.95% avail.', 'Read-only safe mode'],
-            ['Artifact Store', 'Private binary object delivery', '< 80ms TTFB', 'Signed URL refresh'],
-          ],
-        },
-      },
-      {
-        heading: 'Security, Rate Limiting & Cost Controls',
-        content: `Production deployments of ${titleTopic} require layered rate limiting (per-IP, per-user, and per-specialist) combined with daily live budget guards and zero-trust ownership checks.`,
-        bullets: [
-          'Zero-trust userId ownership verification on all scoped queries',
-          'Sliding-window Redis rate limiters with explicit Retry-After headers',
-          'Automated health checks, backups, and reproducible disaster recovery',
-        ],
-      },
-      {
-        heading: 'Implementation Checklist & Rollout Roadmap',
-        content: `Teams adopting ${titleTopic} should verify each rollout milestone against automated contract tests and load benchmarks before enabling full production traffic.`,
-        bullets: [
-          'Run end-to-end contract and isolation tests across all service boundaries',
-          'Audit environment configuration, TLS certificates, and secret redaction',
-          'Monitor p95 latency, error budgets, and cost per request continuously',
-        ],
-        callout: 'Gate production cutover on 100% passing multi-user isolation tests and zero unhandled 5xx responses under synthetic retry storms.',
-      },
-    ];
+    const isTechnical = documentType === 'technical_report';
+
+    const sections: PdfSectionSpec[] = isTechnical
+      ? [
+          {
+            heading: 'Overview & System Scope',
+            content: `This technical report examines ${titleTopic}, outlining core architecture boundaries, design trade-offs, and reliability targets required in production.`,
+            bullets: [
+              `Primary technical scope and measurable objectives for ${titleTopic}`,
+              'Clear separation of responsibilities across stateless and stateful components',
+              'Predictable failure handling with explicit timeouts and idempotent retries',
+            ],
+            callout: `Clear interface contracts around ${titleTopic} lower operational complexity and simplify long-term maintenance.`,
+          },
+          {
+            heading: 'Architecture Layers & Trade-Off Matrix',
+            content: `A resilient design for ${titleTopic} isolates external dependencies behind strict validation boundaries and tracks latency and availability across each tier.`,
+            bullets: [
+              'Strict schema validation at every service boundary',
+              'Transactional persistence with clear ownership of mutable state',
+              'Automated observability across latency, throughput, and error budgets',
+            ],
+            table: {
+              caption: 'Table 1: Reference Component Responsibilities & Targets',
+              headers: ['Layer', 'Primary Role', 'Target Budget', 'Fallback Behavior'],
+              rows: [
+                ['Ingress', 'Validation & rate limiting', '< 25ms p95', '429 Retry-After'],
+                ['Core Logic', 'Domain workflows & checks', '< 400ms p95', 'Graceful degradation'],
+                ['Storage', 'Durable transactional state', '99.95% avail.', 'Read replica failover'],
+                ['Delivery', 'Caching & signed asset access', '< 80ms TTFB', 'Origin revalidation'],
+              ],
+            },
+          },
+          {
+            heading: 'Verification & Rollout Checklist',
+            content: `Teams implementing ${titleTopic} should verify each stage against automated contract tests and load benchmarks prior to broad rollout.`,
+            bullets: [
+              'Validate contract, security, and isolation tests across boundaries',
+              'Audit configuration defaults, secrets hygiene, and backup recovery',
+              'Monitor error budgets and unit economics continuously after launch',
+            ],
+          },
+        ]
+      : [
+          {
+            heading: `Introduction & Context: ${titleTopic}`,
+            content: `This guide explores ${titleTopic}, establishing the essential background, defining characteristics, and enduring relevance of the subject for readers seeking a clear, well-structured reference.`,
+            bullets: [
+              `Origins, foundational context, and why ${titleTopic} matters today`,
+              'Core themes and turning points that shaped how the subject is understood',
+              'Common misconceptions contrasted with verifiable real-world context',
+            ],
+            callout: `Understanding ${titleTopic} starts with seeing how its core elements connect across context, practice, and real-world impact.`,
+          },
+          {
+            heading: 'Core Pillars & Comparative Breakdown',
+            content: `Breaking ${titleTopic} into distinct dimensions makes it easier to compare approaches, recognize patterns, and appreciate the nuances that separate casual familiarity from deeper mastery.`,
+            bullets: [
+              'Primary building blocks and how each element influences the whole',
+              'Key contrasts across traditions, styles, or competing perspectives',
+              'Practical criteria for evaluating quality, impact, or authenticity',
+            ],
+            table: {
+              caption: `Table 1: Key Dimensions of ${titleTopic.slice(0, 46)}`,
+              headers: ['Dimension', 'Core Focus', 'What to Look For', 'Practical Significance'],
+              rows: [
+                ['Foundations', 'Core principles & origins', 'Clear historical or factual roots', 'Anchors deeper understanding'],
+                ['Key Elements', 'Defining traits & components', 'Balance, clarity, and craft', 'Distinguishes standout examples'],
+                ['Perspectives', 'Contrasting views & methods', 'Evidence-backed trade-offs', 'Prevents one-sided conclusions'],
+                ['Application', 'Real-world practice', 'Repeatable habits & takeaways', 'Turns insight into action'],
+              ],
+            },
+          },
+          {
+            heading: 'Evolution, Milestones & Real-World Examples',
+            content: `Examining how ${titleTopic} evolved over time highlights the pivotal moments, notable figures, and concrete case examples that brought the subject to its current form.`,
+            bullets: [
+              'Early milestones that established enduring conventions and ideas',
+              'Modern shifts that reshaped accessibility, style, or understanding',
+              'Memorable examples that illustrate core concepts in action',
+            ],
+          },
+          {
+            heading: 'Practical Takeaways & Further Exploration',
+            content: `Whether you are approaching ${titleTopic} for the first time or deepening existing knowledge, focusing on a few high-leverage principles makes exploration immediately rewarding.`,
+            bullets: [
+              `Start by observing the foundational patterns behind ${titleTopic} firsthand`,
+              'Compare two contrasting examples side by side to sharpen judgment',
+              'Keep a concise reference list of key terms, dates, or techniques',
+            ],
+            callout: `The fastest way to master ${titleTopic} is to pair structured fundamentals with curiosity-driven, real-world observation.`,
+          },
+        ];
+
+    const subtitleByType: Record<PdfDocumentType, string> = {
+      general_guide: 'Comprehensive Guide, Key Perspectives & Practical Reference',
+      educational_explainer: 'Clear Concepts, Structured Breakdown & Study Reference',
+      creative_editorial: 'Curated Feature, Context & Notable Highlights',
+      technical_report: 'Structured Architecture, Benchmarks & Implementation Reference',
+      executive_brief: 'Strategic Summary, Key Drivers & Decision Framework',
+      proposal: 'Scope, Deliverables, Milestones & Value Overview',
+      research_paper: 'Methodology, Comparative Evidence & Key Findings',
+      playbook: 'Actionable Steps, Checkpoints & Reference Matrix',
+      resume: 'Career Highlights, Core Strengths & Measurable Impact',
+    };
+
+    const keyMetrics: readonly PdfMetricSpec[] | undefined =
+      documentType === 'creative_editorial'
+        ? undefined
+        : isTechnical
+          ? [
+              { label: 'Target Availability', value: '99.95%', delta: 'Multi-AZ ready' },
+              { label: 'Latency Budget', value: '< 25 ms', delta: 'p95 target' },
+              { label: 'Verification', value: 'Automated', delta: 'Contract-gated' },
+              { label: 'Rollout Scope', value: 'Phased', delta: 'Canary verified' },
+            ]
+          : [
+              { label: 'Document Scope', value: `${sections.length} Chapters`, delta: 'Structured guide' },
+              { label: 'Reading Level', value: 'Accessible', delta: 'Clear & concise' },
+              { label: 'Reference Data', value: '1 Table', delta: 'Quick comparison' },
+              { label: 'Format', value: 'Editorial', delta: 'Print-ready PDF' },
+            ];
 
     const spec = validatePdfDocumentSpec({
-      title: `${titleTopic} — Technical Report`,
-      subtitle: 'Structured Architecture, Benchmarks & Implementation Reference',
+      title: isTechnical ? `${titleTopic} — Technical Report` : titleTopic,
+      subtitle: subtitleByType[documentType],
       documentType,
       author: 'Kartik.ai Editorial Engine',
       generatedDate: todayIso,
-      executiveSummary: `An executive and engineering blueprint for ${titleTopic}, combining layered architecture guardrails, quantified SLA targets, security controls, and a phased verification checklist.`,
-      keyMetrics: [
-        { label: 'Target Availability', value: '99.95%', delta: 'Multi-AZ ready' },
-        { label: 'Gateway Overhead', value: '< 25 ms', delta: 'p95 verified' },
-        { label: 'Security Model', value: 'Zero-Trust', delta: 'Ed25519 + RBAC' },
-        { label: 'Rollout Phases', value: '4 Stages', delta: 'Contract-gated' },
-      ],
+      executiveSummary: isTechnical
+        ? `A structured technical blueprint for ${titleTopic}, covering architecture boundaries, target budgets, trade-offs, and a verification checklist.`
+        : `A clear, well-structured guide to ${titleTopic}, bringing together essential context, core concepts, comparative highlights, and practical takeaways.`,
+      ...(keyMetrics ? { keyMetrics } : {}),
       sections,
       footer: 'Generated by Kartik.ai',
     });

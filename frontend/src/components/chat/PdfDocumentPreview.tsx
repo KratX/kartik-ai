@@ -28,6 +28,7 @@ export interface PdfDocumentPreviewProps {
 
 interface PdfArchetypeStyle {
   readonly badge: string;
+  readonly summaryLabel: string;
   readonly bannerClass: string;
   readonly accentBorderClass: string;
   readonly accentTextClass: string;
@@ -35,8 +36,33 @@ interface PdfArchetypeStyle {
 }
 
 const ARCHETYPE_STYLES: Readonly<Record<ParsedPdfDocumentType, PdfArchetypeStyle>> = {
+  general_guide: {
+    badge: 'EDITORIAL GUIDE',
+    summaryLabel: 'Overview',
+    bannerClass: 'bg-[#0b0c10] border-l-4 border-zinc-200',
+    accentBorderClass: 'border-zinc-800',
+    accentTextClass: 'text-zinc-800',
+    tintBgClass: 'bg-zinc-50 border-zinc-200',
+  },
+  educational_explainer: {
+    badge: 'STUDY GUIDE',
+    summaryLabel: 'At a Glance',
+    bannerClass: 'bg-[#091214] border-l-4 border-teal-400',
+    accentBorderClass: 'border-teal-700',
+    accentTextClass: 'text-teal-800',
+    tintBgClass: 'bg-teal-50/70 border-teal-200',
+  },
+  creative_editorial: {
+    badge: 'FEATURED ESSAY',
+    summaryLabel: 'Synopsis',
+    bannerClass: 'bg-[#120d0c] border-l-4 border-amber-300',
+    accentBorderClass: 'border-amber-700',
+    accentTextClass: 'text-amber-900',
+    tintBgClass: 'bg-amber-50/70 border-amber-200',
+  },
   technical_report: {
     badge: 'TECHNICAL REPORT',
+    summaryLabel: 'Executive Summary',
     bannerClass: 'bg-[#0b0b0f] border-l-4 border-zinc-200',
     accentBorderClass: 'border-zinc-800',
     accentTextClass: 'text-zinc-800',
@@ -44,6 +70,7 @@ const ARCHETYPE_STYLES: Readonly<Record<ParsedPdfDocumentType, PdfArchetypeStyle
   },
   executive_brief: {
     badge: 'EXECUTIVE BRIEF',
+    summaryLabel: 'Executive Summary',
     bannerClass: 'bg-[#0d0d12] border-l-4 border-zinc-300',
     accentBorderClass: 'border-zinc-800',
     accentTextClass: 'text-zinc-800',
@@ -51,6 +78,7 @@ const ARCHETYPE_STYLES: Readonly<Record<ParsedPdfDocumentType, PdfArchetypeStyle
   },
   proposal: {
     badge: 'PROJECT PROPOSAL',
+    summaryLabel: 'Executive Summary',
     bannerClass: 'bg-[#091210] border-l-4 border-emerald-400',
     accentBorderClass: 'border-emerald-700',
     accentTextClass: 'text-emerald-800',
@@ -58,13 +86,15 @@ const ARCHETYPE_STYLES: Readonly<Record<ParsedPdfDocumentType, PdfArchetypeStyle
   },
   research_paper: {
     badge: 'RESEARCH BRIEF',
+    summaryLabel: 'Abstract',
     bannerClass: 'bg-[#0d0d10] border-l-4 border-zinc-300',
     accentBorderClass: 'border-zinc-700',
     accentTextClass: 'text-zinc-800',
     tintBgClass: 'bg-zinc-50 border-zinc-200',
   },
   playbook: {
-    badge: 'OPERATIONAL PLAYBOOK',
+    badge: 'STEP-BY-STEP PLAYBOOK',
+    summaryLabel: 'Overview',
     bannerClass: 'bg-[#0c0c10] border-l-4 border-zinc-300',
     accentBorderClass: 'border-zinc-800',
     accentTextClass: 'text-zinc-800',
@@ -72,6 +102,7 @@ const ARCHETYPE_STYLES: Readonly<Record<ParsedPdfDocumentType, PdfArchetypeStyle
   },
   resume: {
     badge: 'EXECUTIVE PROFILE',
+    summaryLabel: 'Profile Summary',
     bannerClass: 'bg-[#0b0b0d] border-l-4 border-zinc-300',
     accentBorderClass: 'border-zinc-700',
     accentTextClass: 'text-zinc-800',
@@ -89,7 +120,7 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
     () => parsePdfArtifactDocument(specFile?.content, artifact.title),
     [specFile?.content, artifact.title],
   );
-  const style = ARCHETYPE_STYLES[doc.documentType];
+  const style = ARCHETYPE_STYLES[doc.documentType] ?? ARCHETYPE_STYLES.general_guide;
 
   const [viewMode, setViewMode] = useState<'reader' | 'pages'>('reader');
   const [selectedSectionIdx, setSelectedSectionIdx] = useState<number | null>(null);
@@ -337,7 +368,7 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                         <div
                           className={`text-[9px] font-mono font-bold uppercase tracking-wider mb-1 ${style.accentTextClass}`}
                         >
-                          Executive Summary
+                          {style.summaryLabel}
                         </div>
                         <p className="text-xs text-zinc-800 leading-relaxed">
                           {doc.executiveSummary}
@@ -531,7 +562,7 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                   <div
                     className={`text-[10px] font-mono font-bold uppercase tracking-wider mb-1 ${style.accentTextClass}`}
                   >
-                    Executive Summary
+                    {style.summaryLabel}
                   </div>
                   <p className="text-xs sm:text-sm text-zinc-800 leading-relaxed">
                     {doc.executiveSummary}

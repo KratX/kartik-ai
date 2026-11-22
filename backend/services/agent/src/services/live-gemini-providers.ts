@@ -1082,18 +1082,20 @@ export class LiveGeminiPdfDocumentProvider implements PdfDocumentProvider {
   }): Promise<PdfDocumentGenerationResult> {
     const documentType = classifyPdfDocumentType(input.prompt);
     const todayIso = new Date().toISOString().slice(0, 10);
-    const pdfPrompt = `Generate a publication-grade multi-section PDF document (archetype: ${documentType}) for: "${input.prompt}".
+    const pdfPrompt = `Generate a publication-grade multi-section PDF document (archetype: ${documentType}) strictly about: "${input.prompt}".
+Stay 100% faithful to the topic's natural domain and tone — do NOT inject software engineering, cloud infrastructure, or corporate jargon unless the prompt is actually about technology or business.
+
 Return ONLY a valid JSON object with keys:
-- title (string, concise executive title)
-- subtitle (string, descriptive subtitle)
-- executiveSummary (string, 2-4 crisp sentences summarizing the key findings/recommendations)
-- keyMetrics (array of 3 to 4 quantified KPI objects, each with: label, value, delta)
+- title (string, concise compelling title matching the subject)
+- subtitle (string, descriptive subtitle matching the tone of the topic)
+- executiveSummary (string, 2-4 crisp sentences serving as an overview, synopsis, or abstract of the document)
+- keyMetrics (OPTIONAL array of 3 to 4 quick-fact, date, figure, or KPI objects { label, value, delta } — include ONLY when concrete numbers, dates, or stats genuinely enrich the topic; omit or pass [] for purely narrative/essay topics)
 - sections (array of 4 to 6 objects, each with:
     heading (string),
-    content (rich analytical paragraph string),
-    bullets (array of 3 to 4 concrete actionable bullet strings),
-    callout (optional concise takeaway highlight string on key sections),
-    table (optional structured comparison/milestone/SLA table object with caption, headers (2-4 strings), and rows (3-5 string arrays matching header count) on 1-2 sections where tabular data adds clarity)
+    content (rich, concrete, topic-authentic paragraph string),
+    bullets (array of 3 to 4 sharp, informative bullet strings),
+    callout (optional concise takeaway, quote, or highlight string on key sections),
+    table (OPTIONAL structured table — e.g. comparison, timeline, itinerary, glossary, milestones, or specifications — with caption, headers (2-4 strings), and rows (3-5 string arrays matching header count) on 1-2 sections ONLY where tabular data adds clarity)
   )`;
 
     const ai = await createServerGeminiClient(this.apiKey);
@@ -1170,8 +1172,13 @@ Return ONLY a valid JSON object with keys:
         if (compiled) {
           return compiled;
         }
-      } catch {
-        // Fall back to deterministic offline PDF generator when Gemini is unavailable
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'test') {
+          console.warn(
+            '[kartik-pdf] Live Gemini PDF generation fell back to offline template:',
+            err instanceof Error ? err.message : String(err),
+          );
+        }
       }
     }
 
@@ -1227,18 +1234,19 @@ export class LiveGeminiPptPresentationProvider implements PptPresentationProvide
   }): Promise<PptPresentationGenerationResult> {
     const theme = classifyPptDeckTheme(input.prompt);
     const todayIso = new Date().toISOString().slice(0, 10);
-    const pptPrompt = `Create a keynote-grade 6-content-slide presentation deck (archetype: ${theme}) for: "${input.prompt}".
+    const pptPrompt = `Create a compelling 6-content-slide presentation deck (archetype: ${theme}) strictly about: "${input.prompt}".
+Stay 100% faithful to the subject's real domain, tone, and vocabulary — NEVER inject software architecture, "Legacy vs Modern", SaaS KPIs, or corporate rollout phases unless the user's prompt is actually about technology or business.
+
 Return ONLY a valid JSON object with keys: title, subtitle, slides (array of EXACTLY 6 content slide objects — Cover and Closing slides are added automatically).
 
-Assign these exact layouts across the 6 content slides so the deck has strong visual variety:
-- Slide 1: layout="spotlight" -> MUST include "callout" (a sharp 1-sentence core thesis) AND "bullets" (3 supporting proof points).
-- Slide 2: layout="metrics" -> MUST include "metrics" (array of 4 objects: { "label": "...", "value": "...", "delta": "..." }) AND "bullets" (2 concise synthesis bullets).
-- Slide 3: layout="two_column" -> MUST include "columns" (array of EXACTLY 2 objects: [{ "heading": "Current / Legacy ...", "points": [3 concise bullets] }, { "heading": "Target / Modern ...", "points": [3 concise bullets] }]), "callout" (1 takeaway), AND "bullets" (2 summary bullets).
-- Slide 4: layout="process" -> MUST include "steps" (array of 4 objects: { "step": "01", "title": "...", "detail": "..." }), "callout" (1 outcome), AND "bullets" (2 summary bullets).
-- Slide 5: layout="bullets" -> MUST include "bullets" (4 crisp scannable bullets, max 14 words each) AND "callout" (1 key takeaway).
-- Slide 6: layout="process" -> MUST include "steps" (array of 3 rollout phases: { "step": "01", "title": "...", "detail": "..." }) AND "bullets" (2 summary bullets).
+Choose the most natural sequence of layouts for this specific topic, using at least 4 distinct layouts across the 6 slides from:
+- layout="spotlight": include "callout" (a sharp 1-sentence core thesis, insight, or quote) AND "bullets" (3 supporting points).
+- layout="metrics": include "metrics" (3 to 4 authentic facts, dates, measurements, figures, or KPIs matching the topic: { "label": "...", "value": "...", "delta": "..." }) AND "bullets" (2 concise synthesis bullets).
+- layout="two_column": include "columns" (EXACTLY 2 natural contrasting columns for this topic — e.g., two eras, myths vs reality, two schools of thought, pros vs cons, or two methods: [{ "heading": "...", "points": [3 concise bullets] }, { "heading": "...", "points": [3 concise bullets] }]), optional "callout" (1 takeaway), AND "bullets" (2 summary bullets).
+- layout="process": include "steps" (3 to 4 ordered stages, chronological eras, steps, or milestones fitting the topic: { "step": "01", "title": "...", "detail": "..." }), optional "callout" (1 synthesis takeaway), AND "bullets" (2 summary bullets).
+- layout="bullets": include "bullets" (4 crisp scannable bullets, max 14 words each) AND optional "callout" (1 key takeaway).
 
-Every slide MUST also include: kicker (2-4 words), title, subtitle, and speakerNotes (2-3 presenter sentences).`;
+Every slide MUST also include: kicker (2-4 words), title, subtitle, and speakerNotes (2-3 natural presenter sentences).`;
 
     const ai = await createServerGeminiClient(this.apiKey);
     if (ai) {
@@ -1327,8 +1335,13 @@ Every slide MUST also include: kicker (2-4 words), title, subtitle, and speakerN
         if (compiled) {
           return compiled;
         }
-      } catch {
-        // Fall back to deterministic offline PPTX generator when Gemini is unavailable
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'test') {
+          console.warn(
+            '[kartik-ppt] Live Gemini PPT generation fell back to offline template:',
+            err instanceof Error ? err.message : String(err),
+          );
+        }
       }
     }
 

@@ -430,4 +430,50 @@ describe('@kartik/frontend SlideDeckPreview & MarkdownRenderer Tokenizers (9.4.a
     assert.ok(webHandoff.startsWith('Search the web to verify and cite current sources for:'));
     assert.ok(webHandoff.includes('PostgreSQL 18 MVCC improvements'));
   });
+
+  it('parses domain-universal PDF and PPT archetypes and defaults cleanly away from technical themes', () => {
+    const fallbackPdf = parsePdfArtifactDocument(undefined, 'History of Coffee');
+    assert.equal(fallbackPdf.documentType, 'general_guide');
+
+    const essayPdf = parsePdfArtifactDocument(
+      JSON.stringify({
+        pageCount: 2,
+        spec: {
+          title: 'The Silk Road',
+          subtitle: 'Trade, Ideas & Cultural Exchange',
+          documentType: 'creative_editorial',
+          sections: [
+            { heading: 'Origins', content: 'Caravan routes linked Chang-an to the Mediterranean.', bullets: ['Silk', 'Spices'] },
+          ],
+        },
+      }),
+    );
+    assert.equal(essayPdf.documentType, 'creative_editorial');
+    assert.equal(essayPdf.keyMetrics.length, 0);
+
+    const fallbackDeck = parsePptArtifactSlideDeck(undefined, 'Urban Gardening');
+    assert.equal(fallbackDeck.theme, 'editorial_story');
+
+    const scienceDeck = parsePptArtifactSlideDeck(
+      JSON.stringify({
+        theme: 'educational_explainer',
+        spec: {
+          title: 'How Black Holes Form',
+          subtitle: 'Astrophysics Explainer',
+          theme: 'educational_explainer',
+          slides: [
+            {
+              slideNumber: 1,
+              kind: 'content',
+              layout: 'spotlight',
+              title: 'Gravity at the Extreme',
+              callout: 'When massive stars collapse, spacetime curves beyond escape velocity.',
+              bullets: ['Event horizon', 'Hawking radiation'],
+            },
+          ],
+        },
+      }),
+    );
+    assert.equal(scienceDeck.theme, 'educational_explainer');
+  });
 });

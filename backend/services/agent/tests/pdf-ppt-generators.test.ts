@@ -435,5 +435,88 @@ describe('@kartik/agent — Phase 10 PDF & PPTX Generators & Schemas (Micro-step
     const followUps = buildPptFollowUps(generated.spec, 'pitch deck');
     assert.equal(followUps.length, 3);
   });
+
+  it('Domain-universal PDF & PPT overhaul: classifies non-tech topics away from technical defaults, prevents tech boilerplate leakage, and supports optional PDF keyMetrics', async () => {
+    // 1. PDF classification: non-tech topics never default to technical_report
+    assert.equal(
+      classifyPdfDocumentType('Create a PDF guide on the history of Ancient Rome'),
+      'creative_editorial',
+    );
+    assert.equal(
+      classifyPdfDocumentType('Write a study guide explaining how black holes work in astronomy'),
+      'educational_explainer',
+    );
+    assert.equal(
+      classifyPdfDocumentType('Create a PDF about urban gardening and balcony plants'),
+      'general_guide',
+    );
+    assert.equal(
+      classifyPdfDocumentType('Compile a PDF report on Zero-Trust Service Mesh architecture'),
+      'technical_report',
+    );
+
+    // 2. PPT classification: non-tech topics never default to technical_architecture
+    assert.equal(
+      classifyPptDeckTheme('Create a presentation on Studio Ghibli film animation and storytelling'),
+      'creative_showcase',
+    );
+    assert.equal(
+      classifyPptDeckTheme('Make a slide deck explaining how photosynthesis works in biology'),
+      'educational_explainer',
+    );
+    assert.equal(
+      classifyPptDeckTheme('Create a presentation on urban gardening for beginners'),
+      'editorial_story',
+    );
+    assert.equal(
+      classifyPptDeckTheme('Design a distributed microservices architecture deck'),
+      'technical_architecture',
+    );
+
+    // 3. System instructions explicitly guard against tech jargon on general-domain archetypes
+    const pdfGeneralPrompt = buildPdfSystemInstruction('general_guide', '2026-11-22');
+    assert.ok(pdfGeneralPrompt.includes('NEVER inject software engineering'));
+    const pptStoryPrompt = buildPptSystemInstruction('editorial_story', '2026-11-22');
+    assert.ok(pptStoryPrompt.includes('NEVER inject software engineering'));
+
+    // 4. Non-tech PDF fallback omits keyMetrics on creative_editorial & contains zero infra boilerplate
+    const mockPdf = new MockPdfDocumentProvider();
+    const romePdf = await mockPdf.generatePdfDocument({
+      prompt: 'Create a PDF about the history of Ancient Rome',
+      maxOutputTokens: 4096,
+    });
+    assert.equal(romePdf.spec.documentType, 'creative_editorial');
+    assert.equal(romePdf.spec.keyMetrics, undefined);
+    const romePdfJson = JSON.stringify(romePdf.spec);
+    assert.equal(/Ed25519|Redis|API Gateway|microservices|ACID/i.test(romePdfJson), false);
+    const romePdfAscii = Buffer.from(romePdf.pdfBytes).toString('ascii');
+    assert.ok(romePdfAscii.includes('FEATURED ESSAY & STORY'));
+    assert.ok(romePdfAscii.includes('SYNOPSIS'));
+
+    const romePdfFollowUps = buildPdfFollowUps(romePdf.spec, 'history of Ancient Rome');
+    assert.equal(romePdfFollowUps.length, 3);
+    assert.equal(
+      romePdfFollowUps.some((q) => /technical appendix|90-day rollout/i.test(q)),
+      false,
+    );
+
+    // 5. Non-tech PPT fallback uses editorial_story / creative_showcase with zero infra boilerplate
+    const mockPpt = new MockPptPresentationProvider();
+    const ghibliDeck = await mockPpt.generatePptPresentation({
+      prompt: 'Create a presentation on Studio Ghibli animation',
+      maxOutputTokens: 4096,
+    });
+    assert.equal(ghibliDeck.spec.theme, 'creative_showcase');
+    assert.equal(ghibliDeck.slideCount, 8);
+    const ghibliJson = JSON.stringify(ghibliDeck.spec);
+    assert.equal(/Ed25519|Redis|API Gateway|microservices|SELECT FOR UPDATE|LangGraph/i.test(ghibliJson), false);
+
+    const ghibliFollowUps = buildPptFollowUps(ghibliDeck.spec, 'Studio Ghibli animation');
+    assert.equal(ghibliFollowUps.length, 3);
+    assert.equal(
+      ghibliFollowUps.some((q) => /engineering workshop|ROI KPIs/i.test(q)),
+      false,
+    );
+  });
 });
 

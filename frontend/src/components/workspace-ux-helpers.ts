@@ -546,13 +546,20 @@ export function computeCreditCapacity(
 /* ── Fix #24 Pure Helpers: Scramble Hero, Fluid Streaming Pacing & Thread Artifact Icons ── */
 
 export const HERO_SCRAMBLE_LINES: readonly string[] = Object.freeze([
-  'Unified intelligence that routes every prompt to the right specialist.',
-  'Build live HTML, CSS & JS sandboxes inside a split-screen studio.',
-  'Compile boardroom PDF reports and 16:9 keynote decks in seconds.',
-  'Ground every answer with live web search and verifiable citations.',
-  'Query dense PDFs with hybrid semantic and keyword retrieval.',
-  'Direct bespoke studio artwork and restyle visuals in real time.',
-  'Protected end-to-end by zero-charge idempotent replay and audit ledgers.',
+  'Sharks existed before trees, flowers, and even the rings of Saturn.',
+  'Sloths can hold their breath underwater longer than dolphins — up to 40 minutes.',
+  'Wombats are the only known animals on Earth that produce cube-shaped poop.',
+  'The inventor of the Pringles can had part of his ashes buried inside one.',
+  'Mantis shrimp punch so fast they create tiny underwater flashes of light.',
+  "Scotland's official national animal has been the unicorn since the 1400s.",
+  'One species of jellyfish can reset its own cells and age in reverse.',
+  'Oxford University was teaching students 200 years before the Aztec Empire began.',
+  'A single fluffy cumulus cloud can weigh over a million pounds — roughly 100 elephants.',
+  'Astronauts say outer space smells like seared steak, hot metal, and gunpowder.',
+  'In 1932, Australia fought a real military war against emus — and lost.',
+  'A single teaspoon of a neutron star would weigh roughly as much as Mount Everest.',
+  'Butterflies can still remember things they learned back when they were caterpillars.',
+  'Cows form genuine best friendships and get stressed when separated from them.',
 ]);
 
 const DEFAULT_SCRAMBLE_CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789·/—';

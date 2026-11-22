@@ -54,6 +54,42 @@ interface PptThemePalette {
 }
 
 const PPT_THEME_PALETTES: Readonly<Record<PptDeckTheme, PptThemePalette>> = {
+  editorial_story: {
+    label: 'Editorial Presentation',
+    canvasHex: '0E0F14',
+    surfaceHex: '171922',
+    surfaceAltHex: '202330',
+    borderHex: '32374A',
+    accentHex: 'E2B96F',
+    accentSoftHex: 'F3DBA8',
+    textPrimaryHex: 'F8FAFC',
+    textSecondaryHex: 'E2E8F0',
+    textMutedHex: '94A3B8',
+  },
+  educational_explainer: {
+    label: 'Educational Explainer',
+    canvasHex: '091418',
+    surfaceHex: '112229',
+    surfaceAltHex: '172E38',
+    borderHex: '274854',
+    accentHex: '14B8A6',
+    accentSoftHex: '5EEAD4',
+    textPrimaryHex: 'F8FAFC',
+    textSecondaryHex: 'D5F3F0',
+    textMutedHex: '94A3B8',
+  },
+  creative_showcase: {
+    label: 'Creative & Cultural Showcase',
+    canvasHex: '150F12',
+    surfaceHex: '21181C',
+    surfaceAltHex: '2C2026',
+    borderHex: '47343D',
+    accentHex: 'FB7185',
+    accentSoftHex: 'FDA4AF',
+    textPrimaryHex: 'FDF8F6',
+    textSecondaryHex: 'F1E2E5',
+    textMutedHex: 'B89FA6',
+  },
   pitch_deck: {
     label: 'Investor Pitch Deck',
     canvasHex: '0B1020',
@@ -129,8 +165,9 @@ const PPT_THEME_PALETTES: Readonly<Record<PptDeckTheme, PptThemePalette>> = {
 };
 
 /**
- * Classifies a user prompt into one of 6 presentation archetypes for tailored visual themes
- * and narrative structure.
+ * Classifies a user prompt into one of 9 presentation archetypes so visual themes and
+ * narrative arcs match the actual domain — defaulting to domain-neutral `editorial_story`
+ * instead of forcing `technical_architecture` onto non-technical subjects.
  */
 export function classifyPptDeckTheme(prompt: string): PptDeckTheme {
   const lower = prompt.toLowerCase();
@@ -156,7 +193,7 @@ export function classifyPptDeckTheme(prompt: string): PptDeckTheme {
     return 'executive_briefing';
   }
   if (
-    /\b(workshop|training|tutorial|onboarding|course|lecture|curriculum|bootcamp|handbook|101)\b/.test(
+    /\b(workshop|training|tutorial|onboarding|bootcamp|handbook|hands[\s-]on)\b/.test(
       lower,
     )
   ) {
@@ -169,57 +206,85 @@ export function classifyPptDeckTheme(prompt: string): PptDeckTheme {
   ) {
     return 'case_study';
   }
-  return 'technical_architecture';
+  if (
+    /\b(architecture|microservice|distributed\s+system|system\s+design|kubernetes|docker|cloud\s+infra|devops|api\s+gateway|database|postgresql|redis|backend|frontend|software\s+engineering|cybersecurity|zero[- ]trust|protocol|network\s+stack|ci\/cd|llm\s+pipeline)\b/.test(
+      lower,
+    )
+  ) {
+    return 'technical_architecture';
+  }
+  if (
+    /\b(explain|how\s+.*\s+works|101|course|lecture|curriculum|class|school|science|physics|chemistry|biology|astronomy|space|black\s+hole|climate|psychology|neuroscience|economics|math|geography|ecology|history\s+lesson)\b/.test(
+      lower,
+    )
+  ) {
+    return 'educational_explainer';
+  }
+  if (
+    /\b(art|cinema|film|movie|anime|ghibli|music|jazz|design|fashion|travel|city|food|coffee|cuisine|photography|literature|poetry|mythology|sports|culture|architecture\s+tour|museum|history|ancient|biography|story)\b/.test(
+      lower,
+    )
+  ) {
+    return 'creative_showcase';
+  }
+  return 'editorial_story';
 }
 
 /**
- * Builds a tailored system instruction for Gemini 3.1 Flash-Lite so generated slide decks
- * have strong narrative arcs, real layout variety, crisp scannable copy, and speaker notes.
+ * Builds a tailored system instruction for Gemini so generated slide decks follow an authentic
+ * narrative arc matched to the user's real subject with layout variety, crisp copy, and speaker notes.
  */
 export function buildPptSystemInstruction(
   theme: PptDeckTheme,
   todayIso: string,
 ): string {
   const themeGuides: Record<PptDeckTheme, string> = {
+    editorial_story:
+      'Follow a compelling, domain-authentic narrative arc tailored strictly to the user’s topic (e.g. Hook & Premise -> Essential Context/Key Facts -> Contrasting Perspectives -> Chronology/Journey -> Deeper Insights -> Memorable Takeaway). NEVER inject software engineering, cloud, or corporate buzzwords unless the topic itself is tech or business.',
+    educational_explainer:
+      'Follow an intuitive teaching arc: Big Question & Hook (spotlight) -> Key Numbers, Scale, or Core Facts (metrics) -> Intuitive Mental Model & Mechanics (bullets) -> Common Misconceptions vs Reality or Side-by-Side Comparison (two_column) -> Step-by-Step How It Works or Timeline (process) -> Real-World Impact & Recap.',
+    creative_showcase:
+      'Follow a vivid cultural/creative storytelling arc: Signature Hook & Thesis (spotlight) -> Iconic Milestones, Eras, or Notable Figures (metrics or process) -> Contrasting Styles, Influences, or Themes (two_column) -> Craft, Technique, or Evolution Journey (process) -> Standout Highlights (bullets) -> Lasting Legacy.',
     pitch_deck:
       'Follow a crisp investor narrative: Problem & Market Gap -> Product Solution -> Market Opportunity & Traction (metrics) -> Competitive Differentiation (two_column) -> Go-To-Market & Execution Plan (process) -> Financial Outlook & Ask (spotlight).',
     technical_architecture:
       'Follow a staff-engineer architecture arc: Problem & System Goals -> High-Level Architecture (bullets/spotlight) -> Performance & SLA Benchmarks (metrics) -> Trade-offs & Design Comparison (two_column) -> Request & Deployment Pipeline (process) -> Operational Guardrails & Next Steps.',
     product_launch:
-      'Follow a keynote product launch arc: Customer Pain & Vision -> Introducing the Solution (spotlight) -> Key Capabilities & Impact (metrics) -> Before vs After Workflow (two_column) -> Rollout Timeline (process) -> Adoption & Call to Action.',
+      'Follow a keynote product launch arc: Customer Pain & Vision -> Introducing the Solution (spotlight) -> Key Capabilities & Impact (metrics) -> Before vs After Experience (two_column) -> Rollout Timeline (process) -> Adoption & Call to Action.',
     executive_briefing:
       'Follow a board-ready executive arc: Executive Context -> Headline KPIs & Performance (metrics) -> Strategic Trade-offs & Options (two_column) -> Execution Roadmap (process) -> Risk Controls & Governance -> Strategic Recommendation (spotlight).',
     workshop_training:
-      'Follow a hands-on curriculum arc: Learning Objectives -> Core Mental Model -> Common Pitfalls vs Best Practices (two_column) -> Step-by-Step Lab Workflow (process) -> Benchmark & Mastery Targets (metrics) -> Key Takeaways & Practice Exercises (spotlight).',
+      'Follow a hands-on curriculum arc tailored strictly to the topic being taught: Learning Objectives -> Core Mental Model -> Common Pitfalls vs Best Practices (two_column) -> Step-by-Step Practice Workflow (process) -> Mastery Milestones (metrics) -> Key Takeaways & Practice Exercises (spotlight).',
     case_study:
-      'Follow an evidence-first case study arc: Background & Challenge -> Measured Outcomes (metrics) -> Legacy vs Modern Comparison (two_column) -> Implementation Journey (process) -> Root Insight & Architecture Takeaway (spotlight) -> Lessons Learned.',
+      'Follow an evidence-first case study arc: Background & Challenge -> Measured Outcomes (metrics) -> Before vs After Comparison (two_column) -> Journey & Turning Points (process) -> Root Insight & Takeaway (spotlight) -> Lessons Learned.',
   };
 
   return [
-    `You are Kartik.ai Keynote Presentation Director. Today's UTC date is ${todayIso}.`,
+    `You are Kartik.ai Presentation Director. Today's UTC date is ${todayIso}.`,
     `Presentation archetype: ${PPT_THEME_PALETTES[theme].label} (${theme}).`,
     themeGuides[theme],
     'DESIGN RULES:',
-    '1. Generate exactly 6 content slides (Cover and Closing slides are compiled automatically — do NOT include Cover or Thank You slides in the slides array).',
-    '2. Vary slide layouts across the 6 content slides! Use at least 4 distinct layouts from: "metrics", "two_column", "process", "spotlight", "bullets".',
-    '3. Keep every slide concise and presentation-ready: 3–4 short scannable bullets (max 14 words each), never dense paragraphs.',
-    '4. Whenever layout="metrics", provide 3–4 quantified `metrics` ({ label, value, delta }).',
-    '5. Whenever layout="two_column", provide exactly 2 `columns` ({ heading, points[3] }).',
-    '6. Whenever layout="process", provide 3–4 ordered `steps` ({ step: "01", title, detail }).',
-    '7. Whenever layout="spotlight", provide a punchy `callout` thesis statement plus 3 supporting proof `bullets`.',
-    '8. Include concise, natural presenter `speakerNotes` (2–3 sentences) on EVERY content slide.',
+    '1. Stay 100% faithful to the user’s actual domain — NEVER force tech architecture, SaaS KPIs, or corporate rollout phases onto history, science, art, culture, lifestyle, or educational topics.',
+    '2. Generate exactly 6 content slides (Cover and Closing slides are compiled automatically — do NOT include Cover or Thank You slides in the slides array).',
+    '3. Vary slide layouts naturally across the 6 content slides using at least 4 distinct layouts from: "spotlight", "metrics", "two_column", "process", "bullets".',
+    '4. Keep every slide concise and presentation-ready: 3–4 short scannable bullets (max 14 words each), never dense paragraphs.',
+    '5. When layout="metrics", provide 3–4 topic-authentic stat/fact/date cards ({ label, value, delta }) — e.g. historical dates, scientific measurements, notable counts, or business KPIs depending on the topic.',
+    '6. When layout="two_column", provide exactly 2 natural contrasting columns ({ heading, points[3] }) fitting the topic (e.g. two eras, two schools of thought, myths vs facts, pros vs cons, or two options).',
+    '7. When layout="process", provide 3–4 ordered stages/steps/eras ({ step: "01", title, detail }) fitting the topic (e.g. chronological eras, how-to steps, lifecycle stages, or milestones).',
+    '8. When layout="spotlight", provide a punchy `callout` thesis or quote plus 3 supporting `bullets`.',
+    '9. Include concise, natural presenter `speakerNotes` (2–3 sentences) on EVERY content slide.',
   ].join(' ');
 }
 
 /**
- * Generates 3 contextual presentation follow-up prompts shown as clickable chips under the deck.
+ * Generates 3 contextual, domain-aware presentation follow-up prompts shown as clickable chips under the deck.
  */
 export function buildPptFollowUps(
   spec: PptPresentationSpec,
   originalPrompt: string,
 ): readonly string[] {
   const topic = (spec.title || originalPrompt).trim().slice(0, 56);
-  const theme = spec.theme ?? 'technical_architecture';
+  const theme = spec.theme ?? 'editorial_story';
   if (theme === 'pitch_deck') {
     return Object.freeze([
       `Create a 6-slide investor Q&A appendix deck addressing risks and unit economics for ${topic}`,
@@ -229,15 +294,36 @@ export function buildPptFollowUps(
   }
   if (theme === 'executive_briefing') {
     return Object.freeze([
-      `Create a technical architecture deep-dive presentation supporting ${topic}`,
-      `Build a 6-slide implementation roadmap and team workshop deck for ${topic}`,
-      `Create a customer case study and ROI benchmark deck for ${topic}`,
+      `Build a 6-slide execution roadmap and team workshop deck for ${topic}`,
+      `Create a case study and ROI benchmark deck supporting ${topic}`,
+      `Compile a concise companion executive brief PDF summarizing ${topic}`,
+    ]);
+  }
+  if (theme === 'technical_architecture') {
+    return Object.freeze([
+      `Create an executive briefing deck with ROI KPIs and rollout timeline for ${topic}`,
+      `Build a hands-on engineering workshop presentation teaching ${topic}`,
+      `Create a case study and performance benchmark deck comparing options for ${topic}`,
+    ]);
+  }
+  if (theme === 'educational_explainer' || theme === 'workshop_training') {
+    return Object.freeze([
+      `Create a 6-slide visual deep-dive with real-world examples and quiz questions for ${topic}`,
+      `Compile a matching printable study guide PDF summarizing ${topic}`,
+      `Build a myths-vs-facts comparison presentation exploring ${topic}`,
+    ]);
+  }
+  if (theme === 'creative_showcase') {
+    return Object.freeze([
+      `Create a 6-slide chronological timeline presentation tracing the evolution of ${topic}`,
+      `Build a behind-the-scenes craft and signature influences deck on ${topic}`,
+      `Compile an editorial companion guide PDF expanding on ${topic}`,
     ]);
   }
   return Object.freeze([
-    `Create an executive briefing deck with ROI KPIs and rollout timeline for ${topic}`,
-    `Build a hands-on engineering workshop presentation teaching ${topic}`,
-    `Create a case study and performance benchmark deck comparing options for ${topic}`,
+    `Create a 6-slide deeper comparison deck exploring contrasting perspectives on ${topic}`,
+    `Build a step-by-step visual timeline presentation covering key milestones of ${topic}`,
+    `Compile a structured companion PDF guide expanding on ${topic}`,
   ]);
 }
 
@@ -1140,7 +1226,7 @@ export function buildPptxBinaryBuffer(rawSpec: PptPresentationSpec): {
 } {
   const spec = validatePptPresentationSpec(rawSpec);
   const slides = spec.slides;
-  const palette = PPT_THEME_PALETTES[spec.theme ?? 'technical_architecture'];
+  const palette = PPT_THEME_PALETTES[spec.theme ?? 'editorial_story'];
 
   const slideOverrides = slides
     .map(
@@ -1303,11 +1389,11 @@ export function buildPptxBinaryBuffer(rawSpec: PptPresentationSpec): {
  */
 export function formatPptSummaryMarkdown(spec: PptPresentationSpec): string {
   const themeLabel =
-    PPT_THEME_PALETTES[spec.theme ?? 'technical_architecture'].label;
+    PPT_THEME_PALETTES[spec.theme ?? 'editorial_story'].label;
   const layoutLabels: Record<string, string> = {
-    metrics: 'KPI Grid',
+    metrics: 'Key Facts',
     two_column: 'Comparison',
-    process: 'Process Flow',
+    process: 'Journey',
     spotlight: 'Spotlight',
     bullets: 'Editorial',
   };
@@ -1328,7 +1414,7 @@ export function formatPptSummaryMarkdown(spec: PptPresentationSpec): string {
     `### ${spec.title}`,
     `*${spec.subtitle}*`,
     '',
-    `Compiled a **${spec.slides.length}-slide widescreen (16:9) ${themeLabel}** with custom DrawingML layouts, slide master theme, and embedded speaker notes. Explore it in **Stage** or **Grid** view below, or download the \`.pptx\` deck:`,
+    `Built a **${spec.slides.length}-slide widescreen (16:9) ${themeLabel}** with tailored slide layouts and presenter notes. Explore it in **Stage** or **Grid** view below, or download the \`.pptx\` deck:`,
     '',
     slideLines,
   ].join('\n');
@@ -1336,7 +1422,8 @@ export function formatPptSummaryMarkdown(spec: PptPresentationSpec): string {
 
 /**
  * Deterministic 6-Content-Slide (8-Total) PPT Presentation Provider for offline tests
- * and `MOCK_AI=true` environments — exercises all 5 visual layouts and speaker notes.
+ * and `MOCK_AI=true` environments — adapts cleanly to the classified theme without leaking
+ * software/infrastructure boilerplate into general-domain topics.
  */
 export class MockPptPresentationProvider implements PptPresentationProvider {
   public readonly providerName = 'mock-ppt';
@@ -1348,165 +1435,236 @@ export class MockPptPresentationProvider implements PptPresentationProvider {
     const cleanTopic =
       input.prompt
         .replace(
-          /^(generate|create|write|build|make)\s+(a\s+)?(\d+[- ]slide\s+)?(ppt|pptx|presentation|slide deck|slides|powerpoint)\s*(on|about|for)?\s*/i,
+          /^(generate|create|write|build|make|design|prepare)\s+(a\s+)?(\d+[- ]slide\s+)?(ppt|pptx|presentation|slide deck|slides|powerpoint|deck)\s*(on|about|for)?\s*/i,
           '',
         )
-        .trim() || 'Modern Cloud & Multi-Agent Architecture';
+        .trim() || 'Featured Topic Overview';
 
     const titleTopic =
       cleanTopic.charAt(0).toUpperCase() + cleanTopic.slice(1).slice(0, 75);
     const theme = classifyPptDeckTheme(input.prompt);
     const todayIso = new Date().toISOString().slice(0, 10);
+    const isTechnical = theme === 'technical_architecture';
 
-    const rawSlides = [
-      {
-        layout: 'spotlight' as const,
-        kicker: 'Strategic Context',
-        title: `Why ${titleTopic} Matters Now`,
-        subtitle: 'Core Objectives, System Scope & Value Proposition',
-        callout: `${titleTopic} unifies reliability, sub-second latency, and strict tenant isolation in one composable architecture.`,
-        bullets: [
-          'Eliminates fragmented tooling with a single governed control plane',
-          'Predictable cost envelope enforced by sliding-window quotas',
-          'Designed for zero-downtime horizontal scaling across regions',
-        ],
-        speakerNotes: `Start by anchoring the audience on why ${titleTopic} is a strategic priority this quarter and what measurable outcomes define success.`,
-      },
-      {
-        layout: 'metrics' as const,
-        kicker: 'Target Benchmarks',
-        title: 'Operational KPIs & Performance Targets',
-        subtitle: 'Quantified Latency, Availability & Cost Guardrails',
-        metrics: [
-          { label: 'Availability SLA', value: '99.95%', delta: '+0.45% YoY' },
-          { label: 'P95 API Latency', value: '42 ms', delta: '-38% vs legacy' },
-          { label: 'Tenant Isolation', value: '100%', delta: 'Zero leak tests' },
-          { label: 'Unit Cost / Turn', value: '$0.002', delta: 'Flash-Lite tier' },
-        ],
-        bullets: [
-          'All SLOs verified continuously through automated contract & load suites',
-          'Two-phase credit reservation prevents double-billing across client retries',
-        ],
-        speakerNotes:
-          'Highlight the four headline benchmarks: 99.95% availability, 42ms p95 gateway overhead, zero cross-tenant leakage, and ultra-low unit economics.',
-      },
-      {
-        layout: 'two_column' as const,
-        kicker: 'Architecture Trade-Offs',
-        title: 'Legacy Monolith vs Modular Multi-Agent Core',
-        subtitle: 'Clear Service Ownership & Failure Containment',
-        columns: [
+    const rawSlides = isTechnical
+      ? [
           {
-            heading: 'Legacy Coupled Stack',
-            points: [
-              'Shared database tables with implicit cross-module writes',
-              'Unbounded retries risk duplicate billing and stale reads',
-              'Single slow specialist blocks entire request worker pool',
+            layout: 'spotlight' as const,
+            kicker: 'System Context',
+            title: `Why ${titleTopic} Matters`,
+            subtitle: 'Core Objectives, Scope & Design Drivers',
+            callout: `${titleTopic} aligns reliability, low latency, and clean ownership boundaries in one cohesive architecture.`,
+            bullets: [
+              'Establishes clear contracts across independent components',
+              'Maintains predictable cost and latency budgets under load',
+              'Supports safe, incremental scaling without downtime',
             ],
+            speakerNotes: `Anchor the room on the technical problem ${titleTopic} solves and the measurable engineering goals that matter most.`,
           },
           {
-            heading: 'Target Modular Architecture',
-            points: [
-              'Schema-per-service isolation (auth, chat, agent, billing)',
-              'Client-owned Idempotency-Key replay guarantees zero double-charge',
-              'Independent rate limits & circuit breakers per specialist',
+            layout: 'metrics' as const,
+            kicker: 'Target Benchmarks',
+            title: 'Key Reliability & Latency Targets',
+            subtitle: 'Quantified Service-Level Objectives',
+            metrics: [
+              { label: 'Availability', value: '99.95%', delta: 'Multi-AZ' },
+              { label: 'P95 Latency', value: '42 ms', delta: 'Target budget' },
+              { label: 'Isolation', value: '100%', delta: 'Scoped access' },
+              { label: 'Recovery RTO', value: '< 5 min', delta: 'Automated' },
             ],
-          },
-        ],
-        bullets: [
-          'Decoupled service boundaries reduce blast radius and simplify deployments',
-        ],
-        callout:
-          'Strict ownership boundaries cut mean time to recovery by over 60% during upstream provider incidents.',
-        speakerNotes:
-          'Contrast the left column pain points with the right column guardrails to show why modular service isolation pays off immediately.',
-      },
-      {
-        layout: 'process' as const,
-        kicker: 'Execution Flow',
-        title: 'End-to-End Request Lifecycle',
-        subtitle: 'Four Deterministic Stages From Ingress to Durable Artifact',
-        steps: [
-          {
-            step: '01',
-            title: 'Gateway Verify',
-            detail: 'Validate session, apply sliding-window rate limits, sign Ed25519 user context.',
+            bullets: [
+              'Targets verified continuously with automated contract and load suites',
+              'Explicit retry safety prevents duplicate side effects',
+            ],
+            speakerNotes:
+              'Walk through the four headline engineering SLOs and explain how each is measured in staging and production.',
           },
           {
-            step: '02',
-            title: 'Reserve Credits',
-            detail: 'Lock user balance row via SELECT FOR UPDATE and record pending ledger entry.',
+            layout: 'two_column' as const,
+            kicker: 'Design Trade-Offs',
+            title: 'Coupled Baseline vs Modular Design',
+            subtitle: 'Clear Ownership & Failure Containment',
+            columns: [
+              {
+                heading: 'Coupled Baseline',
+                points: [
+                  'Shared state creates hidden cross-component side effects',
+                  'Single bottleneck stalls unrelated workflows',
+                  'Deployments require broad coordination across teams',
+                ],
+              },
+              {
+                heading: 'Modular Target',
+                points: [
+                  'Explicit contracts isolate each domain responsibility',
+                  'Independent quotas and circuit breakers contain faults',
+                  'Teams ship and roll back incrementally with confidence',
+                ],
+              },
+            ],
+            bullets: ['Clear boundaries lower mean time to recovery during upstream incidents'],
+            callout: 'Well-defined service boundaries cut incident blast radius and speed up iteration.',
+            speakerNotes:
+              'Contrast the coupled baseline on the left with the modular target on the right to clarify the main architectural trade-offs.',
           },
           {
-            step: '03',
-            title: 'Specialist Run',
-            detail: 'LangGraph routes to specialist agent and validates structured JSON output.',
+            layout: 'process' as const,
+            kicker: 'Execution Flow',
+            title: 'End-to-End Request Lifecycle',
+            subtitle: 'Four Core Stages From Ingress to Response',
+            steps: [
+              { step: '01', title: 'Validate', detail: 'Authenticate caller, enforce quotas, and sanitize inputs.' },
+              { step: '02', title: 'Route', detail: 'Dispatch work to the right handler with traced context.' },
+              { step: '03', title: 'Execute', detail: 'Run domain logic with bounded timeouts and schema checks.' },
+              { step: '04', title: 'Persist', detail: 'Commit state atomically and return structured output.' },
+            ],
+            bullets: ['Every stage carries a correlated trace identifier for rapid debugging'],
+            callout: 'Explicit error handling ensures failed operations clean up cleanly without partial state.',
+            speakerNotes:
+              'Trace a single request from left to right across validation, routing, execution, and persistence.',
           },
           {
-            step: '04',
-            title: 'Commit & Serve',
-            detail: 'Persist artifact to private storage, settle credits, and stream signed response.',
-          },
-        ],
-        bullets: [
-          'Every stage carries a correlated ULID traceId and idempotent requestId',
-        ],
-        callout:
-          'Failed specialist turns automatically release reserved credits before returning a structured error envelope.',
-        speakerNotes:
-          'Walk left-to-right through the four execution stages, emphasizing that credit reservation and settlement guarantee financial integrity.',
-      },
-      {
-        layout: 'bullets' as const,
-        kicker: 'Security & Governance',
-        title: 'Defense-in-Depth & Output Validation',
-        subtitle: 'Zero-Trust Controls Across Auth, Storage & AI Outputs',
-        bullets: [
-          'All LLM JSON outputs treated as untrusted input and strictly schema-validated',
-          'Private object storage scoped strictly by authenticated ownerUserId with 300s signed URLs',
-          'CSP-locked iframe sandboxes isolate generated code previews without same-origin access',
-          'Daily provider budget guard falls back cleanly when quotas are exhausted',
-        ],
-        callout:
-          'Security invariants are verified on every build via automated multi-user isolation tests.',
-        speakerNotes:
-          'Reassure security and compliance stakeholders that every trust boundary — identity, storage, AI schemas, and sandboxes — is tested automatically.',
-      },
-      {
-        layout: 'process' as const,
-        kicker: 'Rollout Plan',
-        title: 'Phased Production Rollout & Next Steps',
-        subtitle: 'Low-Risk Path From Staging Verification to General Availability',
-        steps: [
-          {
-            step: '01',
-            title: 'Week 1–2',
-            detail: 'Complete schema migrations, Ed25519 key rotation, and canary gateway smoke tests.',
+            layout: 'bullets' as const,
+            kicker: 'Guardrails',
+            title: 'Security & Quality Controls',
+            subtitle: 'Defense-in-Depth Across Boundaries',
+            bullets: [
+              'Validate every external payload against strict schemas before processing',
+              'Scope all reads and writes to verified caller ownership',
+              'Enforce least-privilege credentials and automated secret scanning',
+              'Gate every release on reproducible contract and failover checks',
+            ],
+            callout: 'Automated verification keeps security invariants intact as the system evolves.',
+            speakerNotes:
+              'Summarize the defense-in-depth controls that protect data integrity and reliability across every layer.',
           },
           {
-            step: '02',
-            title: 'Week 3–4',
-            detail: 'Enable live specialist routing with daily budget caps and observability dashboards.',
+            layout: 'process' as const,
+            kicker: 'Rollout Plan',
+            title: 'Phased Implementation Milestones',
+            subtitle: 'Incremental Delivery With Fast Rollback',
+            steps: [
+              { step: '01', title: 'Phase 1', detail: 'Stand up core contracts, telemetry, and staging smoke tests.' },
+              { step: '02', title: 'Phase 2', detail: 'Shift canary traffic with live latency and error budgets.' },
+              { step: '03', title: 'Phase 3', detail: 'Complete load drills and promote to full production.' },
+            ],
+            bullets: ['Each phase advances only after passing automated verification gates'],
+            callout: 'Canary progression minimizes delivery risk while validating real-world performance.',
+            speakerNotes:
+              'Close with the three phased milestones and exit criteria before opening the floor for technical Q&A.',
+          },
+        ]
+      : [
+          {
+            layout: 'spotlight' as const,
+            kicker: 'Opening Premise',
+            title: `Understanding ${titleTopic}`,
+            subtitle: 'Core Story, Significance & Why It Captivates',
+            callout: `${titleTopic} reveals how foundational ideas, human craft, and evolving context come together to leave a lasting mark.`,
+            bullets: [
+              `Sets the stage for what makes ${titleTopic} distinctive and memorable`,
+              'Connects essential background with real-world relevance today',
+              'Frames the core questions explored across the next five slides',
+            ],
+            speakerNotes: `Open by drawing the audience into why ${titleTopic} is fascinating and preview the story arc you will explore together.`,
           },
           {
-            step: '03',
-            title: 'Week 5–6',
-            detail: 'Run load & failover drills, verify p95 SLAs, and promote to general availability.',
+            layout: 'metrics' as const,
+            kicker: 'At a Glance',
+            title: 'Essential Highlights & Key Facts',
+            subtitle: 'Four Anchor Points That Frame the Subject',
+            metrics: [
+              { label: 'Core Themes', value: '4 Pillars', delta: 'Interconnected' },
+              { label: 'Perspective', value: '360°', delta: 'Context + practice' },
+              { label: 'Evolution', value: 'Multi-Era', delta: 'Shaped over time' },
+              { label: 'Takeaway', value: 'Actionable', delta: 'Memorable insights' },
+            ],
+            bullets: [
+              'Combines big-picture context with specific, concrete details',
+              'Designed for rapid clarity whether you are new or experienced',
+            ],
+            speakerNotes:
+              'Use these four quick-reference highlights to ground the audience before diving into deeper contrasts and progression.',
           },
-        ],
-        bullets: [
-          'Every milestone is gated on zero failing contract or isolation assertions',
-        ],
-        callout:
-          'Target general availability in 6 weeks with instant rollback switches at the API gateway.',
-        speakerNotes:
-          'Close the content section with concrete owners and exit criteria for the 6-week rollout plan before moving to Q&A.',
-      },
-    ];
+          {
+            layout: 'two_column' as const,
+            kicker: 'Key Contrasts',
+            title: 'Two Lenses on the Subject',
+            subtitle: 'Comparing Common Assumptions Against Deeper Reality',
+            columns: [
+              {
+                heading: 'Surface Impressions',
+                points: [
+                  'Often reduced to a single headline or stereotype',
+                  'Overlooks the subtle context behind key turning points',
+                  'Misses how small details drive the bigger outcome',
+                ],
+              },
+              {
+                heading: 'Closer Perspective',
+                points: [
+                  'Reveals rich interplay between craft, timing, and context',
+                  'Connects historical or foundational roots to modern impact',
+                  'Rewards curiosity with nuanced, lasting understanding',
+                ],
+              },
+            ],
+            bullets: ['Looking past first impressions uncovers the most compelling stories'],
+            callout: 'Great understanding comes from comparing contrasting viewpoints side by side.',
+            speakerNotes:
+              'Walk through the contrast between surface assumptions on the left and the deeper reality on the right.',
+          },
+          {
+            layout: 'process' as const,
+            kicker: 'Progression',
+            title: `How ${titleTopic} Unfolds`,
+            subtitle: 'Four Defining Stages From Origins to Impact',
+            steps: [
+              { step: '01', title: 'Origins', detail: 'Early conditions and spark that set the story in motion.' },
+              { step: '02', title: 'Breakthrough', detail: 'Key turning point that transformed reach and recognition.' },
+              { step: '03', title: 'Refinement', detail: 'Maturation of signature elements, craft, and variety.' },
+              { step: '04', title: 'Legacy Today', detail: 'Enduring influence and how it continues to evolve.' },
+            ],
+            bullets: ['Each stage builds directly on the breakthroughs that came before it'],
+            callout: 'Tracing the journey step by step makes complex developments effortless to remember.',
+            speakerNotes:
+              'Guide the audience from left to right across these four defining stages to build a clear mental timeline.',
+          },
+          {
+            layout: 'bullets' as const,
+            kicker: 'Deep Dive',
+            title: 'Defining Elements & Standout Details',
+            subtitle: 'What Sets the Finest Examples Apart',
+            bullets: [
+              `Distinctive signature qualities that immediately define ${titleTopic}`,
+              'Memorable real-world examples illustrating core principles in practice',
+              'Subtle nuances that enthusiasts and experts notice right away',
+              'Enduring lessons that translate well beyond a single context',
+            ],
+            callout: 'Paying attention to concrete examples turns abstract ideas into vivid insight.',
+            speakerNotes:
+              'Share one or two vivid stories or examples here to bring each bullet to life for your audience.',
+          },
+          {
+            layout: 'process' as const,
+            kicker: 'Next Steps',
+            title: 'Key Takeaways & Ways to Explore Further',
+            subtitle: 'Three Practical Ways to Put This Into Perspective',
+            steps: [
+              { step: '01', title: 'Observe', detail: 'Notice the core patterns and details next time you encounter them.' },
+              { step: '02', title: 'Compare', detail: 'Place two contrasting examples side by side to spot key differences.' },
+              { step: '03', title: 'Share', detail: 'Use the core story and facts here to spark deeper discussion.' },
+            ],
+            bullets: ['Curiosity and firsthand exploration turn overview into lasting mastery'],
+            callout: `Keep ${titleTopic} approachable: start with one fascinating detail and follow where it leads.`,
+            speakerNotes:
+              'Wrap up with three simple, memorable takeaways and invite questions or personal stories from the audience.',
+          },
+        ];
 
     const spec = validatePptPresentationSpec({
       title: titleTopic,
-      subtitle: `${PPT_THEME_PALETTES[theme].label} · Executive & Technical Deck`,
+      subtitle: `${PPT_THEME_PALETTES[theme].label} · Structured Visual Deck`,
       theme,
       author: 'Kartik.ai Presentation Engine',
       generatedDate: todayIso,

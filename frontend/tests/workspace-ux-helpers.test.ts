@@ -330,10 +330,11 @@ test('computeCreditCapacity calculates exact per-specialist run capacity from av
   assert.equal(zeroRows.every((r) => r.estimatedRuns === 0), true);
 });
 
-test('HERO_SCRAMBLE_LINES provides 7 curated non-empty lines for Hero MotionScrambleText', () => {
-  assert.equal(HERO_SCRAMBLE_LINES.length, 7);
+test('HERO_SCRAMBLE_LINES provides 14 curated unique obscure fun facts for Hero MotionScrambleText', () => {
+  assert.equal(HERO_SCRAMBLE_LINES.length, 14);
+  assert.equal(new Set(HERO_SCRAMBLE_LINES).size, 14);
   for (const line of HERO_SCRAMBLE_LINES) {
-    assert.ok(line.trim().length > 15);
+    assert.ok(line.trim().length > 20);
   }
 });
 
