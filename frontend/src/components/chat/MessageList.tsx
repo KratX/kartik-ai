@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { motion } from 'motion/react';
 import type {
   ArtifactRecord,
   PlatformMessage,
@@ -11,6 +12,8 @@ export interface MessageListProps {
   readonly messages: readonly PlatformMessage[];
   readonly isLoading: boolean;
   readonly activeAgent?: SpecialistAgentName;
+  readonly activeCanvasArtifactId?: string | null;
+  readonly isCanvasOpen?: boolean;
   readonly onFollowUpSearch?: (
     query: string,
     agent?: SpecialistAgentName,
@@ -20,7 +23,7 @@ export interface MessageListProps {
     target: 'pdf' | 'ppt' | 'search',
     message: PlatformMessage,
   ) => void;
-  readonly onOpenCodeArtifact?: (artifact: ArtifactRecord) => void;
+  readonly onOpenArtifact?: (artifact: ArtifactRecord) => void;
   readonly onOpenLightboxImage?: (image: {
     readonly title: string;
     readonly imageUrl: string;
@@ -32,10 +35,12 @@ export function MessageList({
   messages,
   isLoading,
   activeAgent,
+  activeCanvasArtifactId,
+  isCanvasOpen = false,
   onFollowUpSearch,
   onRegenerate,
   onHandoffToSpecialist,
-  onOpenCodeArtifact,
+  onOpenArtifact,
   onOpenLightboxImage,
 }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -45,18 +50,26 @@ export function MessageList({
   }, [messages.length, isLoading]);
 
   return (
-    <div className="space-y-5">
+    <div className="max-w-3xl mx-auto w-full space-y-7 pb-6">
       {messages.map((msg) => (
-        <MessageBubble
+        <motion.div
           key={msg.messageId}
-          message={msg}
-          isLoading={isLoading}
-          onFollowUpSearch={onFollowUpSearch}
-          onRegenerate={onRegenerate}
-          onHandoffToSpecialist={onHandoffToSpecialist}
-          onOpenCodeArtifact={onOpenCodeArtifact}
-          onOpenLightboxImage={onOpenLightboxImage}
-        />
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+        >
+          <MessageBubble
+            message={msg}
+            isLoading={isLoading}
+            activeCanvasArtifactId={activeCanvasArtifactId}
+            isCanvasOpen={isCanvasOpen}
+            onFollowUpSearch={onFollowUpSearch}
+            onRegenerate={onRegenerate}
+            onHandoffToSpecialist={onHandoffToSpecialist}
+            onOpenArtifact={onOpenArtifact}
+            onOpenLightboxImage={onOpenLightboxImage}
+          />
+        </motion.div>
       ))}
 
       {isLoading && <LoadingAnimation activeAgent={activeAgent} />}

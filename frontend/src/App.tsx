@@ -1,22 +1,18 @@
 /**
  * @file frontend/src/App.tsx
- * @description Kartik.ai 3-Pane Multi-Agent Production Workspace UI (`@kartik/frontend`).
+ * @description Kartik.ai Obsidian & White 3-Pane Multi-Agent Production Workspace (`@kartik/frontend`).
  *
  * Connects exclusively to the API Gateway (`/api/v1/*`) (Blueprint Invariant #1):
- * - Left Pane: `Sidebar` (Conversations, Search Filter, Indexed RAG/Vision Files, Balance & Auth)
- * - Center Pane: `Nav` + `ChatArea` (Quick-Launch Cards, Message Thread, 16:9 Slide Deck Preview,
- *   4-Image Search Lightbox, Grounded Citations, Direct PDF/PPTX/PNG Binary Downloads) + `ChatInput`
- * - Right Pane: Collapsible `ArtifactPanel` (Isolated `<iframe sandbox="allow-scripts">` Live Preview & Multi-File Source Viewer)
- * - Modals/Drawers: `BillingDrawer` (Starter ₹199 / Pro ₹499 Razorpay Checkout + Immutable Ledger)
- *   and `AuthModal` (Google OAuth / HttpOnly Session Cookie).
+ * - Left Pane: Spring-collapsible `Sidebar` (Date-grouped threads, Pin/Rename/Delete, Slim Icon Rail, Mobile Drawer, Thread Files, Balance & Auth)
+ * - Center Pane: Razor-clean `Nav` (Inline title rename, ⌘K trigger, Canvas toggle, Credits, Developer Tools MorphingPopover)
+ *   + `ChatArea` (21st.dev Hero Empty State with BackgroundBeams + SpotlightCard starters, Editorial Borderless Stream, Drag-and-Drop Upload, Lightbox)
+ *   + Floating `BorderBeam` `ChatInput` (Slash `/` Commands, Specialist MorphingPopover, Spring Depth Toggle)
+ * - Right Pane: Auto-opening Universal Split-Screen `ArtifactPanel` (Code Sandbox IDE, Editorial PDF Reader, 16:9 Slide Studio, Artwork Studio + Draggable Resize + Multi-Artifact Switcher)
+ * - Global Overlays: `CommandPalette` (⌘K / Ctrl+K), `BillingDrawer`, `AuthModal`, and Dev-only `StepFileDownloads`.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  AlertTriangle,
-  CheckCircle2,
-  X,
-} from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, CheckCircle2, X } from 'lucide-react';
 import type {
   ApiEnvelope,
   ArtifactRecord,
@@ -33,11 +29,16 @@ import {
   buildChatHandoffPrompt,
   type AgentSelectorPillSpec,
 } from './components/slide-deck-and-markdown.js';
+import {
+  clampCanvasWidthPct,
+  extractThreadArtifacts,
+} from './components/workspace-ux-helpers.js';
 import { ArtifactPanel } from './components/artifacts/ArtifactPanel.js';
 import { AuthModal } from './components/auth/AuthModal.js';
 import { BillingDrawer } from './components/billing/BillingDrawer.js';
 import { ChatArea } from './components/chat/ChatArea.js';
 import { ChatInput } from './components/chat/ChatInput.js';
+import { CommandPalette } from './components/common/CommandPalette.js';
 import { Nav } from './components/layout/Nav.js';
 import { Sidebar } from './components/layout/Sidebar.js';
 import { StepFileDownloads } from './components/common/StepFileDownloads.js';
@@ -47,6 +48,8 @@ function createClientIdempotencyKey(): string {
 }
 
 const GUEST_ID_STORAGE_KEY = 'kartik_ai_guest_workspace_id';
+const SIDEBAR_COLLAPSED_KEY = 'kartik_ai_sidebar_collapsed';
+const CANVAS_WIDTH_PCT_KEY = 'kartik_ai_canvas_width_pct';
 let fallbackMemoryGuestId: string | null = null;
 
 function getOrCreateClientGuestId(): string {
@@ -84,6 +87,88 @@ function getOrCreateClientGuestId(): string {
   return created;
 }
 
+function readStoredBoolean(key: string, fallback: boolean): boolean {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+  } catch {
+    // Ignore storage errors
+  }
+  return fallback;
+}
+
+function readStoredNumber(key: string, fallback: number): number {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw !== null) {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return fallback;
+}
+
+function readWorkspacePrefs(scopeKey: string): {
+  readonly pinnedIds: string[];
+  readonly titleOverrides: Record<string, string>;
+} {
+  try {
+    const raw = window.localStorage.getItem(`kartik_ai_thread_prefs_${scopeKey}`);
+    if (!raw) return { pinnedIds: [], titleOverrides: {} };
+    const parsed = JSON.parse(raw) as {
+      pinnedIds?: unknown;
+      titleOverrides?: unknown;
+    };
+    const pinnedIds = Array.isArray(parsed.pinnedIds)
+      ? parsed.pinnedIds.filter((v): v is string => typeof v === 'string')
+      : [];
+    const titleOverrides: Record<string, string> = {};
+    if (parsed.titleOverrides && typeof parsed.titleOverrides === 'object') {
+      for (const [k, v] of Object.entries(
+        parsed.titleOverrides as Record<string, unknown>,
+      )) {
+        if (typeof v === 'string' && v.trim()) {
+          titleOverrides[k] = v.trim();
+        }
+      }
+    }
+    return { pinnedIds, titleOverrides };
+  } catch {
+    return { pinnedIds: [], titleOverrides: {} };
+  }
+}
+
+function writeWorkspacePrefs(
+  scopeKey: string,
+  pinnedIds: ReadonlySet<string>,
+  titleOverrides: Readonly<Record<string, string>>,
+): void {
+  try {
+    window.localStorage.setItem(
+      `kartik_ai_thread_prefs_${scopeKey}`,
+      JSON.stringify({
+        pinnedIds: Array.from(pinnedIds),
+        titleOverrides,
+      }),
+    );
+  } catch {
+    // Ignore storage quota restrictions
+  }
+}
+
+function deriveConversationTitle(seedPrompt?: string): string {
+  const cleaned = (seedPrompt ?? '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) {
+    return 'New Session';
+  }
+  return cleaned.length > 54 ? `${cleaned.slice(0, 51)}…` : cleaned;
+}
+
 function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers ?? undefined);
   if (!headers.has('X-Kartik-Guest-Id')) {
@@ -97,12 +182,24 @@ function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
 }
 
 export function App() {
-  // Layout & Drawer State
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  // Layout, Sidebar, Canvas & Overlay State
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() =>
+    readStoredBoolean(SIDEBAR_COLLAPSED_KEY, false),
+  );
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isArtifactPanelOpen, setIsArtifactPanelOpen] = useState(false);
+  const [canvasWidthPct, setCanvasWidthPct] = useState<number>(() =>
+    clampCanvasWidthPct(readStoredNumber(CANVAS_WIDTH_PCT_KEY, 48)),
+  );
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isBillingDrawerOpen, setIsBillingDrawerOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isFixDownloadsOpen, setIsFixDownloadsOpen] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState<{
+    readonly title: string;
+    readonly imageUrl: string;
+    readonly sourceUrl?: string;
+  } | null>(null);
 
   // Domain State from `/api/v1/*`
   const [user, setUser] = useState<PlatformUser | null>(null);
@@ -113,14 +210,25 @@ export function App() {
   const [conversations, setConversations] = useState<
     readonly PlatformConversation[]
   >([]);
-  const [activeConversationId, setActiveConversationId] =
-    useState<string>('conv_welcome_01');
+  // Start in Hero Empty State (`null`) so first paint is calm and immediate
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(
+    null,
+  );
   const [messages, setMessages] = useState<readonly PlatformMessage[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<
     readonly UploadedFileRecord[]
   >([]);
 
-  // Turn Composer & Replay State
+  // Local Workspace Organization (Pin + Rename persisted per user/guest scope)
+  const prefsScopeKey = user?.userId ?? getOrCreateClientGuestId();
+  const [pinnedIds, setPinnedIds] = useState<ReadonlySet<string>>(
+    () => new Set(readWorkspacePrefs(prefsScopeKey).pinnedIds),
+  );
+  const [titleOverrides, setTitleOverrides] = useState<
+    Readonly<Record<string, string>>
+  >(() => readWorkspacePrefs(prefsScopeKey).titleOverrides);
+
+  // Turn Composer & Universal Canvas State
   const [selectedAgent, setSelectedAgent] =
     useState<AgentSelectorPillSpec['id']>('chat');
   const [responseDepth, setResponseDepth] =
@@ -128,8 +236,9 @@ export function App() {
   const [attachedTurnFiles, setAttachedTurnFiles] = useState<
     readonly UploadedFileRecord[]
   >([]);
-  const [activeCodeArtifact, setActiveCodeArtifact] =
-    useState<ArtifactRecord | null>(null);
+  const [activeArtifact, setActiveArtifact] = useState<ArtifactRecord | null>(
+    null,
+  );
   const [isTurnLoading, setIsTurnLoading] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
@@ -142,14 +251,107 @@ export function App() {
     readonly attachmentFileIds?: string[];
   } | null>(null);
 
-  const activeConversationIdRef = useRef<string>(activeConversationId);
+  const activeConversationIdRef = useRef<string | null>(activeConversationId);
   const messagesLoadSeqRef = useRef(0);
   const hasBootstrappedRef = useRef(false);
 
-  const setActiveConversationIdSafe = useCallback((convId: string) => {
+  const setActiveConversationIdSafe = useCallback((convId: string | null) => {
     activeConversationIdRef.current = convId;
     setActiveConversationId(convId);
   }, []);
+
+  // Re-sync persisted pins & renames when auth user switches
+  useEffect(() => {
+    const prefs = readWorkspacePrefs(prefsScopeKey);
+    setPinnedIds(new Set(prefs.pinnedIds));
+    setTitleOverrides(prefs.titleOverrides);
+  }, [prefsScopeKey]);
+
+  // Global Cmd+K / Ctrl+K Command Palette Shortcut
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setIsCommandPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const threadArtifacts = useMemo(
+    () => extractThreadArtifacts(messages),
+    [messages],
+  );
+
+  // Keep activeArtifact aligned if thread changes and activeArtifact is null while artifacts exist
+  useEffect(() => {
+    if (threadArtifacts.length === 0) {
+      setActiveArtifact(null);
+      return;
+    }
+    if (
+      !activeArtifact ||
+      !threadArtifacts.some((a) => a.artifactId === activeArtifact.artifactId)
+    ) {
+      setActiveArtifact(threadArtifacts[threadArtifacts.length - 1] ?? null);
+    }
+  }, [threadArtifacts, activeArtifact]);
+
+  const handleToggleSidebar = useCallback(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setIsMobileSidebarOpen((prev) => !prev);
+      return;
+    }
+    setIsSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
+      } catch {
+        // Ignore storage restrictions
+      }
+      return next;
+    });
+  }, []);
+
+  const handleResizeCanvasWidthPct = useCallback((nextPct: number) => {
+    const clamped = clampCanvasWidthPct(nextPct);
+    setCanvasWidthPct(clamped);
+    try {
+      window.localStorage.setItem(CANVAS_WIDTH_PCT_KEY, String(clamped));
+    } catch {
+      // Ignore storage restrictions
+    }
+  }, []);
+
+  const handleTogglePinConversation = useCallback(
+    (conversationId: string) => {
+      setPinnedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(conversationId)) {
+          next.delete(conversationId);
+        } else {
+          next.add(conversationId);
+        }
+        writeWorkspacePrefs(prefsScopeKey, next, titleOverrides);
+        return next;
+      });
+    },
+    [prefsScopeKey, titleOverrides],
+  );
+
+  const handleRenameConversation = useCallback(
+    (conversationId: string, newTitle: string) => {
+      const trimmed = newTitle.trim();
+      if (!trimmed) return;
+      setTitleOverrides((prev) => {
+        const next = { ...prev, [conversationId]: trimmed };
+        writeWorkspacePrefs(prefsScopeKey, pinnedIds, next);
+        return next;
+      });
+    },
+    [prefsScopeKey, pinnedIds],
+  );
 
   const refreshBillingAndAuth = useCallback(async () => {
     try {
@@ -209,11 +411,11 @@ export function App() {
       if (json.ok) {
         const loadedMessages = json.data.messages ?? json.data.items ?? [];
         setMessages(loadedMessages);
-        const latestCodeArt = [...loadedMessages]
-          .reverse()
-          .flatMap((m) => m.artifacts ?? [])
-          .find((a) => a.artifactType === 'code_bundle');
-        setActiveCodeArtifact(latestCodeArt ?? null);
+        const extracted = extractThreadArtifacts(loadedMessages);
+        setActiveArtifact(extracted[extracted.length - 1] ?? null);
+        if (extracted.length === 0) {
+          setIsArtifactPanelOpen(false);
+        }
       }
     } catch {
       // Non-fatal
@@ -223,7 +425,10 @@ export function App() {
   const refreshConversations = useCallback(
     async (
       preferredConvId?: string,
-      options?: { readonly skipMessageReload?: boolean },
+      options?: {
+        readonly skipMessageReload?: boolean;
+        readonly preserveHeroIfUnset?: boolean;
+      },
     ) => {
       try {
         const res = await apiFetch('/api/v1/conversations');
@@ -234,20 +439,32 @@ export function App() {
         if (json.ok) {
           const list = json.data.conversations ?? json.data.items ?? [];
           setConversations(list);
+
           const currentActive = activeConversationIdRef.current;
+          if (!preferredConvId && currentActive === null && options?.preserveHeroIfUnset) {
+            return;
+          }
+
           const targetId =
             (preferredConvId &&
             list.some((c) => c.conversationId === preferredConvId)
               ? preferredConvId
               : undefined) ??
-            (list.some((c) => c.conversationId === currentActive)
+            (currentActive &&
+            list.some((c) => c.conversationId === currentActive)
               ? currentActive
-              : list[0]?.conversationId);
+              : null);
+
           if (targetId) {
             setActiveConversationIdSafe(targetId);
             if (!options?.skipMessageReload) {
               await loadConversationMessages(targetId);
             }
+          } else {
+            setActiveConversationIdSafe(null);
+            setMessages([]);
+            setActiveArtifact(null);
+            setIsArtifactPanelOpen(false);
           }
         }
       } catch {
@@ -263,7 +480,7 @@ export function App() {
     }
     hasBootstrappedRef.current = true;
     void refreshBillingAndAuth();
-    void refreshConversations();
+    void refreshConversations(undefined, { preserveHeroIfUnset: true });
   }, [refreshBillingAndAuth, refreshConversations]);
 
   const handleSelectConversation = async (conversationId: string) => {
@@ -272,35 +489,44 @@ export function App() {
     await loadConversationMessages(conversationId);
   };
 
-  const handleCreateConversation = async () => {
+  // New Chat cleanly resets straight to the calm 21st.dev Hero Empty State
+  const handleCreateConversation = () => {
+    messagesLoadSeqRef.current += 1;
     setErrorBanner(null);
-    try {
-      const res = await apiFetch('/api/v1/conversations', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Idempotency-Key': createClientIdempotencyKey(),
-        },
-        body: JSON.stringify({ title: 'New Multi-Agent Session' }),
-      });
-      const json = (await res.json()) as ApiEnvelope<PlatformConversation>;
-      if (!json.ok) {
-        setErrorBanner(`${json.error.code}: ${json.error.message}`);
-        return;
-      }
-      messagesLoadSeqRef.current += 1;
-      setMessages([]);
-      setActiveCodeArtifact(null);
-      setIsArtifactPanelOpen(false);
-      setActiveConversationIdSafe(json.data.conversationId);
-      await refreshConversations(json.data.conversationId, {
-        skipMessageReload: true,
-      });
-    } catch (err) {
-      setErrorBanner(
-        err instanceof Error ? err.message : 'Failed to create conversation.',
-      );
+    setStatusBanner(null);
+    setActiveConversationIdSafe(null);
+    setMessages([]);
+    setAttachedTurnFiles([]);
+    setActiveArtifact(null);
+    setIsArtifactPanelOpen(false);
+    setSelectedAgent('chat');
+  };
+
+  // Lazily provisions a conversation via POST /api/v1/conversations when starting from Hero Mode
+  const ensureActiveConversationId = async (
+    seedPrompt?: string,
+  ): Promise<string> => {
+    if (activeConversationIdRef.current) {
+      return activeConversationIdRef.current;
     }
+    const res = await apiFetch('/api/v1/conversations', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': createClientIdempotencyKey(),
+      },
+      body: JSON.stringify({ title: deriveConversationTitle(seedPrompt) }),
+    });
+    const json = (await res.json()) as ApiEnvelope<PlatformConversation>;
+    if (!json.ok) {
+      throw new Error(`${json.error.code}: ${json.error.message}`);
+    }
+    setActiveConversationIdSafe(json.data.conversationId);
+    setConversations((prev) => [
+      json.data,
+      ...prev.filter((c) => c.conversationId !== json.data.conversationId),
+    ]);
+    return json.data.conversationId;
   };
 
   const handleDeleteConversation = async (conversationId: string) => {
@@ -327,10 +553,16 @@ export function App() {
         setErrorBanner(`${json.error.code}: ${json.error.message}`);
         return;
       }
+      if (activeConversationIdRef.current === conversationId) {
+        setActiveConversationIdSafe(null);
+        setMessages([]);
+        setActiveArtifact(null);
+        setIsArtifactPanelOpen(false);
+      }
       setStatusBanner(
         `Cascade deleted conversation (${json.data.purgedSummary.purgedVectorChunks} vector chunks & ${json.data.purgedSummary.purgedStorageKeys.length} private objects purged).`,
       );
-      await refreshConversations();
+      await refreshConversations(undefined, { preserveHeroIfUnset: true });
       await refreshBillingAndAuth();
     } catch (err) {
       setErrorBanner(
@@ -341,7 +573,7 @@ export function App() {
 
   // Send or replay a Multi-Agent Turn
   const executeTurnRequest = async (input: {
-    readonly conversationId: string;
+    readonly conversationId?: string | null;
     readonly requestId: string;
     readonly prompt: string;
     readonly preferredAgent?: SpecialistAgentName;
@@ -353,7 +585,9 @@ export function App() {
     setStatusBanner(null);
 
     try {
-      const targetConvId = input.conversationId || 'conv_welcome_01';
+      const targetConvId =
+        input.conversationId || (await ensureActiveConversationId(input.prompt));
+
       const res = await apiFetch(
         `/api/v1/conversations/${encodeURIComponent(targetConvId)}/messages`,
         {
@@ -389,8 +623,12 @@ export function App() {
 
       const resolvedConvId = json.data.conversationId || targetConvId;
       setLastTurnReplayPayload({
-        ...input,
         conversationId: resolvedConvId,
+        requestId: input.requestId,
+        prompt: input.prompt,
+        preferredAgent: input.preferredAgent,
+        responseDepth: input.responseDepth,
+        attachmentFileIds: input.attachmentFileIds,
       });
       setAvailableCredits(json.data.remainingCredits);
       setAttachedTurnFiles([]);
@@ -401,15 +639,14 @@ export function App() {
         );
       }
 
-      const newCodeArtifact = json.data.assistantMessage.artifacts?.find(
-        (a) => a.artifactType === 'code_bundle',
-      );
-      if (newCodeArtifact) {
-        setActiveCodeArtifact(newCodeArtifact);
+      // Auto-open Universal Split-Screen Artifact Canvas for ANY generated artifact
+      const generatedArtifacts = json.data.assistantMessage.artifacts ?? [];
+      const newestArtifact = generatedArtifacts[generatedArtifacts.length - 1];
+      if (newestArtifact) {
+        setActiveArtifact(newestArtifact);
         setIsArtifactPanelOpen(true);
       }
 
-      // Bump load sequence so any stale in-flight GET /messages response cannot clobber this turn
       messagesLoadSeqRef.current += 1;
       setActiveConversationIdSafe(resolvedConvId);
       setMessages((prev) => {
@@ -440,7 +677,7 @@ export function App() {
     preferredAgent?: SpecialistAgentName,
   ) => {
     await executeTurnRequest({
-      conversationId: activeConversationIdRef.current || 'conv_welcome_01',
+      conversationId: activeConversationIdRef.current,
       requestId: createClientIdempotencyKey(),
       prompt,
       preferredAgent,
@@ -461,7 +698,6 @@ export function App() {
     agent: SpecialistAgentName,
   ) => {
     setSelectedAgent(agent);
-    // Keep unified Chat smart hybrid routing active for Chat follow-ups
     await handleSendMessage(prompt, agent === 'chat' ? undefined : agent);
   };
 
@@ -490,7 +726,7 @@ export function App() {
         ? undefined
         : assistantMessage.agentUsed;
     await executeTurnRequest({
-      conversationId: activeConversationIdRef.current || 'conv_welcome_01',
+      conversationId: activeConversationIdRef.current,
       requestId: createClientIdempotencyKey(),
       prompt: pairedUser.content,
       preferredAgent,
@@ -514,7 +750,7 @@ export function App() {
     );
     setSelectedAgent(target);
     await executeTurnRequest({
-      conversationId: activeConversationIdRef.current || 'conv_welcome_01',
+      conversationId: activeConversationIdRef.current,
       requestId: createClientIdempotencyKey(),
       prompt: handoffPrompt,
       preferredAgent: target,
@@ -523,7 +759,7 @@ export function App() {
     });
   };
 
-  // Upload PDF or Image for RAG / Multimodal Vision
+  // Upload PDF or Image for RAG / Multimodal Vision (works from Hero, Dock, or Drag-and-Drop)
   const handleUploadFile = async (file: {
     readonly originalFilename: string;
     readonly declaredMimeType: string;
@@ -532,6 +768,9 @@ export function App() {
     setErrorBanner(null);
 
     try {
+      const targetConvId = await ensureActiveConversationId(
+        `Analyze ${file.originalFilename}`,
+      );
       const res = await apiFetch('/api/v1/files/upload', {
         method: 'POST',
         headers: {
@@ -539,7 +778,7 @@ export function App() {
           'Idempotency-Key': createClientIdempotencyKey(),
         },
         body: JSON.stringify({
-          conversationId: activeConversationIdRef.current || 'conv_welcome_01',
+          conversationId: targetConvId,
           originalFilename: file.originalFilename,
           declaredMimeType: file.declaredMimeType,
           contentBase64: file.contentBase64,
@@ -557,6 +796,14 @@ export function App() {
 
       setAttachedTurnFiles((prev) => [...prev, json.data.file]);
       const uploadedFile = json.data.file;
+      if (uploadedFile.mimeType.startsWith('image/')) {
+        setSelectedAgent('vision');
+      } else if (
+        uploadedFile.mimeType === 'application/pdf' ||
+        uploadedFile.originalFilename.toLowerCase().endsWith('.pdf')
+      ) {
+        setSelectedAgent('rag');
+      }
       setStatusBanner(
         uploadedFile.mimeType.startsWith('image/')
           ? `Attached image "${uploadedFile.originalFilename}" (${Math.max(1, Math.round(uploadedFile.sizeBytes / 1024))} KB) — ready for Vision OCR & multimodal inspection.`
@@ -771,7 +1018,7 @@ export function App() {
     );
     await Promise.all([
       refreshBillingAndAuth(),
-      refreshConversations(`conv_welcome_${normalizedUser.userId}`),
+      refreshConversations(undefined, { preserveHeroIfUnset: true }),
     ]);
   };
 
@@ -785,75 +1032,120 @@ export function App() {
     };
     if (json.ok === true || (res.ok && !json.error)) {
       setUser(null);
-      setActiveCodeArtifact(null);
+      setActiveConversationIdSafe(null);
+      setMessages([]);
+      setActiveArtifact(null);
+      setIsArtifactPanelOpen(false);
       setStatusBanner(
         'Signed out of Google session. Continuing in ready-to-use workspace.',
       );
-      await Promise.all([refreshBillingAndAuth(), refreshConversations()]);
+      await Promise.all([
+        refreshBillingAndAuth(),
+        refreshConversations(undefined, { preserveHeroIfUnset: true }),
+      ]);
     }
   };
 
   const activeConversation = conversations.find(
     (c) => c.conversationId === activeConversationId,
   );
+  const resolvedActiveTitle = activeConversation
+    ? titleOverrides[activeConversation.conversationId]?.trim() ||
+      activeConversation.title
+    : 'Kartik.ai';
+  const isHeroMode =
+    activeConversationId === null && messages.length === 0 && !isTurnLoading;
+
+  const sharedComposerProps = {
+    selectedAgent,
+    onSelectAgent: setSelectedAgent,
+    responseDepth,
+    onSelectResponseDepth: setResponseDepth,
+    attachedFiles: attachedTurnFiles,
+    onRemoveAttachedFile: handleRemoveAttachedFile,
+    onUploadFile: handleUploadFile,
+    onSendMessage: handleSendMessage,
+    isLoading: isTurnLoading,
+    demoReadOnly,
+  };
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex flex-col bg-[#060911] text-slate-100 select-none">
+    <div className="h-screen w-screen overflow-hidden flex flex-col bg-[#09090b] text-zinc-100 select-none">
       {/* Main 3-Pane Workspace Row */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Left Pane: Multi-Agent Sidebar */}
+        {/* Left Pane: Spring-Collapsible Obsidian Sidebar + Slim Rail + Mobile Drawer */}
         <Sidebar
-          isOpen={isSidebarOpen}
+          isCollapsed={isSidebarCollapsed}
+          isMobileOpen={isMobileSidebarOpen}
+          onCloseMobile={() => setIsMobileSidebarOpen(false)}
           conversations={conversations}
           activeConversationId={activeConversationId}
+          pinnedIds={pinnedIds}
+          titleOverrides={titleOverrides}
           uploadedFiles={uploadedFiles}
           user={user}
           availableCredits={availableCredits}
           onSelectConversation={(id) => void handleSelectConversation(id)}
-          onCreateConversation={() => void handleCreateConversation()}
+          onCreateConversation={handleCreateConversation}
           onDeleteConversation={(id) => void handleDeleteConversation(id)}
+          onTogglePinConversation={handleTogglePinConversation}
+          onRenameConversation={handleRenameConversation}
+          onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
           onOpenBilling={() => setIsBillingDrawerOpen(true)}
           onOpenAuthModal={() => setIsAuthModalOpen(true)}
           onLogout={() => void handleLogout()}
         />
 
-        {/* Center Pane: Top Nav + Error/Status Toast + Scrollable Chat Thread + Multi-Agent Composer */}
+        {/* Center Pane: Razor-Clean Nav + Toast + Hero/Editorial Stream + Floating Composer */}
         <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
           <Nav
-            conversationTitle={
-              activeConversation?.title ?? 'Kartik.ai Multi-Agent Workspace'
-            }
+            conversationTitle={resolvedActiveTitle}
+            isHeroMode={isHeroMode}
             availableCredits={availableCredits}
             demoReadOnly={demoReadOnly}
-            hasActiveArtifact={Boolean(activeCodeArtifact)}
-            isArtifactPanelOpen={isArtifactPanelOpen}
+            artifactCount={threadArtifacts.length}
+            isArtifactPanelOpen={isArtifactPanelOpen && Boolean(activeArtifact)}
             canReplayLastTurn={Boolean(lastTurnReplayPayload)}
-            onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+            onToggleSidebar={handleToggleSidebar}
+            onRenameConversation={
+              activeConversationId
+                ? (nextTitle) =>
+                    handleRenameConversation(activeConversationId, nextTitle)
+                : undefined
+            }
+            onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
             onToggleDemoReadOnly={() => void handleToggleDemoReadOnly()}
             onReplayLastTurn={() => void handleReplayLastTurn()}
-            onToggleArtifactPanel={() =>
-              setIsArtifactPanelOpen((prev) => !prev)
-            }
+            onToggleArtifactPanel={() => {
+              if (!activeArtifact && threadArtifacts.length > 0) {
+                setActiveArtifact(
+                  threadArtifacts[threadArtifacts.length - 1] ?? null,
+                );
+                setIsArtifactPanelOpen(true);
+              } else {
+                setIsArtifactPanelOpen((prev) => !prev);
+              }
+            }}
             onOpenBillingDrawer={() => setIsBillingDrawerOpen(true)}
             onOpenFixDownloads={
               import.meta.env.DEV ? () => setIsFixDownloadsOpen(true) : undefined
             }
           />
 
-          {/* Status / Error Banner */}
+          {/* Refined Obsidian Status / Error Banner */}
           {(errorBanner || statusBanner) && (
             <div
               className={`shrink-0 px-4 py-2 border-b flex items-center justify-between gap-3 text-xs ${
                 errorBanner
-                  ? 'bg-rose-950/70 border-rose-500/40 text-rose-200'
-                  : 'bg-emerald-950/60 border-emerald-500/30 text-emerald-200'
+                  ? 'bg-rose-950/50 border-rose-500/30 text-rose-200'
+                  : 'bg-[#111114] border-white/[0.08] text-zinc-200'
               }`}
             >
               <div className="flex items-center gap-2 min-w-0">
                 {errorBanner ? (
-                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                 ) : (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 )}
                 <span className="truncate font-medium">
                   {errorBanner ?? statusBanner}
@@ -861,22 +1153,27 @@ export function App() {
               </div>
               <button
                 type="button"
+                aria-label="Dismiss notification"
                 onClick={() => {
                   setErrorBanner(null);
                   setStatusBanner(null);
                 }}
-                className="p-1 rounded hover:bg-slate-800/60 text-slate-400 hover:text-slate-200 cursor-pointer"
+                className="p-1 rounded hover:bg-white/[0.08] text-zinc-400 hover:text-white cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
 
-          {/* Chat Thread + Composer */}
+          {/* Hero Empty State or Active Editorial Conversation Stream */}
           <ChatArea
             messages={messages}
             isLoading={isTurnLoading}
             activeAgent={selectedAgent}
+            userDisplayName={user?.displayName ?? null}
+            activeCanvasArtifactId={activeArtifact?.artifactId ?? null}
+            isCanvasOpen={isArtifactPanelOpen && Boolean(activeArtifact)}
+            heroComposer={<ChatInput variant="hero" {...sharedComposerProps} />}
             onQuickPromptSelect={(prompt, agent) =>
               void handleQuickPromptSelect(prompt, agent)
             }
@@ -884,39 +1181,73 @@ export function App() {
             onHandoffToSpecialist={(target, msg) =>
               void handleHandoffToSpecialist(target, msg)
             }
-            onOpenCodeArtifact={(artifact) => {
-              setActiveCodeArtifact(artifact);
+            onOpenArtifact={(artifact) => {
+              setActiveArtifact(artifact);
               setIsArtifactPanelOpen(true);
             }}
+            onDropUploadFile={handleUploadFile}
+            lightboxImage={lightboxImage}
+            onOpenLightboxImage={setLightboxImage}
+            onCloseLightboxImage={() => setLightboxImage(null)}
           >
-            <ChatInput
-              selectedAgent={selectedAgent}
-              onSelectAgent={setSelectedAgent}
-              responseDepth={responseDepth}
-              onSelectResponseDepth={setResponseDepth}
-              attachedFiles={attachedTurnFiles}
-              onRemoveAttachedFile={handleRemoveAttachedFile}
-              onUploadFile={handleUploadFile}
-              onSendMessage={handleSendMessage}
-              isLoading={isTurnLoading}
-              demoReadOnly={demoReadOnly}
-            />
+            <ChatInput variant="dock" {...sharedComposerProps} />
           </ChatArea>
         </div>
 
-        {/* Right Pane: Collapsible Code & Sandboxed Live Preview Panel */}
+        {/* Right Pane: Auto-Opening Universal Split-Screen Artifact Canvas */}
         <ArtifactPanel
-          artifact={activeCodeArtifact}
-          isOpen={isArtifactPanelOpen && Boolean(activeCodeArtifact)}
+          artifact={activeArtifact}
+          threadArtifacts={threadArtifacts}
+          isOpen={isArtifactPanelOpen && Boolean(activeArtifact)}
           isTurnLoading={isTurnLoading}
+          widthPct={canvasWidthPct}
+          onResizeWidthPct={handleResizeCanvasWidthPct}
+          onSelectArtifact={(art) => {
+            setActiveArtifact(art);
+            setIsArtifactPanelOpen(true);
+          }}
           onClose={() => setIsArtifactPanelOpen(false)}
           onAskAiToFix={(fixPrompt) =>
             void handleQuickPromptSelect(fixPrompt, 'coding')
           }
+          onOpenLightboxImage={setLightboxImage}
         />
       </div>
 
-      {/* Billing & Credits Drawer (Starter ₹199 / Pro ₹499 + Razorpay Checkout + Ledger) */}
+      {/* Global Cmd+K / Ctrl+K Command Palette */}
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        conversations={conversations}
+        titleOverrides={titleOverrides}
+        selectedAgent={selectedAgent}
+        responseDepth={responseDepth}
+        demoReadOnly={demoReadOnly}
+        canReplayLastTurn={Boolean(lastTurnReplayPayload)}
+        hasArtifacts={threadArtifacts.length > 0}
+        onSelectConversation={(id) => void handleSelectConversation(id)}
+        onCreateConversation={handleCreateConversation}
+        onSelectAgent={setSelectedAgent}
+        onSelectResponseDepth={setResponseDepth}
+        onOpenBilling={() => setIsBillingDrawerOpen(true)}
+        onToggleArtifactCanvas={() => {
+          if (!activeArtifact && threadArtifacts.length > 0) {
+            setActiveArtifact(
+              threadArtifacts[threadArtifacts.length - 1] ?? null,
+            );
+            setIsArtifactPanelOpen(true);
+          } else {
+            setIsArtifactPanelOpen((prev) => !prev);
+          }
+        }}
+        onToggleDemoReadOnly={() => void handleToggleDemoReadOnly()}
+        onReplayLastTurn={() => void handleReplayLastTurn()}
+        onOpenFixDownloads={
+          import.meta.env.DEV ? () => setIsFixDownloadsOpen(true) : undefined
+        }
+      />
+
+      {/* Billing & Credits Drawer */}
       <BillingDrawer
         isOpen={isBillingDrawerOpen}
         onClose={() => setIsBillingDrawerOpen(false)}
@@ -939,31 +1270,32 @@ export function App() {
       {/* Fix & Changed Files Download Modal (Dev-only) */}
       {import.meta.env.DEV && isFixDownloadsOpen && (
         <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/82 backdrop-blur-md flex items-center justify-center p-4"
           onClick={() => setIsFixDownloadsOpen(false)}
         >
           <div
-            className="max-w-4xl w-full max-h-[88vh] flex flex-col bg-[#090d18] border border-slate-700/90 rounded-2xl shadow-2xl overflow-hidden"
+            className="max-w-4xl w-full max-h-[88vh] flex flex-col bg-[#111114] border border-white/[0.12] rounded-2xl shadow-2xl overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/80">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.08] bg-[#0c0c0f]">
               <div>
-                <h2 className="text-sm sm:text-base font-bold text-white">
+                <h2 className="text-sm sm:text-base font-semibold text-white">
                   Updated &amp; Changed Files + Git Commit Messages
                 </h2>
-                <p className="text-xs text-slate-400 font-mono mt-0.5">
+                <p className="text-xs text-zinc-400 font-mono mt-0.5">
                   Download full fix ZIP packages or individual changed files with repo-relative paths
                 </p>
               </div>
               <button
                 type="button"
+                aria-label="Close downloads modal"
                 onClick={() => setIsFixDownloadsOpen(false)}
-                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white cursor-pointer"
+                className="p-1.5 rounded-lg bg-[#18181c] hover:bg-white/[0.12] text-zinc-300 hover:text-white cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-5 overflow-y-auto">
+            <div className="p-5 overflow-y-auto bg-[#09090b]">
               <StepFileDownloads />
             </div>
           </div>

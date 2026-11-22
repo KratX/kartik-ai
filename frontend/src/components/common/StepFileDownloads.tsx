@@ -17,6 +17,164 @@ export interface FixExportPackage {
 
 export const FIX_EXPORT_PACKAGES: readonly FixExportPackage[] = [
   {
+    id: 'fix-23',
+    title: 'Fix #23 — Obsidian & White Credits & Billing Studio Drawer Overhaul (21st.dev BorderBeam Hero & Checkout, SpotlightCard Credit Packs, Searchable Ledger & Specialist Rate Card)',
+    subtitle:
+      '4 files · Full 21st.dev Obsidian & Pure White overhaul of BillingDrawer into a 3-tab Credits & Billing Studio (Overview & Plans, searchable/filterable Ledger with copyable Request IDs, and transparent 8-specialist Rate Card with live run-capacity math), animated BorderBeam Hero Balance Card & Razorpay Checkout Verification card, mouse-tracking SpotlightCard top-up plans with INR-per-credit unit pricing, pure billing helpers, and unit tests',
+    zipFilename: 'fix-23-credits-billing-studio-overhaul.zip',
+    zipHref: '/__downloads/fix-23-credits-billing-studio-overhaul.zip',
+    commitMessage: `feat(frontend,billing): overhaul Credits & Billing drawer into 21st.dev Obsidian Studio with tabbed plans, searchable ledger & rate card
+
+- Add pure credit billing helpers (summarizeCreditLedger, filterCreditLedger, formatPlanUnitPrice, formatPlanDisplayName, computeCreditCapacity) in frontend/src/components/workspace-ux-helpers.ts
+- Redesign BillingDrawer into a 3-tab Obsidian & Pure White 21st.dev Studio with spring layoutId tabs (Overview & Plans, Ledger, Rate Card), BorderBeam Hero Balance Card, animated BorderBeam Razorpay Checkout Verification card, mouse-tracking SpotlightCard credit packs, searchable/filterable Ledger with copyable request IDs, and live per-specialist run capacity Rate Card
+- Add node:test unit coverage for all billing helpers in frontend/tests/workspace-ux-helpers.test.ts and export package entry in StepFileDownloads.tsx`,
+    changedFiles: [
+      {
+        path: 'frontend/src/components/workspace-ux-helpers.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/workspace-ux-helpers.ts',
+      },
+      {
+        path: 'frontend/src/components/billing/BillingDrawer.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/billing/BillingDrawer.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+      {
+        path: 'frontend/tests/workspace-ux-helpers.test.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/tests/workspace-ux-helpers.test.ts',
+      },
+    ],
+  },
+  {
+    id: 'fix-22',
+    title: 'Fix #22 — Obsidian & White Flagship UI/UX Overhaul (21st.dev Craft Edition: BorderBeam, SpotlightCard, BackgroundBeams, TextShimmer, MorphingPopover, Centered Hero, Slash Commands, Universal Split-Screen Artifact Canvas, ⌘K Command Palette & Slim Sidebar Rail)',
+    subtitle:
+      '21 files · Full dark-only Obsidian (#09090b / #111114 / #18181c) & Pure White (#fafafa) aesthetic with native motion/react v12 21st.dev primitives (BorderBeam, mouse-tracking SpotlightCard, BackgroundBeams + radial micro-dot field, metallic TextShimmer thinking rows, spring MorphingPopover menus, and layoutId spring tab indicators), centered Hero empty state on initial load with 6 SpotlightCard quick-starters, unified floating BorderBeam composer with / slash command autocomplete, compact Specialist Mode popover, spring Concise/Balanced/Deep switcher & full-canvas drag-and-drop uploads, borderless editorial chat stream with inline SpotlightCard artifact launchers, auto-opening Universal Split-Screen Artifact Canvas supporting Code/PDF/PPT/Image with draggable resize handle & multi-artifact thread switcher, razor-clean Nav with inline title rename & Developer Tools popover, global ⌘K Command Palette, spring collapsible Sidebar rail (268px ↔ 64px) + mobile drawer + date-grouped threads with Pin/Rename persistence, Vite React/motion dedupe & optimizeDeps pre-bundling, plus Fix #22 unit tests',
+    zipFilename: 'fix-22-obsidian-white-21st-dev-ui-ux-overhaul.zip',
+    zipHref: '/__downloads/fix-22-obsidian-white-21st-dev-ui-ux-overhaul.zip',
+    commitMessage: `feat(frontend,ui): overhaul workspace to Obsidian & White 21st.dev design with Universal Artifact Canvas, ⌘K palette, slash commands & collapsible sidebar rail
+
+- Add Obsidian & Pure White design tokens and GPU-composited 21st.dev keyframes in src/index.css
+- Add native motion/react v12 primitives (BorderBeam, SpotlightCard, BackgroundBeams, TextShimmer, MorphingPopover, ObsidianBrandMark) in frontend/src/components/motion/primitives.tsx
+- Add pure workspace UX helpers (slash commands, date-bucket conversation grouping, universal thread artifact extraction, artifact summaries, Cmd+K fuzzy filter, resize clamping, hero greeting) in frontend/src/components/workspace-ux-helpers.ts with node:test unit tests
+- Add centered 21st.dev Hero Empty State, full-canvas drag-and-drop file upload overlay, floating BorderBeam composer with / slash menu & specialist popover, editorial borderless chat stream with inline SpotlightCard artifact launchers, and Obsidian Markdown styling
+- Upgrade ArtifactPanel into an auto-opening Universal Split-Screen Artifact Canvas supporting Code, PDF, PPT, and Image artifacts with draggable horizontal resize handle and spring multi-artifact switcher
+- Add global Cmd+K / Ctrl+K CommandPalette, razor-clean Nav with inline title editing and Developer Tools MorphingPopover, spring-collapsible desktop Sidebar rail (268px <-> 64px) + mobile slide-over drawer + Pin/Rename persistence, cohesive Obsidian BillingDrawer & AuthModal, and Vite React/motion dedupe & optimizeDeps pre-bundling`,
+    changedFiles: [
+      {
+        path: 'vite.config.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=vite.config.ts',
+      },
+      {
+        path: 'frontend/vite.config.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/vite.config.ts',
+      },
+      {
+        path: 'src/index.css',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=src/index.css',
+      },
+      {
+        path: 'frontend/src/index.ts',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/index.ts',
+      },
+      {
+        path: 'frontend/src/components/workspace-ux-helpers.ts',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=frontend/src/components/workspace-ux-helpers.ts',
+      },
+      {
+        path: 'frontend/src/components/motion/primitives.tsx',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=frontend/src/components/motion/primitives.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/LoadingAnimation.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/LoadingAnimation.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/CommandPalette.tsx',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/CommandPalette.tsx',
+      },
+      {
+        path: 'frontend/src/components/layout/Nav.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/layout/Nav.tsx',
+      },
+      {
+        path: 'frontend/src/components/layout/Sidebar.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/layout/Sidebar.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/ChatInput.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ChatInput.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MarkdownRenderer.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MarkdownRenderer.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageBubble.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageBubble.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/MessageList.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/MessageList.tsx',
+      },
+      {
+        path: 'frontend/src/components/chat/ChatArea.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/chat/ChatArea.tsx',
+      },
+      {
+        path: 'frontend/src/components/artifacts/ArtifactPanel.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/artifacts/ArtifactPanel.tsx',
+      },
+      {
+        path: 'frontend/src/components/billing/BillingDrawer.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/billing/BillingDrawer.tsx',
+      },
+      {
+        path: 'frontend/src/components/auth/AuthModal.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/auth/AuthModal.tsx',
+      },
+      {
+        path: 'frontend/src/App.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/App.tsx',
+      },
+      {
+        path: 'frontend/src/components/common/StepFileDownloads.tsx',
+        status: 'modified',
+        downloadHref: '/__downloads/file?path=frontend/src/components/common/StepFileDownloads.tsx',
+      },
+      {
+        path: 'frontend/tests/workspace-ux-helpers.test.ts',
+        status: 'added',
+        downloadHref: '/__downloads/file?path=frontend/tests/workspace-ux-helpers.test.ts',
+      },
+    ],
+  },
+  {
     id: 'fix-21',
     title: 'Fix #21 — Unified Flagship Chat Orchestrator Overhaul (Auto Router Merged Into Chat, 5-Mode Adaptive Reasoning, Depth Control, Sliding-Window Memory, Handoffs & Upgraded Code Blocks)',
     subtitle:

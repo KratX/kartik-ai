@@ -50,10 +50,20 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     define: loadOptionalFirebaseAppletEnv(),
     resolve: {
+      dedupe: ['react', 'react-dom'],
       alias: {
         '@': path.resolve(currentDir, '.'),
         '@kartik/shared': path.resolve(currentDir, './backend/shared'),
       },
+    },
+    optimizeDeps: {
+      include: [
+        'react',
+        'react-dom',
+        'react-dom/client',
+        'motion/react',
+        'lucide-react',
+      ],
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

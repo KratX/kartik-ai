@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowUpRight,
-  Bot,
   Check,
   ChevronDown,
   ChevronUp,
@@ -12,13 +11,14 @@ import {
   Globe,
   Image as ImageIcon,
   Maximize2,
+  PanelRightOpen,
   Paperclip,
   Presentation,
   RotateCcw,
   ShieldCheck,
-  User,
 } from 'lucide-react';
 import {
+  buildArtifactRawDownloadUrl,
   buildUploadedFileRawUrl,
   formatChatModeAndDepthMeta,
   formatCitationRelevancePercent,
@@ -26,6 +26,7 @@ import {
   formatRoutingAttribution,
   summarizeDocumentCitations,
 } from '../slide-deck-and-markdown.js';
+import { formatArtifactMetaSummary } from '../workspace-ux-helpers.js';
 import type {
   ArtifactRecord,
   MessageCitation,
@@ -33,9 +34,7 @@ import type {
   SearchImageGalleryItem,
 } from '../../types/index.js';
 import { MarkdownRenderer } from './MarkdownRenderer.js';
-import { ImageArtifactCard } from './ImageArtifactCard.js';
-import { PdfDocumentPreview } from './PdfDocumentPreview.js';
-import { SlideDeckPreview } from './SlideDeckPreview.js';
+import { ObsidianBrandMark, SpotlightCard } from '../motion/primitives.js';
 
 function resolveCitationDomain(citation: MessageCitation): string {
   if (citation.domain && citation.domain.trim()) {
@@ -60,7 +59,6 @@ function getDistinctCitationSnippet(citation: MessageCitation): string | null {
       .trim();
   const normTitle = normalize(citation.title);
   const normSnippet = normalize(snippet);
-  // Skip snippets that merely echo "Publisher · Date: Headline" when title + meta already display both
   const headlinePrefix = normTitle.slice(0, Math.min(48, normTitle.length));
   if (
     headlinePrefix.length >= 16 &&
@@ -72,9 +70,24 @@ function getDistinctCitationSnippet(citation: MessageCitation): string | null {
   return snippet;
 }
 
+function getArtifactIcon(artifactType: ArtifactRecord['artifactType']) {
+  switch (artifactType) {
+    case 'code_bundle':
+      return <Code2 className="w-4 h-4" />;
+    case 'pdf_document':
+      return <FileText className="w-4 h-4" />;
+    case 'ppt_presentation':
+      return <Presentation className="w-4 h-4" />;
+    case 'generated_image':
+      return <ImageIcon className="w-4 h-4" />;
+  }
+}
+
 export interface MessageBubbleProps {
   readonly message: PlatformMessage;
   readonly isLoading?: boolean;
+  readonly activeCanvasArtifactId?: string | null;
+  readonly isCanvasOpen?: boolean;
   readonly onFollowUpSearch?: (
     query: string,
     agent?: PlatformMessage['agentUsed'],
@@ -84,7 +97,7 @@ export interface MessageBubbleProps {
     target: 'pdf' | 'ppt' | 'search',
     message: PlatformMessage,
   ) => void;
-  readonly onOpenCodeArtifact?: (artifact: ArtifactRecord) => void;
+  readonly onOpenArtifact?: (artifact: ArtifactRecord) => void;
   readonly onOpenLightboxImage?: (image: {
     readonly title: string;
     readonly imageUrl: string;
@@ -95,14 +108,18 @@ export interface MessageBubbleProps {
 export function MessageBubble({
   message,
   isLoading = false,
+  activeCanvasArtifactId,
+  isCanvasOpen = false,
   onFollowUpSearch,
   onRegenerate,
   onHandoffToSpecialist,
-  onOpenCodeArtifact,
+  onOpenArtifact,
   onOpenLightboxImage,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user';
-  const isWelcomeGreeting = message.messageId.startsWith('msg_welcome_assistant_');
+  const isWelcomeGreeting = message.messageId.startsWith(
+    'msg_welcome_assistant_',
+  );
   const [failedImageIds, setFailedImageIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -119,19 +136,16 @@ export function MessageBubble({
   const citationCardRefs = useRef<Record<number, HTMLElement | null>>({});
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const markdownCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markdownCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   useEffect(() => {
     return () => {
-      if (highlightTimerRef.current) {
-        clearTimeout(highlightTimerRef.current);
-      }
-      if (copyTimerRef.current) {
-        clearTimeout(copyTimerRef.current);
-      }
-      if (markdownCopyTimerRef.current) {
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      if (markdownCopyTimerRef.current)
         clearTimeout(markdownCopyTimerRef.current);
-      }
     };
   }, []);
 
@@ -147,22 +161,18 @@ export function MessageBubble({
       return next;
     });
     setHighlightedCitationIdx(citationIndex);
-    if (highlightTimerRef.current) {
-      clearTimeout(highlightTimerRef.current);
-    }
-    highlightTimerRef.current = setTimeout(() => {
-      setHighlightedCitationIdx(null);
-    }, 1800);
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(
+      () => setHighlightedCitationIdx(null),
+      1800,
+    );
   };
 
   const toggleDocCitationExpanded = (citationIndex: number) => {
     setExpandedDocCitations((prev) => {
       const next = new Set(prev);
-      if (next.has(citationIndex)) {
-        next.delete(citationIndex);
-      } else {
-        next.add(citationIndex);
-      }
+      if (next.has(citationIndex)) next.delete(citationIndex);
+      else next.add(citationIndex);
       return next;
     });
   };
@@ -175,33 +185,24 @@ export function MessageBubble({
       ? `"${citation.snippet.trim()}" — ${citation.title} (${citation.urlOrPage})`
       : `${citation.title} (${citation.urlOrPage})`;
     const clip = navigator.clipboard?.writeText(quoteBody);
-    if (clip && typeof clip.catch === 'function') {
-      clip.catch(() => {});
-    }
+    if (clip && typeof clip.catch === 'function') clip.catch(() => {});
     setCopiedCitationIdx(citationIndex);
-    if (copyTimerRef.current) {
-      clearTimeout(copyTimerRef.current);
-    }
-    copyTimerRef.current = setTimeout(() => {
-      setCopiedCitationIdx(null);
-    }, 1600);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopiedCitationIdx(null), 1600);
   };
 
   const handleCopyMarkdown = () => {
     const clip = navigator.clipboard?.writeText(message.content);
-    if (clip && typeof clip.catch === 'function') {
-      clip.catch(() => {});
-    }
+    if (clip && typeof clip.catch === 'function') clip.catch(() => {});
     setCopiedMarkdown(true);
-    if (markdownCopyTimerRef.current) {
+    if (markdownCopyTimerRef.current)
       clearTimeout(markdownCopyTimerRef.current);
-    }
-    markdownCopyTimerRef.current = setTimeout(() => {
-      setCopiedMarkdown(false);
-    }, 1600);
+    markdownCopyTimerRef.current = setTimeout(
+      () => setCopiedMarkdown(false),
+      1600,
+    );
   };
 
-  // Real HTTPS image thumbnails only — prune broken images cleanly; hide strip if empty.
   const validSearchImages = (message.searchImages ?? [])
     .filter(
       (img) =>
@@ -231,193 +232,164 @@ export function MessageBubble({
       ? formatChatModeAndDepthMeta(message.chatMode, message.responseDepth)
       : null;
 
-  return (
-    <div
-      data-message-role={message.role}
-      data-agent-used={message.agentUsed ?? ''}
-      className={`flex items-start gap-3.5 ${
-        isUser ? 'flex-row-reverse' : 'flex-row'
-      }`}
-    >
-      {/* Avatar */}
+  /* ── USER PROMPT (Compact Right-Aligned Obsidian Block) ── */
+  if (isUser) {
+    const attachedImages = (message.attachedFiles ?? []).filter((f) =>
+      f.mimeType.startsWith('image/'),
+    );
+    const attachedDocs = (message.attachedFiles ?? []).filter(
+      (f) => !f.mimeType.startsWith('image/'),
+    );
+
+    return (
       <div
-        className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 border ${
-          isUser
-            ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
-            : 'bg-sky-500/15 border-sky-500/30 text-sky-400'
-        }`}
+        data-message-role="user"
+        className="flex justify-end"
       >
-        {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
-      </div>
-
-      {/* Bubble Body */}
-      <div
-        className={`max-w-3xl w-full rounded-xl px-5 py-4 border ${
-          isUser
-            ? 'bg-slate-900/90 border-slate-800 text-slate-100 sm:ml-12'
-            : 'bg-[#0c1222] border-slate-800/90 text-slate-100 sm:mr-8'
-        }`}
-      >
-        {/* Top Metadata Strip */}
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5 pb-2 border-b border-slate-800/70">
-          <div className="flex flex-wrap items-center gap-2 min-w-0">
-            <span className="text-xs font-semibold text-slate-200">
-              {isUser ? 'You' : 'Kartik.ai'}
-            </span>
-            {!isUser && message.agentUsed && (
-              <span className="text-[11px] font-mono uppercase tracking-wider text-sky-300 font-semibold">
-                {message.agentUsed === 'chat'
-                  ? 'CHAT'
-                  : `${message.agentUsed.toUpperCase()} AGENT`}
-              </span>
-            )}
-            {routingAttribution && (
-              <span
-                data-routing-attribution="true"
-                className="text-[11px] text-slate-400 font-normal truncate"
-              >
-                · {routingAttribution}
-              </span>
-            )}
-            {!routingAttribution && chatModeMeta && (
-              <span
-                data-chat-mode-meta="true"
-                className="text-[11px] text-slate-400 font-normal truncate"
-              >
-                · {chatModeMeta}
-              </span>
-            )}
-            {message.idempotentReplay && (
-              <span className="inline-flex items-center gap-1 text-[10px] font-mono font-semibold text-emerald-300">
-                <ShieldCheck className="w-3 h-3" />
-                IDEMPOTENT REPLAY · 0 CR
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 shrink-0">
-            {!isUser &&
-              typeof message.creditsCharged === 'number' &&
-              !message.idempotentReplay && (
-                <span className="text-amber-300/90 tabular-nums">
-                  -{message.creditsCharged} cr
-                </span>
-              )}
-            {message.requestId && (
-              <span title="Client-owned Idempotency-Key (requestId)">
-                {message.requestId.slice(0, 18)}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Attached Files on User Message (Real Clickable Image Previews + PDF Chips) */}
-        {message.attachedFiles && message.attachedFiles.length > 0 && (() => {
-          const attachedImages = message.attachedFiles.filter((f) =>
-            f.mimeType.startsWith('image/'),
-          );
-          const attachedDocs = message.attachedFiles.filter(
-            (f) => !f.mimeType.startsWith('image/'),
-          );
-          return (
-            <div className="mb-3 space-y-2.5">
-              {attachedImages.length > 0 && (
-                <div className="flex flex-wrap gap-2.5">
-                  {attachedImages.map((file) => {
-                    const imageUrl = buildUploadedFileRawUrl(file.fileId);
-                    return (
-                      <div
-                        key={file.fileId}
-                        data-uploaded-image-preview="true"
-                        className="group overflow-hidden rounded-lg bg-slate-950 border border-slate-700/90 hover:border-sky-500/60 transition-colors max-w-sm w-full sm:w-auto"
-                      >
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onOpenLightboxImage?.({
-                              title: file.originalFilename,
-                              imageUrl,
-                            })
-                          }
-                          aria-label={`Inspect ${file.originalFilename} fullscreen`}
-                          className="block w-full bg-slate-950/90 cursor-pointer text-left"
-                        >
-                          <div className="flex items-center justify-center p-2 border-b border-slate-800/80 bg-slate-950">
-                            <img
-                              src={imageUrl}
-                              alt={file.originalFilename}
-                              loading="lazy"
-                              className="max-h-52 w-auto max-w-full rounded object-contain group-hover:scale-[1.01] transition-transform"
-                            />
-                          </div>
-                          <div className="flex items-center justify-between gap-3 px-3 py-2 bg-slate-900/95">
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5 text-xs font-medium text-slate-100">
-                                <ImageIcon className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                                <span className="truncate">{file.originalFilename}</span>
-                              </div>
-                              <div className="text-[10px] font-mono tabular-nums text-slate-400 mt-0.5">
-                                {formatImageFileBadge(file.mimeType, file.sizeBytes)}
-                              </div>
-                            </div>
-                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-400 group-hover:text-sky-300 shrink-0">
-                              <Maximize2 className="w-3.5 h-3.5" />
-                              <span>Inspect</span>
-                            </span>
-                          </div>
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {attachedDocs.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {attachedDocs.map((file) => (
-                    <div
-                      key={file.fileId}
-                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 text-xs text-slate-200"
-                    >
-                      <Paperclip className="w-3.5 h-3.5 text-sky-400" />
-                      <span className="font-medium">{file.originalFilename}</span>
-                      <span className="text-[11px] font-mono tabular-nums text-slate-400">
-                        ({Math.max(1, Math.round(file.sizeBytes / 1024))} KB
-                        {file.pageCount ? ` · ${file.pageCount}p` : ''})
+        <div className="max-w-[85%] sm:max-w-[78%] space-y-2">
+          {attachedImages.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-2">
+              {attachedImages.map((file) => {
+                const imageUrl = buildUploadedFileRawUrl(file.fileId);
+                return (
+                  <button
+                    key={file.fileId}
+                    type="button"
+                    data-uploaded-image-preview="true"
+                    onClick={() =>
+                      onOpenLightboxImage?.({
+                        title: file.originalFilename,
+                        imageUrl,
+                      })
+                    }
+                    className="group overflow-hidden rounded-xl bg-[#111114] border border-white/[0.1] hover:border-white/25 transition-colors text-left cursor-pointer max-w-xs"
+                  >
+                    <div className="p-1.5 bg-[#09090b] flex items-center justify-center">
+                      <img
+                        src={imageUrl}
+                        alt={file.originalFilename}
+                        loading="lazy"
+                        className="max-h-44 w-auto rounded-lg object-contain group-hover:scale-[1.01] transition-transform"
+                      />
+                    </div>
+                    <div className="px-2.5 py-1.5 flex items-center justify-between gap-2 text-[11px]">
+                      <span className="text-zinc-200 truncate font-medium">
+                        {file.originalFilename}
+                      </span>
+                      <span className="font-mono text-[10px] text-zinc-500 shrink-0">
+                        {formatImageFileBadge(file.mimeType, file.sizeBytes)}
                       </span>
                     </div>
-                  ))}
-                </div>
-              )}
+                  </button>
+                );
+              })}
             </div>
-          );
-        })()}
+          )}
 
-        {/* Markdown Message Content with Clickable Inline Citation Badges */}
+          {attachedDocs.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-1.5">
+              {attachedDocs.map((file) => (
+                <div
+                  key={file.fileId}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#16161b] border border-white/[0.1] text-xs text-zinc-200"
+                >
+                  <Paperclip className="w-3 h-3 text-zinc-400" />
+                  <span className="font-medium">{file.originalFilename}</span>
+                  <span className="text-[10px] font-mono tabular-nums text-zinc-500">
+                    {Math.max(1, Math.round(file.sizeBytes / 1024))} KB
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="rounded-2xl rounded-tr-md px-4 py-3 bg-[#18181c] border border-white/[0.09] text-[14.5px] text-zinc-100 leading-relaxed whitespace-pre-wrap break-words">
+            {message.content}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── ASSISTANT REPLY (Borderless Editorial Reading Flow) ── */
+  return (
+    <article
+      data-message-role="assistant"
+      data-agent-used={message.agentUsed ?? ''}
+      className="py-2 space-y-3.5"
+    >
+      {/* Quiet Inline Editorial Attribution Header */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
+          <ObsidianBrandMark size="sm" />
+          <span className="text-xs font-semibold text-white">Kartik.ai</span>
+
+          {message.agentUsed && (
+            <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-400">
+              {message.agentUsed === 'chat'
+                ? 'Chat'
+                : `${message.agentUsed} agent`}
+            </span>
+          )}
+
+          {routingAttribution && (
+            <span
+              data-routing-attribution="true"
+              className="text-[11px] text-zinc-400 truncate"
+            >
+              · {routingAttribution}
+            </span>
+          )}
+
+          {!routingAttribution && chatModeMeta && (
+            <span
+              data-chat-mode-meta="true"
+              className="text-[11px] text-zinc-400 truncate"
+            >
+              · {chatModeMeta}
+            </span>
+          )}
+
+          {message.idempotentReplay && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-mono text-emerald-400">
+              · <ShieldCheck className="w-3 h-3" /> 0 cr replay
+            </span>
+          )}
+        </div>
+
+        {typeof message.creditsCharged === 'number' &&
+          !message.idempotentReplay && (
+            <span className="text-[11px] font-mono tabular-nums text-zinc-500 shrink-0">
+              -{message.creditsCharged} cr
+            </span>
+          )}
+      </div>
+
+      {/* Main Editorial Markdown Prose */}
+      <div className="pl-0 sm:pl-9 space-y-4">
         <MarkdownRenderer
           content={
-            !isUser &&
             message.agentUsed === 'image' &&
             message.artifacts?.some(
               (a) =>
                 a.artifactType === 'generated_image' &&
                 a.filesManifest?.some((f) => f.path === 'image-spec.json'),
             )
-              ? message.content.replace(/\n*\*\*Enhanced Prompt:\*\*[\s\S]*$/i, '').trim()
+              ? message.content
+                  .replace(/\n*\*\*Enhanced Prompt:\*\*[\s\S]*$/i, '')
+                  .trim()
               : message.content
           }
           citations={citations}
           onCitationClick={handleCitationClick}
         />
 
-        {/* Real Visual References Gallery (Hidden cleanly when none exist or load) */}
+        {/* Visual References Strip (Web Search Images) */}
         {validSearchImages.length > 0 && (
-          <div className="mt-4 pt-3 border-t border-slate-800/80">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Visual References
-              </span>
-              <span className="text-[11px] font-mono tabular-nums text-slate-500">
+          <div className="pt-2 space-y-2">
+            <div className="flex items-center justify-between text-xs text-zinc-500">
+              <span className="font-medium text-zinc-400">Visual References</span>
+              <span className="font-mono text-[11px] tabular-nums">
                 {validSearchImages.length}
               </span>
             </div>
@@ -433,7 +405,7 @@ export function MessageBubble({
                       sourceUrl: img.sourceUrl,
                     })
                   }
-                  className="group relative rounded-lg overflow-hidden border border-slate-800 hover:border-sky-500/60 bg-slate-950 text-left transition-colors cursor-pointer"
+                  className="group relative rounded-xl overflow-hidden border border-white/[0.08] hover:border-white/25 bg-[#111114] text-left transition-colors cursor-pointer"
                 >
                   <img
                     src={img.imageUrl}
@@ -447,17 +419,17 @@ export function MessageBubble({
                         return next;
                       })
                     }
-                    className="w-full h-24 object-cover group-hover:scale-105 transition-transform"
+                    className="w-full h-24 object-cover group-hover:scale-105 transition-transform duration-300"
                   />
-                  <div className="p-2 bg-slate-900/95">
+                  <div className="p-2 bg-[#111114]">
                     <div className="flex items-center justify-between gap-1">
-                      <span className="text-[11px] text-slate-200 truncate font-medium">
+                      <span className="text-[11px] text-zinc-200 truncate font-medium">
                         {img.title}
                       </span>
-                      <Maximize2 className="w-3 h-3 text-sky-400 shrink-0" />
+                      <Maximize2 className="w-3 h-3 text-zinc-400 group-hover:text-white shrink-0" />
                     </div>
                     {img.domain && (
-                      <div className="text-[10px] font-mono text-slate-500 truncate mt-0.5">
+                      <div className="text-[10px] font-mono text-zinc-500 truncate mt-0.5">
                         {img.domain}
                       </div>
                     )}
@@ -468,16 +440,16 @@ export function MessageBubble({
           </div>
         )}
 
-        {/* Grounded Sources (Rich Web Search Cards & Interactive PDF RAG Evidence Viewer) */}
+        {/* Grounded Web Sources & Document Evidence */}
         {citations.length > 0 && (
-          <div className="mt-4 pt-3 border-t border-slate-800/80">
-            <div className="flex items-center justify-between gap-2 mb-2.5">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+          <div className="pt-2 space-y-2.5">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="font-medium text-zinc-400">
                 {webCitations.length === 0 && docCitations.length > 0
                   ? 'Document Evidence'
                   : 'Sources'}
               </span>
-              <span className="text-[11px] font-mono tabular-nums text-slate-500">
+              <span className="text-[11px] font-mono tabular-nums text-zinc-500">
                 {webCitations.length === 0 && docCitations.length > 0
                   ? summarizeDocumentCitations(
                       docCitations.map((c) => c.citation),
@@ -487,7 +459,7 @@ export function MessageBubble({
             </div>
 
             {webCitations.length > 0 && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {webCitations.map(({ citation, index }) => {
                   const isHighlighted = highlightedCitationIdx === index;
                   const domain = resolveCitationDomain(citation);
@@ -501,22 +473,22 @@ export function MessageBubble({
                       target="_blank"
                       rel="noopener noreferrer"
                       data-citation-index={index + 1}
-                      className={`group block rounded-lg p-3 bg-slate-900/75 hover:bg-slate-900 border transition-all ${
+                      className={`group block rounded-xl p-3 bg-[#111114] hover:bg-[#16161b] border transition-colors ${
                         isHighlighted
-                          ? 'border-sky-400/80 ring-1 ring-sky-400/50 bg-slate-900'
-                          : 'border-slate-800 hover:border-sky-500/50'
+                          ? 'border-white/40 ring-1 ring-white/25'
+                          : 'border-white/[0.08] hover:border-white/[0.18]'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-start gap-2 min-w-0">
-                          <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[11px] font-mono font-semibold tabular-nums rounded bg-sky-500/15 text-sky-300 border border-sky-500/30 shrink-0 mt-0.5">
+                          <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[10px] font-mono font-semibold tabular-nums rounded-md bg-white/[0.08] text-zinc-200 shrink-0 mt-0.5">
                             {index + 1}
                           </span>
                           <div className="min-w-0">
-                            <div className="text-xs font-semibold text-slate-100 group-hover:text-sky-300 line-clamp-1 transition-colors">
+                            <div className="text-xs font-medium text-zinc-100 group-hover:text-white line-clamp-1">
                               {citation.title}
                             </div>
-                            <div className="text-[11px] font-mono text-slate-400 truncate mt-0.5">
+                            <div className="text-[11px] font-mono text-zinc-500 truncate mt-0.5">
                               {domain}
                               {citation.publishedAt
                                 ? ` · ${citation.publishedAt}`
@@ -524,13 +496,13 @@ export function MessageBubble({
                             </div>
                           </div>
                         </div>
-                        <ExternalLink className="w-3.5 h-3.5 text-slate-500 group-hover:text-sky-400 shrink-0 mt-0.5 transition-colors" />
+                        <ExternalLink className="w-3.5 h-3.5 text-zinc-600 group-hover:text-zinc-200 shrink-0 mt-0.5 transition-colors" />
                       </div>
                       {(() => {
                         const distinctSnippet =
                           getDistinctCitationSnippet(citation);
                         return distinctSnippet ? (
-                          <p className="text-[11px] text-slate-400 leading-relaxed line-clamp-2 mt-2">
+                          <p className="text-[11px] text-zinc-400 leading-relaxed line-clamp-2 mt-2">
                             {distinctSnippet}
                           </p>
                         ) : null;
@@ -545,13 +517,15 @@ export function MessageBubble({
               <div
                 className={`grid grid-cols-1 ${
                   docCitations.length > 1 ? 'sm:grid-cols-2' : ''
-                } gap-2.5 ${webCitations.length > 0 ? 'mt-2.5' : ''}`}
+                } gap-2`}
               >
                 {docCitations.map(({ citation, index }) => {
                   const isHighlighted = highlightedCitationIdx === index;
                   const isExpanded = expandedDocCitations.has(index);
                   const isCopied = copiedCitationIdx === index;
-                  const matchPct = formatCitationRelevancePercent(citation.score);
+                  const matchPct = formatCitationRelevancePercent(
+                    citation.score,
+                  );
                   const excerpt = citation.snippet?.trim() ?? '';
                   const isLongExcerpt = excerpt.length > 140;
 
@@ -563,26 +537,26 @@ export function MessageBubble({
                       }}
                       data-citation-index={index + 1}
                       data-doc-evidence-card="true"
-                      className={`rounded-lg p-3 bg-slate-900/75 border transition-all ${
+                      className={`rounded-xl p-3 bg-[#111114] border transition-colors ${
                         isHighlighted
-                          ? 'border-emerald-400/80 ring-1 ring-emerald-400/45 bg-slate-900'
-                          : 'border-slate-800 hover:border-emerald-500/45'
+                          ? 'border-emerald-400/60 ring-1 ring-emerald-400/30'
+                          : 'border-white/[0.08] hover:border-white/[0.16]'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-start gap-2 min-w-0">
-                          <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[11px] font-mono font-semibold tabular-nums rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0 mt-0.5">
+                          <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[10px] font-mono font-semibold tabular-nums rounded-md bg-emerald-500/15 text-emerald-300 shrink-0 mt-0.5">
                             {index + 1}
                           </span>
                           <div className="min-w-0">
                             <div
-                              className="flex items-center gap-1.5 text-xs font-semibold text-slate-100"
+                              className="flex items-center gap-1.5 text-xs font-medium text-zinc-100"
                               title={citation.title}
                             >
                               <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                               <span className="truncate">{citation.title}</span>
                             </div>
-                            <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
+                            <div className="text-[11px] font-mono tabular-nums text-zinc-500 mt-0.5">
                               {citation.urlOrPage}
                               {matchPct !== null ? ` · ${matchPct}% match` : ''}
                             </div>
@@ -593,8 +567,8 @@ export function MessageBubble({
                           <button
                             type="button"
                             onClick={() => handleCopyDocCitation(index, citation)}
-                            title="Copy grounded quote with page attribution"
-                            className="p-1 rounded text-slate-400 hover:text-emerald-300 hover:bg-slate-800/90 transition-colors cursor-pointer"
+                            title="Copy grounded quote"
+                            className="p-1 rounded text-zinc-400 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer"
                           >
                             {isCopied ? (
                               <Check className="w-3.5 h-3.5 text-emerald-400" />
@@ -606,11 +580,8 @@ export function MessageBubble({
                             <button
                               type="button"
                               onClick={() => toggleDocCitationExpanded(index)}
-                              title={
-                                isExpanded ? 'Collapse excerpt' : 'Expand full excerpt'
-                              }
                               aria-expanded={isExpanded}
-                              className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800/90 transition-colors cursor-pointer"
+                              className="p-1 rounded text-zinc-400 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer"
                             >
                               {isExpanded ? (
                                 <ChevronUp className="w-3.5 h-3.5" />
@@ -625,7 +596,7 @@ export function MessageBubble({
                       {excerpt && (
                         <div className="mt-2">
                           <p
-                            className={`text-[11px] text-slate-300/90 leading-relaxed ${
+                            className={`text-[11px] text-zinc-400 leading-relaxed ${
                               isExpanded ? '' : 'line-clamp-3'
                             }`}
                           >
@@ -635,7 +606,7 @@ export function MessageBubble({
                             <button
                               type="button"
                               onClick={() => toggleDocCitationExpanded(index)}
-                              className="mt-1.5 text-[11px] font-medium text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer"
+                              className="mt-1.5 text-[11px] font-medium text-zinc-200 hover:text-white transition-colors cursor-pointer"
                             >
                               {isExpanded ? 'Show less' : 'Read full passage'}
                             </button>
@@ -650,153 +621,171 @@ export function MessageBubble({
           </div>
         )}
 
-        {/* Hydrated Artifacts (Code Bundle, PDF 1.4, PPTX Deck, Generated Image) */}
+        {/* Universal 21st.dev SpotlightCard Artifact Launchers (Code, PDF, PPT, Image) */}
         {message.artifacts && message.artifacts.length > 0 && (
-          <div className="mt-4 space-y-3">
+          <div className="space-y-2.5 pt-1">
             {message.artifacts.map((art) => {
+              const meta = formatArtifactMetaSummary(art);
+              const isViewingInCanvas =
+                isCanvasOpen && activeCanvasArtifactId === art.artifactId;
+              const isImageArtifact = art.artifactType === 'generated_image';
+              const rawImageUrl = isImageArtifact
+                ? buildArtifactRawDownloadUrl(art.artifactId)
+                : null;
 
-              if (art.artifactType === 'ppt_presentation') {
-                return <SlideDeckPreview key={art.artifactId} artifact={art} />;
-              }
-
-              if (art.artifactType === 'pdf_document') {
-                return <PdfDocumentPreview key={art.artifactId} artifact={art} />;
-              }
-
-              if (art.artifactType === 'code_bundle') {
-                return (
+              return (
+                <SpotlightCard
+                  key={art.artifactId}
+                  asButton
+                  active={isViewingInCanvas}
+                  onClick={() => onOpenArtifact?.(art)}
+                  className="w-full"
+                >
                   <div
-                    key={art.artifactId}
-                    className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-900/90 border border-sky-500/30"
+                    data-artifact-launcher="true"
+                    data-artifact-type={art.artifactType}
+                    className="p-3.5 flex flex-wrap items-center justify-between gap-3"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-lg bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400 shrink-0">
-                        <Code2 className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-semibold text-slate-100 truncate">
-                          {art.title}
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      {rawImageUrl ? (
+                        <div className="w-12 h-12 rounded-lg overflow-hidden border border-white/[0.12] bg-[#09090b] shrink-0">
+                          <img
+                            src={rawImageUrl}
+                            alt={art.title}
+                            loading="lazy"
+                            className="w-full h-full object-cover"
+                          />
                         </div>
-                        <div className="text-[11px] font-mono text-slate-400">
-                          {art.filesManifest.length} files (
-                          {art.filesManifest.map((f) => f.path).join(', ')}) · Sandboxed Preview Ready
+                      ) : (
+                        <div className="w-10 h-10 rounded-xl bg-white/[0.06] border border-white/[0.1] flex items-center justify-center text-white shrink-0">
+                          {getArtifactIcon(art.artifactType)}
+                        </div>
+                      )}
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs font-semibold text-white truncate">
+                            {art.title}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-zinc-400 flex items-center gap-1.5 mt-0.5 truncate">
+                          <span>{meta.typeLabel}</span>
+                          <span aria-hidden="true" className="text-zinc-600">
+                            ·
+                          </span>
+                          <span className="font-mono tabular-nums text-zinc-500">
+                            {meta.detailLabel}
+                          </span>
                         </div>
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => onOpenCodeArtifact?.(art)}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-lg transition-colors cursor-pointer shrink-0"
+                    <span
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${
+                        isViewingInCanvas
+                          ? 'bg-white text-zinc-950'
+                          : 'bg-white/[0.07] text-zinc-100 group-hover:bg-white group-hover:text-zinc-950'
+                      }`}
                     >
-                      <Code2 className="w-3.5 h-3.5" />
-                      Open Code &amp; Live Sandbox
-                    </button>
+                      <PanelRightOpen className="w-3.5 h-3.5" />
+                      <span>
+                        {isViewingInCanvas ? 'Viewing in Canvas' : 'Open in Canvas'}
+                      </span>
+                    </span>
                   </div>
-                );
-              }
-
-              // generated_image
-              return (
-                <ImageArtifactCard
-                  key={art.artifactId}
-                  artifact={art}
-                  onOpenLightboxImage={onOpenLightboxImage}
-                />
+                </SpotlightCard>
               );
             })}
           </div>
         )}
 
-        {/* Assistant Message Action Toolbar: Copy Markdown, Regenerate & One-Click Specialist Handoffs */}
-        {!isUser && (
-          <div
-            data-message-actions="true"
-            className="mt-4 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2"
-          >
-            <div className="flex items-center gap-1.5">
+        {/* Quiet Obsidian Assistant Action Bar */}
+        <div
+          data-message-actions="true"
+          className="pt-2 border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-2"
+        >
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              data-action-copy-markdown="true"
+              onClick={handleCopyMarkdown}
+              aria-label="Copy answer as Markdown"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-white hover:bg-white/[0.06] transition-colors whitespace-nowrap cursor-pointer"
+            >
+              {copiedMarkdown ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-300">Copied</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy Markdown</span>
+                </>
+              )}
+            </button>
+
+            {!isWelcomeGreeting && onRegenerate && (
               <button
                 type="button"
-                data-action-copy-markdown="true"
-                onClick={handleCopyMarkdown}
-                aria-label="Copy answer as Markdown"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-[11px] font-medium text-slate-300 hover:text-slate-100 transition-colors whitespace-nowrap cursor-pointer"
+                data-action-regenerate="true"
+                disabled={isLoading}
+                onClick={() => onRegenerate(message)}
+                aria-label="Regenerate this response"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-white hover:bg-white/[0.06] transition-colors whitespace-nowrap cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {copiedMarkdown ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="text-emerald-300">Copied</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Copy Markdown</span>
-                  </>
-                )}
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Regenerate</span>
               </button>
+            )}
+          </div>
 
-              {!isWelcomeGreeting && onRegenerate && (
+          {!isWelcomeGreeting &&
+            message.agentUsed === 'chat' &&
+            onHandoffToSpecialist && (
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-[11px] text-zinc-500 mr-1">Send to</span>
                 <button
                   type="button"
-                  data-action-regenerate="true"
+                  data-handoff-agent="pdf"
                   disabled={isLoading}
-                  onClick={() => onRegenerate(message)}
-                  aria-label="Regenerate this response"
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-[11px] font-medium text-slate-300 hover:text-sky-200 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+                  onClick={() => onHandoffToSpecialist('pdf', message)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#141418] hover:bg-white/[0.1] border border-white/[0.08] hover:border-white/[0.18] text-[11px] font-medium text-zinc-300 hover:text-white transition-colors whitespace-nowrap cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Regenerate</span>
+                  <FileText className="w-3 h-3 text-zinc-400" />
+                  <span>Export PDF</span>
                 </button>
-              )}
-            </div>
+                <button
+                  type="button"
+                  data-handoff-agent="ppt"
+                  disabled={isLoading}
+                  onClick={() => onHandoffToSpecialist('ppt', message)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#141418] hover:bg-white/[0.1] border border-white/[0.08] hover:border-white/[0.18] text-[11px] font-medium text-zinc-300 hover:text-white transition-colors whitespace-nowrap cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Presentation className="w-3 h-3 text-zinc-400" />
+                  <span>Build Slides</span>
+                </button>
+                <button
+                  type="button"
+                  data-handoff-agent="search"
+                  disabled={isLoading}
+                  onClick={() => onHandoffToSpecialist('search', message)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#141418] hover:bg-white/[0.1] border border-white/[0.08] hover:border-white/[0.18] text-[11px] font-medium text-zinc-300 hover:text-white transition-colors whitespace-nowrap cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Globe className="w-3 h-3 text-zinc-400" />
+                  <span>Verify on Web</span>
+                </button>
+              </div>
+            )}
+        </div>
 
-            {!isWelcomeGreeting &&
-              message.agentUsed === 'chat' &&
-              onHandoffToSpecialist && (
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] text-slate-500 mr-0.5">Send to</span>
-                  <button
-                    type="button"
-                    data-handoff-agent="pdf"
-                    disabled={isLoading}
-                    onClick={() => onHandoffToSpecialist('pdf', message)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/45 text-[11px] font-medium text-slate-300 hover:text-emerald-200 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
-                  >
-                    <FileText className="w-3 h-3 text-emerald-400" />
-                    <span>Export PDF</span>
-                  </button>
-                  <button
-                    type="button"
-                    data-handoff-agent="ppt"
-                    disabled={isLoading}
-                    onClick={() => onHandoffToSpecialist('ppt', message)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-indigo-500/45 text-[11px] font-medium text-slate-300 hover:text-indigo-200 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
-                  >
-                    <Presentation className="w-3 h-3 text-indigo-400" />
-                    <span>Build Slides</span>
-                  </button>
-                  <button
-                    type="button"
-                    data-handoff-agent="search"
-                    disabled={isLoading}
-                    onClick={() => onHandoffToSpecialist('search', message)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-sky-500/45 text-[11px] font-medium text-slate-300 hover:text-sky-200 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
-                  >
-                    <Globe className="w-3 h-3 text-sky-400" />
-                    <span>Verify on Web</span>
-                  </button>
-                </div>
-              )}
-          </div>
-        )}
-
-        {/* Clickable Related Follow-Up Queries */}
-        {!isUser && followUpQueries.length > 0 && (
-          <div className="mt-3.5 pt-3 border-t border-slate-800/70">
-            <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-              Related follow-ups
+        {/* Clickable Related Follow-Ups */}
+        {followUpQueries.length > 0 && (
+          <div className="pt-1 space-y-1.5">
+            <div className="text-[11px] font-medium text-zinc-500">
+              Follow-ups
             </div>
-            <div className="space-y-1.5">
+            <div className="divide-y divide-white/[0.06] rounded-xl border border-white/[0.07] bg-[#101013] overflow-hidden">
               {followUpQueries.map((query, qIdx) => (
                 <button
                   key={`${qIdx}-${query}`}
@@ -806,16 +795,16 @@ export function MessageBubble({
                   onClick={() =>
                     onFollowUpSearch?.(query, message.agentUsed ?? 'chat')
                   }
-                  className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-slate-900/65 hover:bg-slate-800/80 border border-slate-800 hover:border-sky-500/45 text-left text-xs text-slate-200 hover:text-sky-200 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed group"
+                  className="w-full flex items-center justify-between gap-3 px-3.5 py-2.5 hover:bg-white/[0.05] text-left text-xs text-zinc-300 hover:text-white transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed group"
                 >
                   <span className="line-clamp-1">{query}</span>
-                  <ArrowUpRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-sky-400 shrink-0 transition-colors" />
+                  <ArrowUpRight className="w-3.5 h-3.5 text-zinc-600 group-hover:text-white shrink-0 transition-colors" />
                 </button>
               ))}
             </div>
           </div>
         )}
       </div>
-    </div>
+    </article>
   );
 }

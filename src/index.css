@@ -4,18 +4,36 @@
   :root {
     --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
+    --bg-canvas: #09090b;
+    --bg-surface: #111114;
+    --bg-surface-hover: #18181c;
+    --border-hairline: rgba(255, 255, 255, 0.08);
+    --border-specular: rgba(255, 255, 255, 0.22);
+    --ink-primary: #fafafa;
+    --ink-secondary: #a1a1aa;
+    --ink-muted: #71717a;
   }
 
+  html,
   body {
     font-family: var(--font-sans);
-    background-color: #f8fafc;
-    color: #0f172a;
+    background-color: var(--bg-canvas);
+    color: var(--ink-primary);
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    color-scheme: dark;
   }
 
-  code, pre, .font-mono {
+  code,
+  pre,
+  .font-mono {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background-color: rgba(250, 250, 250, 0.18);
+    color: #ffffff;
   }
 }
 
@@ -23,3 +41,110 @@
   font-variant-numeric: tabular-nums;
 }
 
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Subtle Obsidian Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* 21st.dev Keyframes: Luminous Platinum BorderBeam, Metallic TextShimmer & Hero Beams */
+@keyframes kartik-border-beam-spin {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+
+@keyframes kartik-text-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: -100% 50%;
+  }
+}
+
+@keyframes kartik-beam-drift {
+  0%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0px) scaleX(1);
+  }
+  50% {
+    opacity: 0.52;
+    transform: translateY(-6px) scaleX(1.03);
+  }
+}
+
+.kartik-border-beam-spinner {
+  animation: kartik-border-beam-spin var(--beam-duration, 6s) linear infinite;
+  will-change: transform;
+}
+
+.kartik-text-shimmer {
+  background-image: linear-gradient(
+    110deg,
+    #71717a 0%,
+    #a1a1aa 38%,
+    #ffffff 50%,
+    #a1a1aa 62%,
+    #71717a 100%
+  );
+  background-size: 240% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: kartik-text-shimmer 2.2s linear infinite;
+}
+
+.kartik-hero-dot-grid {
+  background-image: radial-gradient(
+    rgba(255, 255, 255, 0.14) 1px,
+    transparent 1px
+  );
+  background-size: 24px 24px;
+  mask-image: radial-gradient(ellipse 68% 58% at 50% 42%, #000 18%, transparent 78%);
+  -webkit-mask-image: radial-gradient(ellipse 68% 58% at 50% 42%, #000 18%, transparent 78%);
+}
+
+.kartik-beam-drift {
+  animation: kartik-beam-drift 9s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kartik-border-beam-spinner,
+  .kartik-text-shimmer,
+  .kartik-beam-drift {
+    animation: none !important;
+  }
+
+  .kartik-text-shimmer {
+    color: #e4e4e7;
+    background-image: none;
+  }
+}

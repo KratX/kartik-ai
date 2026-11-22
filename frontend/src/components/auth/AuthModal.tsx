@@ -296,26 +296,33 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-[#090d18] border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
-        <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+    <div
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="max-w-md w-full bg-[#111114] border border-white/[0.12] rounded-2xl overflow-hidden shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-white/[0.08] flex items-center justify-between bg-[#0c0c0f]">
           <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-sky-400" />
-            <h3 className="text-sm font-bold text-white">
+            <ShieldCheck className="w-4 h-4 text-white" />
+            <h3 className="text-sm font-semibold text-white">
               Sign in from Google
             </h3>
           </div>
           <button
             type="button"
+            aria-label="Close sign in modal"
             onClick={onClose}
-            className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+            className="p-1.5 rounded-lg bg-[#18181c] hover:bg-white/[0.12] text-zinc-400 hover:text-white cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         <div className="p-5 space-y-4">
-          <p className="text-xs text-slate-400 leading-relaxed">
+          <p className="text-xs text-zinc-400 leading-relaxed">
             Kartik.ai works out of the box without an account. Sign in with Google only if you want to link your profile to this session.
           </p>
 
@@ -323,7 +330,7 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
             type="button"
             disabled={isPopupPending}
             onClick={() => void handleFirebasePopup()}
-            className="gsi-material-button w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-950 font-bold text-xs flex items-center justify-center gap-2.5 transition-colors cursor-pointer"
+            className="gsi-material-button w-full py-2.5 px-4 rounded-xl bg-white hover:bg-zinc-200 disabled:opacity-60 text-zinc-950 font-semibold text-xs flex items-center justify-center gap-2.5 transition-colors cursor-pointer"
           >
             <svg
               version="1.1"
@@ -359,7 +366,7 @@ export function AuthModal({ isOpen, onClose, onGoogleSignIn }: AuthModalProps) {
           <button
             type="button"
             onClick={onClose}
-            className="w-full py-2 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer"
+            className="w-full py-2 px-4 rounded-xl bg-[#18181c] hover:bg-white/[0.1] border border-white/[0.08] text-zinc-300 hover:text-white font-medium text-xs transition-colors cursor-pointer"
           >
             Continue Without Signing In
           </button>

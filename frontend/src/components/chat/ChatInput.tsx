@@ -1,12 +1,20 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
+  ArrowUp,
+  ChevronDown,
+  Code2,
+  Eye,
+  FileSearch,
   FileText,
+  Globe,
   Image as ImageIcon,
   Loader2,
   Mic,
   MicOff,
   Paperclip,
-  Send,
+  Presentation,
+  SlidersHorizontal,
   Sparkles,
   X,
 } from 'lucide-react';
@@ -17,13 +25,41 @@ import {
   formatImageFileBadge,
   type AgentSelectorPillSpec,
 } from '../slide-deck-and-markdown.js';
+import {
+  matchSlashCommands,
+  stripLeadingSlashCommand,
+  type SlashCommandItem,
+} from '../workspace-ux-helpers.js';
 import type {
   ChatResponseDepth,
   SpecialistAgentName,
   UploadedFileRecord,
 } from '../../types/index.js';
+import { BorderBeam, MorphingPopover } from '../motion/primitives.js';
+
+function getSpecialistIcon(agent: SpecialistAgentName, className = 'w-3.5 h-3.5') {
+  switch (agent) {
+    case 'chat':
+      return <Sparkles className={className} />;
+    case 'search':
+      return <Globe className={className} />;
+    case 'coding':
+      return <Code2 className={className} />;
+    case 'pdf':
+      return <FileText className={className} />;
+    case 'ppt':
+      return <Presentation className={className} />;
+    case 'rag':
+      return <FileSearch className={className} />;
+    case 'vision':
+      return <Eye className={className} />;
+    case 'image':
+      return <ImageIcon className={className} />;
+  }
+}
 
 export interface ChatInputProps {
+  readonly variant?: 'hero' | 'dock';
   readonly selectedAgent: AgentSelectorPillSpec['id'];
   readonly onSelectAgent: (agent: AgentSelectorPillSpec['id']) => void;
   readonly responseDepth: ChatResponseDepth;
@@ -44,6 +80,7 @@ export interface ChatInputProps {
 }
 
 export function ChatInput({
+  variant = 'dock',
   selectedAgent,
   onSelectAgent,
   responseDepth,
@@ -56,14 +93,46 @@ export function ChatInput({
   demoReadOnly,
 }: ChatInputProps) {
   const [prompt, setPrompt] = useState('');
+  const [isFocused, setIsFocused] = useState(false);
+  const [isSpecialistOpen, setIsSpecialistOpen] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const specialistBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const activePill =
     AGENT_SELECTOR_PILLS.find((p) => p.id === selectedAgent) ??
     AGENT_SELECTOR_PILLS[0]!;
+
+  const slashMatches = useMemo(() => matchSlashCommands(prompt), [prompt]);
+  const isSlashMenuVisible = slashMatches.length > 0 && !demoReadOnly;
+
+  useEffect(() => {
+    setSlashIndex(0);
+  }, [slashMatches.length, prompt]);
+
+  // Auto-grow textarea cleanly up to 180px
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const nextHeight = Math.min(180, Math.max(variant === 'hero' ? 56 : 44, el.scrollHeight));
+    el.style.height = `${nextHeight}px`;
+  }, [prompt, variant]);
+
+  const applySlashCommand = (cmd: SlashCommandItem) => {
+    if (cmd.kind === 'agent' && cmd.agent) {
+      onSelectAgent(cmd.agent);
+    } else if (cmd.kind === 'depth' && cmd.depth) {
+      onSelectAgent('chat');
+      onSelectResponseDepth(cmd.depth);
+    }
+    setPrompt(stripLeadingSlashCommand(prompt));
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -140,12 +209,8 @@ export function ChatInput({
           }
           setIsRecordingVoice(false);
         };
-        recognition.onerror = () => {
-          setIsRecordingVoice(false);
-        };
-        recognition.onend = () => {
-          setIsRecordingVoice(false);
-        };
+        recognition.onerror = () => setIsRecordingVoice(false);
+        recognition.onend = () => setIsRecordingVoice(false);
         recognition.start();
         return;
       } catch {
@@ -153,7 +218,6 @@ export function ChatInput({
       }
     }
 
-    // Fallback voice dictation for headless/restricted microphone environments
     setIsRecordingVoice(true);
     setTimeout(() => {
       setPrompt((prev) =>
@@ -170,28 +234,29 @@ export function ChatInput({
     const trimmed = prompt.trim();
     if (!trimmed || isLoading || demoReadOnly) return;
 
-    // Fix #21: When unified Chat is active, omit preferredAgent so the smart hybrid router
-    // answers conceptual questions in Chat (1 cr) and seamlessly delegates specialist tasks.
     const preferred: SpecialistAgentName | undefined =
       selectedAgent === 'chat' ? undefined : selectedAgent;
     setPrompt('');
     await onSendMessage(trimmed, preferred);
   };
 
-  return (
-    <div className="shrink-0 border-t border-slate-800/90 bg-[#090d18]/95 px-4 sm:px-6 py-3.5 space-y-2.5">
-      {/* DEMO_READ_ONLY Warning Banner */}
+  const beamIntensity = isLoading ? 'thinking' : isFocused ? 'focus' : 'idle';
+
+  const composerBody = (
+    <div className="w-full max-w-3xl mx-auto relative">
+      {/* Alerts */}
       {demoReadOnly && (
-        <div className="px-3.5 py-2 rounded-lg bg-amber-500/15 border border-amber-500/30 text-xs text-amber-300 flex items-center justify-between">
+        <div className="mb-2.5 px-3.5 py-2 rounded-xl bg-amber-500/12 border border-amber-500/30 text-xs text-amber-200 flex items-center justify-between">
           <span>
-            <strong>DEMO_READ_ONLY Freeze Active:</strong> Mutating requests return{' '}
-            <code className="font-mono">403 DEMO_READ_ONLY</code> while browsing remains enabled.
+            <strong className="font-semibold">Read-Only Freeze Active:</strong> Mutating
+            requests return <code className="font-mono">403 DEMO_READ_ONLY</code> while
+            browsing remains enabled.
           </span>
         </div>
       )}
 
       {uploadError && (
-        <div className="px-3.5 py-2 rounded-lg bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300 flex items-center justify-between">
+        <div className="mb-2.5 px-3.5 py-2 rounded-xl bg-rose-500/12 border border-rose-500/30 text-xs text-rose-200 flex items-center justify-between">
           <span>{uploadError}</span>
           <button
             type="button"
@@ -203,142 +268,80 @@ export function ChatInput({
         </div>
       )}
 
-      {/* Specialist Agent Selector Pills + Chat Response Depth Control */}
-      <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
-        <div
-          data-agent-selector-bar="true"
-          className="flex items-center gap-1.5 overflow-x-auto no-scrollbar min-w-0"
-        >
-          {AGENT_SELECTOR_PILLS.map((pill) => {
-            const isSelected = pill.id === selectedAgent;
-            return (
-              <button
-                key={pill.id}
-                type="button"
-                data-agent-pill={pill.id}
-                onClick={() => onSelectAgent(pill.id)}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all shrink-0 whitespace-nowrap cursor-pointer border ${
-                  isSelected
-                    ? 'bg-sky-500/20 border-sky-400 text-sky-200 shadow-sm'
-                    : 'bg-slate-900/90 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                }`}
-              >
-                {pill.id === 'chat' && <Sparkles className="w-3 h-3 text-sky-400" />}
-                <span>{pill.label}</span>
-                <span
-                  className={`text-[10px] font-mono tabular-nums px-1 rounded ${
-                    isSelected
-                      ? 'bg-sky-500/30 text-sky-200'
-                      : 'bg-slate-800 text-slate-500'
-                  }`}
-                >
-                  {pill.creditCostLabel}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        {selectedAgent === 'chat' && (
-          <div
-            role="group"
-            aria-label="Chat response depth"
-            data-chat-depth-selector="true"
-            className="inline-flex items-center gap-0.5 p-0.5 rounded-lg bg-slate-900 border border-slate-800 shrink-0"
+      {/* Slash Command Autocomplete Menu (/) */}
+      <AnimatePresence>
+        {isSlashMenuVisible && (
+          <motion.div
+            initial={{ opacity: 0, y: 8, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 6, scale: 0.98 }}
+            transition={{ type: 'spring', stiffness: 460, damping: 34 }}
+            data-slash-menu="true"
+            className="absolute bottom-full left-0 right-0 mb-2.5 z-40 rounded-2xl bg-[#111114]/98 backdrop-blur-xl border border-white/[0.12] shadow-[0_24px_60px_-14px_rgba(0,0,0,0.9)] overflow-hidden"
           >
-            <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500 px-2 select-none">
-              Depth
-            </span>
-            {CHAT_RESPONSE_DEPTH_OPTIONS.map((opt) => {
-              const active = responseDepth === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  data-depth-option={opt.id}
-                  aria-pressed={active}
-                  title={opt.description}
-                  onClick={() => onSelectResponseDepth(opt.id)}
-                  className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                    active
-                      ? 'bg-sky-500/20 text-sky-200 border border-sky-500/40'
-                      : 'text-slate-400 hover:text-slate-200 border border-transparent'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Attached File Chips */}
-      {attachedFiles.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {attachedFiles.map((file) => {
-            const isImage = file.mimeType.startsWith('image/');
-            if (isImage) {
-              return (
-                <div
-                  key={file.fileId}
-                  data-attached-image-chip="true"
-                  className="inline-flex items-center gap-2.5 pl-1.5 pr-2.5 py-1.5 rounded-lg bg-slate-900 border border-sky-500/40 text-xs text-slate-100"
-                >
-                  <div className="w-9 h-9 rounded-md overflow-hidden border border-slate-700 bg-slate-950 flex items-center justify-center shrink-0">
-                    <img
-                      src={buildUploadedFileRawUrl(file.fileId)}
-                      alt={file.originalFilename}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5 font-medium text-slate-100 max-w-[200px]">
-                      <ImageIcon className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                      <span className="truncate">{file.originalFilename}</span>
-                    </div>
-                    <div className="text-[10px] font-mono tabular-nums text-sky-300/80">
-                      {formatImageFileBadge(file.mimeType, file.sizeBytes)} · Vision ready
-                    </div>
-                  </div>
+            <div className="px-3.5 py-2 border-b border-white/[0.06] flex items-center justify-between text-[11px] text-zinc-500">
+              <span>Slash Commands</span>
+              <span className="font-mono text-[10px]">↑↓ · Enter to apply</span>
+            </div>
+            <div className="max-h-60 overflow-y-auto p-1.5 space-y-0.5">
+              {slashMatches.map((item, idx) => {
+                const highlighted = idx === slashIndex;
+                return (
                   <button
+                    key={item.command}
                     type="button"
-                    aria-label={`Remove ${file.originalFilename}`}
-                    onClick={() => onRemoveAttachedFile(file.fileId)}
-                    className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-100 cursor-pointer"
+                    data-slash-option={item.command}
+                    onMouseEnter={() => setSlashIndex(idx)}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      applySlashCommand(item);
+                    }}
+                    className={`relative w-full flex items-center justify-between gap-3 px-3 py-2 rounded-xl text-left transition-colors cursor-pointer ${
+                      highlighted ? 'text-white' : 'text-zinc-300'
+                    }`}
                   >
-                    <X className="w-3.5 h-3.5" />
+                    {highlighted && (
+                      <motion.span
+                        layoutId="slash-menu-active-row"
+                        transition={{ type: 'spring', stiffness: 520, damping: 36 }}
+                        className="absolute inset-0 rounded-xl bg-white/[0.09] border border-white/[0.08]"
+                      />
+                    )}
+                    <div className="relative z-10 flex items-center gap-2.5 min-w-0">
+                      <span className="text-zinc-300 shrink-0">
+                        {item.agent ? (
+                          getSpecialistIcon(item.agent, 'w-3.5 h-3.5')
+                        ) : (
+                          <SlidersHorizontal className="w-3.5 h-3.5" />
+                        )}
+                      </span>
+                      <span className="font-mono text-xs font-semibold text-white shrink-0">
+                        {item.command}
+                      </span>
+                      <span className="text-xs text-zinc-400 truncate">
+                        {item.description}
+                      </span>
+                    </div>
+                    <span className="relative z-10 text-[10px] font-mono tabular-nums text-zinc-500 shrink-0">
+                      {item.badge}
+                    </span>
                   </button>
-                </div>
-              );
-            }
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-            return (
-              <div
-                key={file.fileId}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-xs text-emerald-200"
-              >
-                <FileText className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="font-medium">{file.originalFilename}</span>
-                <span className="text-[10px] font-mono tabular-nums text-emerald-300/80">
-                  {file.pageCount ? `${file.pageCount}p · ${file.chunkCount} chunks` : 'ready'}
-                </span>
-                <button
-                  type="button"
-                  aria-label={`Remove ${file.originalFilename}`}
-                  onClick={() => onRemoveAttachedFile(file.fileId)}
-                  className="p-0.5 rounded hover:bg-emerald-500/20 text-emerald-300 cursor-pointer"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {/* Floating 21st.dev BorderBeam Obsidian Composer Card */}
+      <form
+        onSubmit={handleSubmit}
+        data-floating-composer="true"
+        data-composer-variant={variant}
+        className="relative rounded-2xl bg-[#111114]/95 backdrop-blur-xl border border-white/[0.1] shadow-[0_18px_50px_-14px_rgba(0,0,0,0.85)] transition-colors"
+      >
+        <BorderBeam durationSec={7.5} intensity={beamIntensity} />
 
-      {/* Input Composer Box */}
-      <form onSubmit={handleSubmit} className="flex items-end gap-2">
         <input
           ref={fileInputRef}
           type="file"
@@ -347,68 +350,318 @@ export function ChatInput({
           className="hidden"
         />
 
-        {/* Paperclip Upload Button */}
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={isUploading || demoReadOnly}
-          title="Upload .PDF (for RAG) or PNG/JPEG/WebP (for Vision OCR)"
-          className="h-10 w-10 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 flex items-center justify-center text-slate-300 hover:text-sky-400 disabled:opacity-40 cursor-pointer shrink-0"
-        >
-          {isUploading ? (
-            <Loader2 className="w-4 h-4 animate-spin text-sky-400" />
-          ) : (
-            <Paperclip className="w-4 h-4" />
-          )}
-        </button>
+        {/* Attached File Preview Strip Inside Composer */}
+        {attachedFiles.length > 0 && (
+          <div className="relative z-10 px-3.5 pt-3 flex flex-wrap gap-2">
+            {attachedFiles.map((file) => {
+              const isImage = file.mimeType.startsWith('image/');
+              if (isImage) {
+                return (
+                  <div
+                    key={file.fileId}
+                    data-attached-image-chip="true"
+                    className="inline-flex items-center gap-2.5 pl-1.5 pr-2.5 py-1.5 rounded-xl bg-[#18181c] border border-white/[0.12] text-xs text-zinc-100"
+                  >
+                    <div className="w-8 h-8 rounded-lg overflow-hidden border border-white/10 bg-[#09090b] flex items-center justify-center shrink-0">
+                      <img
+                        src={buildUploadedFileRawUrl(file.fileId)}
+                        alt={file.originalFilename}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-medium text-zinc-100 max-w-[180px] truncate text-xs">
+                        {file.originalFilename}
+                      </div>
+                      <div className="text-[10px] font-mono tabular-nums text-zinc-400">
+                        {formatImageFileBadge(file.mimeType, file.sizeBytes)} · Vision
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${file.originalFilename}`}
+                      onClick={() => onRemoveAttachedFile(file.fileId)}
+                      className="p-1 rounded-md hover:bg-white/[0.08] text-zinc-400 hover:text-white cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                );
+              }
 
-        {/* Voice-to-Text Microphone Button */}
-        <button
-          type="button"
-          onClick={handleToggleVoice}
-          disabled={demoReadOnly}
-          title="Voice-to-Text Dictation (Web Speech API)"
-          className={`h-10 w-10 rounded-xl border flex items-center justify-center transition-colors cursor-pointer shrink-0 ${
-            isRecordingVoice
-              ? 'bg-rose-500/20 border-rose-500/50 text-rose-400 animate-pulse'
-              : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300 hover:text-sky-400'
-          }`}
-        >
-          {isRecordingVoice ? (
-            <MicOff className="w-4 h-4" />
-          ) : (
-            <Mic className="w-4 h-4" />
-          )}
-        </button>
+              return (
+                <div
+                  key={file.fileId}
+                  className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-[#18181c] border border-white/[0.1] text-xs text-zinc-200"
+                >
+                  <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span className="font-medium max-w-[180px] truncate">
+                    {file.originalFilename}
+                  </span>
+                  <span className="text-[10px] font-mono tabular-nums text-zinc-400">
+                    {file.pageCount ? `${file.pageCount}p · ${file.chunkCount} ch` : 'ready'}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${file.originalFilename}`}
+                    onClick={() => onRemoveAttachedFile(file.fileId)}
+                    className="p-0.5 rounded hover:bg-white/[0.1] text-zinc-400 hover:text-white cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
-        {/* Prompt Textarea */}
-        <div className="flex-1 relative">
+        {/* Auto-Expanding Prompt Textarea */}
+        <div className="relative z-10 px-4 pt-3.5 pb-2">
           <textarea
-            rows={2}
+            ref={textareaRef}
+            rows={variant === 'hero' ? 2 : 1}
             value={prompt}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
+              if (isSlashMenuVisible) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setSlashIndex((prev) => (prev + 1) % slashMatches.length);
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setSlashIndex(
+                    (prev) => (prev - 1 + slashMatches.length) % slashMatches.length,
+                  );
+                  return;
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault();
+                  const chosen = slashMatches[slashIndex];
+                  if (chosen) applySlashCommand(chosen);
+                  return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setPrompt('');
+                  return;
+                }
+              }
+
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 void handleSubmit();
               }
             }}
             disabled={demoReadOnly}
-            placeholder={activePill.placeholder}
-            className="w-full px-4 py-2.5 text-sm bg-slate-900/90 border border-slate-800 rounded-xl text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-500/60 resize-none"
+            placeholder={
+              selectedAgent === 'chat'
+                ? 'Ask anything, or type / for specialists (Code, PDF, Slides, Search, Image)…'
+                : activePill.placeholder
+            }
+            className="w-full bg-transparent text-sm sm:text-[15px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none resize-none leading-relaxed"
           />
         </div>
 
-        {/* Send Turn Button */}
-        <button
-          type="submit"
-          disabled={!prompt.trim() || isLoading || demoReadOnly}
-          className="h-10 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-40 disabled:pointer-events-none text-slate-950 font-semibold text-xs inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
-        >
-          <Send className="w-3.5 h-3.5" />
-          <span>Send</span>
-        </button>
+        {/* Integrated Bottom Action Bar */}
+        <div className="relative z-10 px-3 pb-2.5 pt-1 flex flex-wrap items-center justify-between gap-2">
+          {/* Left Tools: Attach, Voice & Compact Specialist MorphingPopover */}
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading || demoReadOnly}
+              title="Attach PDF (RAG) or Image (Vision OCR)"
+              aria-label="Attach file"
+              className="h-8 w-8 rounded-lg bg-transparent hover:bg-white/[0.07] text-zinc-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-40 cursor-pointer shrink-0"
+            >
+              {isUploading ? (
+                <Loader2 className="w-4 h-4 animate-spin text-white" />
+              ) : (
+                <Paperclip className="w-4 h-4" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleToggleVoice}
+              disabled={demoReadOnly}
+              title="Voice dictation"
+              aria-label="Voice dictation"
+              className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer shrink-0 ${
+                isRecordingVoice
+                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                  : 'bg-transparent hover:bg-white/[0.07] text-zinc-400 hover:text-white'
+              }`}
+            >
+              {isRecordingVoice ? (
+                <MicOff className="w-4 h-4" />
+              ) : (
+                <Mic className="w-4 h-4" />
+              )}
+            </button>
+
+            <span aria-hidden="true" className="h-4 w-px bg-white/[0.08] mx-0.5" />
+
+            {/* Compact Specialist Mode Switcher (MorphingPopover) */}
+            <div className="relative" data-agent-selector-bar="true">
+              <button
+                ref={specialistBtnRef}
+                type="button"
+                data-specialist-menu-trigger="true"
+                data-active-agent={selectedAgent}
+                aria-expanded={isSpecialistOpen}
+                onClick={() => setIsSpecialistOpen((prev) => !prev)}
+                className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-[#18181c] hover:bg-[#202026] border border-white/[0.09] hover:border-white/[0.18] text-xs font-medium text-zinc-100 transition-colors whitespace-nowrap cursor-pointer"
+              >
+                <span className="text-zinc-200">
+                  {getSpecialistIcon(selectedAgent, 'w-3.5 h-3.5')}
+                </span>
+                <span>{activePill.label}</span>
+                <span className="text-[10px] font-mono tabular-nums text-zinc-400">
+                  {activePill.creditCostLabel}
+                </span>
+                <ChevronDown
+                  className={`w-3 h-3 text-zinc-500 transition-transform duration-150 ${
+                    isSpecialistOpen ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+
+              <MorphingPopover
+                isOpen={isSpecialistOpen}
+                onClose={() => setIsSpecialistOpen(false)}
+                align="left"
+                side="top"
+                triggerRef={specialistBtnRef}
+                className="w-80 p-1.5"
+              >
+                <div className="px-2.5 py-1.5 flex items-center justify-between text-[11px] text-zinc-500 border-b border-white/[0.06] mb-1">
+                  <span>Select Specialist Mode</span>
+                  <span className="font-mono text-[10px]">or type /</span>
+                </div>
+                <div className="space-y-0.5 max-h-72 overflow-y-auto">
+                  {AGENT_SELECTOR_PILLS.map((pill) => {
+                    const isSelected = pill.id === selectedAgent;
+                    return (
+                      <button
+                        key={pill.id}
+                        type="button"
+                        data-agent-pill={pill.id}
+                        aria-pressed={isSelected}
+                        onClick={() => {
+                          onSelectAgent(pill.id);
+                          setIsSpecialistOpen(false);
+                          requestAnimationFrame(() => textareaRef.current?.focus());
+                        }}
+                        className={`w-full flex items-center justify-between gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors cursor-pointer ${
+                          isSelected
+                            ? 'bg-white/[0.1] text-white'
+                            : 'text-zinc-300 hover:bg-white/[0.05] hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span
+                            className={`shrink-0 ${
+                              isSelected ? 'text-white' : 'text-zinc-400'
+                            }`}
+                          >
+                            {getSpecialistIcon(pill.id, 'w-3.5 h-3.5')}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium truncate">
+                              {pill.label}
+                            </div>
+                            <div className="text-[10px] text-zinc-500 truncate">
+                              {pill.id === 'chat'
+                                ? 'Smart auto-routing + 5-mode reasoning'
+                                : pill.placeholder}
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-mono tabular-nums text-zinc-400 shrink-0">
+                          {pill.creditCostLabel}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </MorphingPopover>
+            </div>
+          </div>
+
+          {/* Right Controls: Spring Depth Switcher + Pure White Circular Send */}
+          <div className="flex items-center gap-2">
+            {selectedAgent === 'chat' && (
+              <div
+                role="group"
+                aria-label="Chat response depth"
+                data-chat-depth-selector="true"
+                className="inline-flex items-center p-0.5 rounded-lg bg-[#18181c] border border-white/[0.07]"
+              >
+                {CHAT_RESPONSE_DEPTH_OPTIONS.map((opt) => {
+                  const active = responseDepth === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      data-depth-option={opt.id}
+                      aria-pressed={active}
+                      title={opt.description}
+                      onClick={() => onSelectResponseDepth(opt.id)}
+                      className={`relative px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                        active
+                          ? 'text-zinc-950'
+                          : 'text-zinc-400 hover:text-zinc-100'
+                      }`}
+                    >
+                      {active && (
+                        <motion.span
+                          layoutId={`chat-depth-pill-${variant}`}
+                          transition={{
+                            type: 'spring',
+                            stiffness: 500,
+                            damping: 36,
+                          }}
+                          className="absolute inset-0 rounded-md bg-white shadow-sm"
+                        />
+                      )}
+                      <span className="relative z-10">{opt.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={!prompt.trim() || isLoading || demoReadOnly}
+              aria-label="Send message"
+              data-composer-send="true"
+              className="h-8 w-8 rounded-full bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 flex items-center justify-center transition-colors cursor-pointer disabled:cursor-not-allowed shrink-0"
+            >
+              {isLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+              )}
+            </button>
+          </div>
+        </div>
       </form>
+    </div>
+  );
+
+  if (variant === 'hero') {
+    return composerBody;
+  }
+
+  return (
+    <div className="shrink-0 px-4 sm:px-6 pb-4 pt-2 bg-gradient-to-t from-[#09090b] via-[#09090b]/95 to-transparent">
+      {composerBody}
     </div>
   );
 }

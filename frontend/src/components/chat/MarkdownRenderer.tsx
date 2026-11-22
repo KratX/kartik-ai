@@ -28,7 +28,7 @@ function renderInlineFormattedText(
       return (
         <code
           key={idx}
-          className="px-1.5 py-0.5 mx-0.5 text-xs font-mono bg-slate-800/90 text-sky-300 border border-slate-700/70 rounded"
+          className="px-1.5 py-0.5 mx-0.5 text-[12px] font-mono bg-white/[0.07] text-zinc-100 border border-white/[0.09] rounded-md"
         >
           {token.text}
         </code>
@@ -37,9 +37,14 @@ function renderInlineFormattedText(
 
     if (token.type === 'bold') {
       return (
-        <strong key={idx} className="font-semibold text-slate-100">
+        <strong key={idx} className="font-semibold text-white">
           {depth < 2
-            ? renderInlineFormattedText(token.text, citations, onCitationClick, depth + 1)
+            ? renderInlineFormattedText(
+                token.text,
+                citations,
+                onCitationClick,
+                depth + 1,
+              )
             : token.text}
         </strong>
       );
@@ -47,7 +52,7 @@ function renderInlineFormattedText(
 
     if (token.type === 'italic') {
       return (
-        <em key={idx} className="italic text-slate-300">
+        <em key={idx} className="italic text-zinc-300">
           {token.text}
         </em>
       );
@@ -60,7 +65,7 @@ function renderInlineFormattedText(
           href={token.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-sky-300 underline decoration-sky-500/50 underline-offset-2 hover:text-sky-200 transition-colors"
+          className="text-white underline decoration-white/35 underline-offset-4 hover:decoration-white transition-colors"
         >
           {token.label}
         </a>
@@ -79,7 +84,8 @@ function renderInlineFormattedText(
       }
 
       const isDocumentCitation =
-        matched.sourceType === 'document' || !/^https?:\/\//i.test(matched.urlOrPage);
+        matched.sourceType === 'document' ||
+        !/^https?:\/\//i.test(matched.urlOrPage);
 
       return (
         <sup key={idx} className="ml-0.5 align-super">
@@ -90,8 +96,8 @@ function renderInlineFormattedText(
             aria-label={`Jump to source ${token.index}: ${matched.title}`}
             className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-mono font-semibold tabular-nums rounded border transition-colors cursor-pointer ${
               isDocumentCitation
-                ? 'bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/35 hover:border-emerald-400/70'
-                : 'bg-sky-500/15 hover:bg-sky-500/30 text-sky-300 border-sky-500/35 hover:border-sky-400/70'
+                ? 'bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/35'
+                : 'bg-white/[0.09] hover:bg-white/[0.18] text-zinc-100 border-white/[0.18]'
             }`}
           >
             {token.index}
@@ -127,16 +133,16 @@ function CodeBlockCard({
   return (
     <div
       data-code-block="true"
-      className="my-3 rounded-lg overflow-hidden border border-slate-800 bg-[#070a12]"
+      className="my-4 rounded-xl overflow-hidden border border-white/[0.09] bg-[#0d0d10]"
     >
-      <div className="flex items-center justify-between gap-2 px-3.5 py-2 bg-slate-900/90 border-b border-slate-800 text-xs text-slate-400 font-mono">
+      <div className="flex items-center justify-between gap-2 px-3.5 py-2 bg-[#131317] border-b border-white/[0.07] text-xs text-zinc-400 font-mono">
         <div className="flex items-center gap-2 min-w-0">
-          <Terminal className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-          <span className="uppercase tracking-wider font-semibold text-slate-200 truncate">
+          <Terminal className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+          <span className="uppercase tracking-wider font-semibold text-zinc-200 truncate">
             {language || 'code'}
           </span>
-          <span className="text-slate-600">·</span>
-          <span className="text-[11px] text-slate-400 tabular-nums whitespace-nowrap">
+          <span className="text-zinc-600">·</span>
+          <span className="text-[11px] text-zinc-500 tabular-nums whitespace-nowrap">
             {lineCount} {lineCount === 1 ? 'line' : 'lines'}
           </span>
         </div>
@@ -146,10 +152,10 @@ function CodeBlockCard({
             onClick={() => setWrapLines((prev) => !prev)}
             aria-pressed={wrapLines}
             title={wrapLines ? 'Disable line wrapping' : 'Wrap long lines'}
-            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-sans font-medium transition-colors cursor-pointer ${
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-sans font-medium transition-colors cursor-pointer ${
               wrapLines
-                ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-transparent'
+                ? 'bg-white text-zinc-950'
+                : 'bg-white/[0.06] hover:bg-white/[0.12] text-zinc-300'
             }`}
           >
             <WrapText className="w-3 h-3" />
@@ -159,7 +165,7 @@ function CodeBlockCard({
             type="button"
             onClick={handleCopy}
             data-code-copy-button="true"
-            className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 font-sans text-[11px] font-medium transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/[0.06] hover:bg-white/[0.12] text-zinc-200 font-sans text-[11px] font-medium transition-colors cursor-pointer"
           >
             {copied ? (
               <>
@@ -176,7 +182,7 @@ function CodeBlockCard({
         </div>
       </div>
       <pre
-        className={`p-3.5 text-xs font-mono text-slate-200 leading-relaxed ${
+        className={`p-4 text-[12.5px] font-mono text-zinc-200 leading-relaxed ${
           wrapLines
             ? 'whitespace-pre-wrap break-words'
             : 'whitespace-pre overflow-x-auto'
@@ -204,15 +210,15 @@ export function MarkdownRenderer({
     renderInlineFormattedText(text, citations, onCitationClick);
 
   return (
-    <div className="space-y-3 text-sm text-slate-200 leading-relaxed">
+    <div className="space-y-3.5 text-[14.5px] text-zinc-200 leading-[1.68] tracking-[0.004em]">
       {blocks.map((block, index) => {
         if (block.type === 'heading') {
           const sizeClass =
             block.level === 1
-              ? 'text-lg font-bold text-white mt-2'
+              ? 'text-lg font-semibold text-white tracking-tight mt-4'
               : block.level === 2
-                ? 'text-base font-bold text-white mt-2'
-                : 'text-sm font-semibold text-sky-300 mt-1.5';
+                ? 'text-base font-semibold text-white tracking-tight mt-3.5'
+                : 'text-sm font-semibold text-zinc-100 mt-2.5';
           return (
             <div key={index} className={sizeClass}>
               {inline(block.text)}
@@ -234,23 +240,23 @@ export function MarkdownRenderer({
           return (
             <div
               key={index}
-              className="my-3 overflow-x-auto rounded-lg border border-slate-800 bg-slate-950/70"
+              className="my-4 overflow-x-auto rounded-xl border border-white/[0.08] bg-[#0e0e11]"
             >
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="bg-slate-900/90 border-b border-slate-800 text-slate-300">
+                  <tr className="bg-[#141418] border-b border-white/[0.08] text-zinc-200">
                     {block.headers.map((header, hIdx) => (
-                      <th key={hIdx} className="py-2.5 px-3 font-semibold">
+                      <th key={hIdx} className="py-2.5 px-3.5 font-semibold">
                         {inline(header)}
                       </th>
                     ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/70">
+                <tbody className="divide-y divide-white/[0.06]">
                   {block.rows.map((row, rIdx) => (
-                    <tr key={rIdx} className="hover:bg-slate-900/40">
+                    <tr key={rIdx} className="hover:bg-white/[0.025]">
                       {row.map((cell, cIdx) => (
-                        <td key={cIdx} className="py-2 px-3 text-slate-300">
+                        <td key={cIdx} className="py-2.5 px-3.5 text-zinc-300">
                           {inline(cell)}
                         </td>
                       ))}
@@ -266,7 +272,7 @@ export function MarkdownRenderer({
           return (
             <blockquote
               key={index}
-              className="px-3.5 py-2 border border-sky-500/25 bg-sky-500/5 text-slate-300 text-xs italic rounded-lg"
+              className="px-4 py-2.5 border border-white/[0.1] bg-white/[0.03] text-zinc-300 text-xs italic rounded-xl"
             >
               {inline(block.text)}
             </blockquote>
@@ -287,7 +293,7 @@ export function MarkdownRenderer({
                   : block.ordered
                     ? 'list-decimal pl-5'
                     : 'list-disc pl-5'
-              } text-slate-200`}
+              } text-zinc-200 marker:text-zinc-500`}
             >
               {block.items.map((item, iIdx) => {
                 const taskMatch = !block.ordered
@@ -299,15 +305,17 @@ export function MarkdownRenderer({
                     <li key={iIdx} className="flex items-start gap-2.5">
                       <span
                         aria-hidden="true"
-                        className={`mt-1 inline-flex items-center justify-center w-3.5 h-3.5 rounded border shrink-0 ${
+                        className={`mt-1.5 inline-flex items-center justify-center w-3.5 h-3.5 rounded border shrink-0 ${
                           checked
-                            ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-300'
-                            : 'bg-slate-900/90 border-slate-600/80'
+                            ? 'bg-white border-white text-zinc-950'
+                            : 'bg-[#111114] border-zinc-600'
                         }`}
                       >
                         {checked && <Check className="w-2.5 h-2.5" />}
                       </span>
-                      <span className="min-w-0 flex-1">{inline(taskMatch[2] ?? '')}</span>
+                      <span className="min-w-0 flex-1">
+                        {inline(taskMatch[2] ?? '')}
+                      </span>
                     </li>
                   );
                 }
@@ -318,7 +326,7 @@ export function MarkdownRenderer({
         }
 
         return (
-          <p key={index} className="text-slate-200">
+          <p key={index} className="text-zinc-200">
             {inline(block.text)}
           </p>
         );

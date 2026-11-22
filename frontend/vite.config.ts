@@ -53,10 +53,20 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   define: loadOptionalFirebaseAppletEnv(),
   resolve: {
+    dedupe: ['react', 'react-dom'],
     alias: {
       '@': path.resolve(currentDir, './src'),
       '@kartik/shared': path.resolve(currentDir, '../backend/shared'),
     },
+  },
+  optimizeDeps: {
+    include: [
+      'react',
+      'react-dom',
+      'react-dom/client',
+      'motion/react',
+      'lucide-react',
+    ],
   },
   server: {
     port: 5173,
