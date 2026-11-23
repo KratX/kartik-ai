@@ -166,6 +166,23 @@ export interface AgentGraphDependencies {
  * - §10: RAG answers cite document & page and state clearly when retrieval finds nothing useful.
  * - §12: Daily Redis budget counters degrade gracefully to deterministic mock mode on exhaustion.
  */
+export interface AgentProgressEvent {
+  readonly stage: string;
+  readonly label: string;
+  readonly agent: SpecialistAgentName;
+}
+
+export interface AgentExecutionOptions {
+  readonly activeArtifactContext?: {
+    readonly artifactType: 'code_bundle' | 'pdf_document' | 'ppt_presentation';
+    readonly title: string;
+    readonly serializedContext: string;
+  };
+  readonly onProgress?: (event: AgentProgressEvent) => void;
+  readonly onTextDelta?: (delta: string) => void;
+  readonly signal?: AbortSignal;
+}
+
 export class AgentGraphExecutor {
   private readonly deps: AgentGraphDependencies;
   private readonly pdfProvider: PdfDocumentProvider;
@@ -177,8 +194,14 @@ export class AgentGraphExecutor {
     this.pptProvider = deps.pptProvider ?? new MockPptPresentationProvider();
   }
 
-  public async execute(request: AgentExecuteRequest): Promise<AgentExecuteResponse> {
+  public async execute(
+    request: AgentExecuteRequest,
+    options?: AgentExecutionOptions,
+  ): Promise<AgentExecuteResponse> {
     const startMs = Date.now();
+    const emitProgress = (stage: string, label: string, agent: SpecialistAgentName) => {
+      options?.onProgress?.({ stage, label, agent });
+    };
 
     if (!request.requestId || !request.userId || !request.conversationId) {
       throw new AppError(
@@ -257,6 +280,7 @@ export class AgentGraphExecutor {
         responseDepth,
         threadContext: request.threadContext,
       });
+      emitProgress('generating', 'Streaming response…', 'chat');
       const reply = await this.deps.chatProvider.generateReply({
         prompt: trimmedPrompt,
         systemInstruction,
@@ -265,6 +289,8 @@ export class AgentGraphExecutor {
         threadContext: request.threadContext,
         responseDepth,
         chatMode,
+        onDelta: options?.onTextDelta,
+        signal: options?.signal,
       });
       const parsed = parseChatReplyAndFollowUps(reply.content, trimmedPrompt, chatMode);
       return {
@@ -289,6 +315,7 @@ export class AgentGraphExecutor {
     }
 
     if (specialist === 'search') {
+      emitProgress('searching', 'Searching live web sources & verifying citations…', 'search');
       let results: readonly {
         readonly title: string;
         readonly url: string;
@@ -422,6 +449,7 @@ export class AgentGraphExecutor {
     }
 
     if (specialist === 'rag') {
+      emitProgress('retrieving', 'Searching indexed document passages…', 'rag');
       const [queryVector] = await this.deps.embeddingProvider.embedTexts([trimmedPrompt]);
       const pdfFileIds = attachedFiles
         .filter((f) => f.mimeType === 'application/pdf')
@@ -576,9 +604,23 @@ export class AgentGraphExecutor {
         };
       }
 
+      const matchingCodeContext =
+        options?.activeArtifactContext?.artifactType === 'code_bundle'
+          ? options.activeArtifactContext.serializedContext
+          : undefined;
+      emitProgress(
+        'generating',
+        matchingCodeContext
+          ? `Refining "${options!.activeArtifactContext!.title}" sandbox…`
+          : 'Building interactive HTML/CSS/JS sandbox…',
+        'coding',
+      );
+
       const generated = await this.deps.codingProvider.generateCodeBundle({
         prompt: trimmedPrompt,
         maxOutputTokens: this.deps.config.maxOutputTokens,
+        existingArtifactContext: matchingCodeContext,
+        signal: options?.signal,
       });
 
       // §10 & Invariant #12: "Never ask a model for JSON and then trust it.
@@ -707,9 +749,23 @@ export class AgentGraphExecutor {
         };
       }
 
+      const matchingPdfContext =
+        options?.activeArtifactContext?.artifactType === 'pdf_document'
+          ? options.activeArtifactContext.serializedContext
+          : undefined;
+      emitProgress(
+        'compiling',
+        matchingPdfContext
+          ? `Refining "${options!.activeArtifactContext!.title}" PDF & compiling %PDF-1.4…`
+          : 'Drafting structured sections & compiling %PDF-1.4…',
+        'pdf',
+      );
+
       const generatedPdf = await this.pdfProvider.generatePdfDocument({
         prompt: trimmedPrompt,
         maxOutputTokens: this.deps.config.maxOutputTokens,
+        existingArtifactContext: matchingPdfContext,
+        signal: options?.signal,
       });
 
       const artifactId = `art_${crypto.randomBytes(8).toString('hex')}`;
@@ -735,7 +791,7 @@ export class AgentGraphExecutor {
 
       const specJson = JSON.stringify({
         pageCount: generatedPdf.pageCount,
-        documentType: generatedPdf.spec.documentType ?? 'technical_report',
+        documentType: generatedPdf.spec.documentType ?? 'general_guide',
         spec: generatedPdf.spec,
       });
       const specSha = crypto.createHash('sha256').update(specJson, 'utf8').digest('hex');
@@ -810,9 +866,23 @@ export class AgentGraphExecutor {
         };
       }
 
+      const matchingPptContext =
+        options?.activeArtifactContext?.artifactType === 'ppt_presentation'
+          ? options.activeArtifactContext.serializedContext
+          : undefined;
+      emitProgress(
+        'compiling',
+        matchingPptContext
+          ? `Refining "${options!.activeArtifactContext!.title}" deck & compiling .pptx…`
+          : 'Designing slide layouts & compiling OpenXML .pptx…',
+        'ppt',
+      );
+
       const generatedPpt = await this.pptProvider.generatePptPresentation({
         prompt: trimmedPrompt,
         maxOutputTokens: this.deps.config.maxOutputTokens,
+        existingArtifactContext: matchingPptContext,
+        signal: options?.signal,
       });
 
       const artifactId = `art_${crypto.randomBytes(8).toString('hex')}`;
@@ -840,7 +910,8 @@ export class AgentGraphExecutor {
 
       const deckJson = JSON.stringify({
         slideCount: generatedPpt.slideCount,
-        theme: generatedPpt.spec.theme ?? 'technical_architecture',
+        theme: generatedPpt.spec.theme ?? 'editorial_story',
+        surfaceMode: generatedPpt.spec.surfaceMode ?? 'dark',
         spec: generatedPpt.spec,
       });
       const deckSha = crypto.createHash('sha256').update(deckJson, 'utf8').digest('hex');
@@ -906,6 +977,7 @@ export class AgentGraphExecutor {
       const visionIntent = classifyVisionIntent(trimmedPrompt);
       const visionSystemInstruction = buildVisionSystemInstruction(visionIntent);
 
+      emitProgress('analyzing', 'Inspecting image pixels & extracting structured findings…', 'vision');
       const visionResult = await this.deps.visionProvider.analyzeImage({
         prompt: trimmedPrompt,
         mimeType: imageAttachment.mimeType as 'image/png' | 'image/jpeg' | 'image/webp',
@@ -938,6 +1010,7 @@ export class AgentGraphExecutor {
     }
 
     // specialist === 'image'
+    emitProgress('rendering', 'Art-directing prompt & rendering studio image…', 'image');
     const imageStyle = classifyImageStyle(trimmedPrompt);
     const aspectRatio = detectImageAspectRatio(trimmedPrompt);
     const referenceFile = attachedFiles.find((f) => f.mimeType.startsWith('image/'));

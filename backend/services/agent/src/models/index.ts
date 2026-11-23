@@ -88,6 +88,8 @@ export interface ChatModelProvider {
     readonly threadContext?: ConversationThreadContext;
     readonly responseDepth?: ChatResponseDepth;
     readonly chatMode?: string;
+    readonly onDelta?: (delta: string) => void;
+    readonly signal?: AbortSignal;
   }): Promise<{
     readonly content: string;
     readonly tokensUsed: number;
@@ -99,6 +101,8 @@ export interface CodingModelProvider {
   generateCodeBundle(input: {
     readonly prompt: string;
     readonly maxOutputTokens: number;
+    readonly existingArtifactContext?: string;
+    readonly signal?: AbortSignal;
   }): Promise<{
     readonly summary: string;
     readonly rawManifestJson: string;

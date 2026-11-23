@@ -54,6 +54,8 @@ export {
   routePromptToSpecialist,
   type AgentMetadataStore,
   type AgentGraphDependencies,
+  type AgentProgressEvent,
+  type AgentExecutionOptions,
 } from './graph/index.js';
 
 export {
@@ -186,6 +188,9 @@ export {
   type PptProcessStepSpec,
   type PptSlideSpec,
   type PptPresentationSpec,
+  type PptSurfaceMode,
+  type ChartBarSpec,
+  type VectorChartSpec,
 } from './schemas/index.js';
 
 export {
@@ -205,6 +210,8 @@ export {
   buildPptSystemInstruction,
   buildPptxBinaryBuffer,
   classifyPptDeckTheme,
+  classifyPptSurfaceMode,
+  extractRequestedSlideCount,
   formatPptSummaryMarkdown,
   MockPptPresentationProvider,
   type PptPresentationGenerationResult,

@@ -2,17 +2,23 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Check,
   Command,
+  Download,
+  FileCode2,
+  FileText,
   Keyboard,
   Layers,
+  Loader2,
   PanelLeft,
   Pencil,
   Zap,
 } from 'lucide-react';
-import { AnimatedBrandLogo } from '../motion/primitives.js';
+import { AnimatedBrandLogo, MorphingPopover } from '../motion/primitives.js';
 
 export interface NavProps {
   readonly conversationTitle: string;
   readonly isHeroMode?: boolean;
+  readonly hasMessages?: boolean;
+  readonly isExportingPdf?: boolean;
   readonly availableCredits: number;
   readonly artifactCount: number;
   readonly isArtifactPanelOpen: boolean;
@@ -23,11 +29,15 @@ export interface NavProps {
   readonly onOpenShortcuts?: () => void;
   readonly onToggleArtifactPanel: () => void;
   readonly onOpenBillingDrawer: () => void;
+  readonly onExportMarkdown?: () => void;
+  readonly onExportPdf?: () => void;
 }
 
 export function Nav({
   conversationTitle,
   isHeroMode = false,
+  hasMessages = false,
+  isExportingPdf = false,
   availableCredits,
   artifactCount,
   isArtifactPanelOpen,
@@ -38,10 +48,14 @@ export function Nav({
   onOpenShortcuts,
   onToggleArtifactPanel,
   onOpenBillingDrawer,
+  onExportMarkdown,
+  onExportPdf,
 }: NavProps) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [draftTitle, setDraftTitle] = useState(conversationTitle);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const exportBtnRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     setDraftTitle(conversationTitle);
@@ -161,6 +175,77 @@ export function Nav({
 
       {/* Right: Clean Minimal Controls + Developer Tools MorphingPopover */}
       <div className="flex items-center gap-1.5 shrink-0">
+        {/* Active Thread Export Menu (.MD & .PDF) */}
+        {!isHeroMode && hasMessages && (onExportMarkdown || onExportPdf) && (
+          <div className="relative shrink-0">
+            <button
+              ref={exportBtnRef}
+              type="button"
+              onClick={() => setIsExportMenuOpen((prev) => !prev)}
+              data-nav-export-trigger="true"
+              title="Export conversation (.md or .pdf)"
+              aria-label="Export conversation"
+              aria-expanded={isExportMenuOpen}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#111114] hover:bg-[#18181c] border border-white/[0.08] hover:border-white/[0.16] text-xs text-zinc-300 hover:text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              {isExportingPdf ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              {!isArtifactPanelOpen && <span className="hidden md:inline">Export</span>}
+            </button>
+
+            <MorphingPopover
+              isOpen={isExportMenuOpen}
+              onClose={() => setIsExportMenuOpen(false)}
+              align="right"
+              side="bottom"
+              triggerRef={exportBtnRef}
+              className="w-56 p-1.5"
+            >
+              <div className="px-2.5 py-1 text-[11px] font-medium text-zinc-500 border-b border-white/[0.06] mb-1">
+                Export Thread
+              </div>
+              {onExportMarkdown && (
+                <button
+                  type="button"
+                  data-export-thread-md="true"
+                  onClick={() => {
+                    setIsExportMenuOpen(false);
+                    onExportMarkdown();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left text-xs text-zinc-200 hover:bg-white/[0.08] hover:text-white transition-colors cursor-pointer"
+                >
+                  <FileCode2 className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="font-medium">Markdown (.md)</div>
+                    <div className="text-[10px] text-zinc-500">Clean GFM transcript</div>
+                  </div>
+                </button>
+              )}
+              {onExportPdf && (
+                <button
+                  type="button"
+                  data-export-thread-pdf="true"
+                  disabled={isExportingPdf}
+                  onClick={() => {
+                    setIsExportMenuOpen(false);
+                    onExportPdf();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left text-xs text-zinc-200 hover:bg-white/[0.08] hover:text-white disabled:opacity-50 transition-colors cursor-pointer"
+                >
+                  <FileText className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="font-medium">PDF Transcript (.pdf)</div>
+                    <div className="text-[10px] text-zinc-500">Compiled %PDF-1.4 document</div>
+                  </div>
+                </button>
+              )}
+            </MorphingPopover>
+          </div>
+        )}
+
         {/* Global Cmd+K Command Palette Trigger */}
         <button
           type="button"

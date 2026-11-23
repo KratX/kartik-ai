@@ -22,6 +22,8 @@ import {
   type PptDeckTheme,
   type PptPresentationSpec,
   type PptSlideSpec,
+  type PptSurfaceMode,
+  type VectorChartSpec,
 } from '../../schemas/index.js';
 
 export interface PptPresentationGenerationResult {
@@ -37,6 +39,8 @@ export interface PptPresentationProvider {
   generatePptPresentation(input: {
     readonly prompt: string;
     readonly maxOutputTokens: number;
+    readonly existingArtifactContext?: string;
+    readonly signal?: AbortSignal;
   }): Promise<PptPresentationGenerationResult>;
 }
 
@@ -231,13 +235,70 @@ export function classifyPptDeckTheme(prompt: string): PptDeckTheme {
 }
 
 /**
+ * Extracts a requested content-slide count from natural language prompts
+ * (e.g. "4 slides", "10-slide deck", "8 slide presentation"), clamped to [3, 10]
+ * (which becomes 5..12 total slides including Cover + Closing). Defaults to 6.
+ */
+export function extractRequestedSlideCount(prompt: string): number {
+  const match = /\b(\d{1,2})\s*[-]?\s*slides?\b/i.exec(prompt);
+  if (!match) {
+    return 6;
+  }
+  const parsed = Number.parseInt(match[1]!, 10);
+  if (!Number.isFinite(parsed)) {
+    return 6;
+  }
+  return Math.max(3, Math.min(10, parsed));
+}
+
+/**
+ * Classifies whether the user requested a crisp light Paper & Ink deck surface or dark obsidian deck.
+ */
+export function classifyPptSurfaceMode(prompt: string): PptSurfaceMode {
+  const lower = prompt.toLowerCase();
+  if (
+    /\b(light\s+theme|light\s+mode|minimal\s+white|paper\s+theme|white\s+background|bright\s+theme|editorial\s+light)\b/.test(
+      lower,
+    )
+  ) {
+    return 'light';
+  }
+  return 'dark';
+}
+
+function resolveEffectivePptPalette(
+  theme: PptDeckTheme,
+  surfaceMode: PptSurfaceMode = 'dark',
+): PptThemePalette {
+  const base = PPT_THEME_PALETTES[theme] ?? PPT_THEME_PALETTES.editorial_story;
+  if (surfaceMode !== 'light') {
+    return base;
+  }
+  return {
+    label: base.label,
+    canvasHex: 'FAFAFA',
+    surfaceHex: 'FFFFFF',
+    surfaceAltHex: 'F4F4F5',
+    borderHex: 'D4D4D8',
+    accentHex: base.accentHex,
+    accentSoftHex: '18181B',
+    textPrimaryHex: '18181B',
+    textSecondaryHex: '3F3F46',
+    textMutedHex: '71717A',
+  };
+}
+
+/**
  * Builds a tailored system instruction for Gemini so generated slide decks follow an authentic
  * narrative arc matched to the user's real subject with layout variety, crisp copy, and speaker notes.
  */
 export function buildPptSystemInstruction(
   theme: PptDeckTheme,
   todayIso: string,
+  targetContentSlides: number = 6,
 ): string {
+  const clampedSlides = Math.max(3, Math.min(10, Math.round(targetContentSlides)));
+  const minDistinctLayouts = Math.min(4, Math.max(2, clampedSlides - 1));
   const themeGuides: Record<PptDeckTheme, string> = {
     editorial_story:
       'Follow a compelling, domain-authentic narrative arc tailored strictly to the user’s topic (e.g. Hook & Premise -> Essential Context/Key Facts -> Contrasting Perspectives -> Chronology/Journey -> Deeper Insights -> Memorable Takeaway). NEVER inject software engineering, cloud, or corporate buzzwords unless the topic itself is tech or business.',
@@ -265,14 +326,15 @@ export function buildPptSystemInstruction(
     themeGuides[theme],
     'DESIGN RULES:',
     '1. Stay 100% faithful to the user’s actual domain — NEVER force tech architecture, SaaS KPIs, or corporate rollout phases onto history, science, art, culture, lifestyle, or educational topics.',
-    '2. Generate exactly 6 content slides (Cover and Closing slides are compiled automatically — do NOT include Cover or Thank You slides in the slides array).',
-    '3. Vary slide layouts naturally across the 6 content slides using at least 4 distinct layouts from: "spotlight", "metrics", "two_column", "process", "bullets".',
+    `2. Generate EXACTLY ${clampedSlides} content slides (Cover and Closing slides are compiled automatically — do NOT include Cover or Thank You slides in the slides array).`,
+    `3. Vary slide layouts naturally across the ${clampedSlides} content slides using at least ${minDistinctLayouts} distinct layouts from: "spotlight", "metrics", "two_column", "process", "bullets".`,
     '4. Keep every slide concise and presentation-ready: 3–4 short scannable bullets (max 14 words each), never dense paragraphs.',
     '5. When layout="metrics", provide 3–4 topic-authentic stat/fact/date cards ({ label, value, delta }) — e.g. historical dates, scientific measurements, notable counts, or business KPIs depending on the topic.',
     '6. When layout="two_column", provide exactly 2 natural contrasting columns ({ heading, points[3] }) fitting the topic (e.g. two eras, two schools of thought, myths vs facts, pros vs cons, or two options).',
     '7. When layout="process", provide 3–4 ordered stages/steps/eras ({ step: "01", title, detail }) fitting the topic (e.g. chronological eras, how-to steps, lifecycle stages, or milestones).',
     '8. When layout="spotlight", provide a punchy `callout` thesis or quote plus 3 supporting `bullets`.',
-    '9. Include concise, natural presenter `speakerNotes` (2–3 sentences) on EVERY content slide.',
+    '9. On 1 slide where quantitative comparison illuminates the topic, you may include an optional `chart` ({ title, unit, bars: [{ label, value, displayValue }] } with 3–5 bars).',
+    '10. Include concise, natural presenter `speakerNotes` (2–3 sentences) on EVERY content slide.',
   ].join(' ');
 }
 
@@ -1013,49 +1075,171 @@ function buildSlideXml(
         ],
       });
     } else {
-      // Standard editorial bullets layout + optional takeaway footer card
-      const bulletsH = slide.callout ? bodyH - 1_050_000 : bodyH;
-      pushShape({
-        name: 'BulletsCard',
-        x: MARGIN_X,
-        y: bodyTop,
-        cx: CONTENT_W,
-        cy: bulletsH,
-        preset: 'roundRect',
-        fillHex: palette.surfaceHex,
-        borderHex: palette.borderHex,
-        padX: 300_000,
-        padY: 240_000,
-        paragraphs: slide.bullets.slice(0, 6).map((b, i) => ({
-          text: `${String(i + 1).padStart(2, '0')}   ${b}`,
-          sizePt: 16,
-          colorHex: palette.textPrimaryHex,
-          spaceAfterPt: 14,
-        })),
-      });
-
-      if (slide.callout) {
+      // Standard editorial bullets layout + optional vector chart or takeaway card
+      const renderChartBlock = (chart: VectorChartSpec, boxY: number, boxH: number) => {
         pushShape({
-          name: 'BulletsTakeaway',
+          name: 'ChartCard',
           x: MARGIN_X,
-          y: bodyBottom - 840_000,
+          y: boxY,
           cx: CONTENT_W,
-          cy: 840_000,
+          cy: boxH,
           preset: 'roundRect',
           fillHex: palette.surfaceAltHex,
-          borderHex: palette.accentHex,
-          anchor: 'ctr',
-          padX: 260_000,
+          borderHex: palette.borderHex,
+          padX: 240_000,
           padY: 140_000,
-          paragraphs: [
-            {
-              text: `Key Takeaway: ${slide.callout}`,
-              sizePt: 13,
-              colorHex: palette.accentSoftHex,
-              bold: true,
-            },
-          ],
+          paragraphs: chart.title
+            ? [
+                {
+                  text:
+                    chart.unit && !chart.title.toLowerCase().includes(chart.unit.toLowerCase())
+                      ? `${chart.title} (${chart.unit})`
+                      : chart.title,
+                  sizePt: 12,
+                  colorHex: palette.accentSoftHex,
+                  bold: true,
+                },
+              ]
+            : undefined,
         });
+        const bars = chart.bars.slice(0, 5);
+        const maxVal = Math.max(1, ...bars.map((b) => b.value));
+        const innerTop = boxY + (chart.title ? 460_000 : 180_000);
+        const availH = Math.max(600_000, boxH - (chart.title ? 580_000 : 300_000));
+        const rowH = Math.floor(availH / Math.max(1, bars.length));
+        const labelW = 2_600_000;
+        const valW = 1_300_000;
+        const trackX = MARGIN_X + labelW + 240_000;
+        const trackW = CONTENT_W - labelW - valW - 600_000;
+
+        bars.forEach((bar, bIdx) => {
+          const rY = innerTop + bIdx * rowH;
+          const barH = Math.min(200_000, Math.max(120_000, Math.floor(rowH * 0.52)));
+          pushShape({
+            name: `ChartLabel_${bIdx + 1}`,
+            x: MARGIN_X + 200_000,
+            y: rY,
+            cx: labelW,
+            cy: rowH,
+            padX: 0,
+            padY: 0,
+            anchor: 'ctr',
+            paragraphs: [
+              {
+                text: bar.label,
+                sizePt: 11,
+                colorHex: palette.textSecondaryHex,
+                bold: true,
+              },
+            ],
+          });
+          pushShape({
+            name: `ChartTrack_${bIdx + 1}`,
+            x: trackX,
+            y: rY + Math.floor((rowH - barH) / 2),
+            cx: trackW,
+            cy: barH,
+            preset: 'roundRect',
+            fillHex: palette.surfaceHex,
+            borderHex: palette.borderHex,
+          });
+          const ratio = Math.max(0.05, Math.min(1, bar.value / maxVal));
+          pushShape({
+            name: `ChartBar_${bIdx + 1}`,
+            x: trackX,
+            y: rY + Math.floor((rowH - barH) / 2),
+            cx: Math.max(180_000, Math.floor(trackW * ratio)),
+            cy: barH,
+            preset: 'roundRect',
+            fillHex: palette.accentHex,
+          });
+          pushShape({
+            name: `ChartVal_${bIdx + 1}`,
+            x: trackX + trackW + 120_000,
+            y: rY,
+            cx: valW,
+            cy: rowH,
+            padX: 0,
+            padY: 0,
+            anchor: 'ctr',
+            paragraphs: [
+              {
+                text: bar.displayValue || `${bar.value}${chart.unit ? ` ${chart.unit}` : ''}`,
+                sizePt: 11,
+                colorHex: palette.textPrimaryHex,
+                bold: true,
+              },
+            ],
+          });
+        });
+      };
+
+      if (slide.chart && slide.chart.bars.length >= 2) {
+        const bulletsH = Math.floor(bodyH * 0.44);
+        const chartH = bodyH - bulletsH - 220_000;
+        pushShape({
+          name: 'BulletsCard',
+          x: MARGIN_X,
+          y: bodyTop,
+          cx: CONTENT_W,
+          cy: bulletsH,
+          preset: 'roundRect',
+          fillHex: palette.surfaceHex,
+          borderHex: palette.borderHex,
+          padX: 280_000,
+          padY: 180_000,
+          paragraphs: slide.bullets.slice(0, 4).map((b, i) => ({
+            text: `${String(i + 1).padStart(2, '0')}   ${b}`,
+            sizePt: 14,
+            colorHex: palette.textPrimaryHex,
+            spaceAfterPt: 10,
+          })),
+        });
+        renderChartBlock(slide.chart, bodyTop + bulletsH + 220_000, chartH);
+      } else {
+        const bulletsH = slide.callout ? bodyH - 1_050_000 : bodyH;
+        pushShape({
+          name: 'BulletsCard',
+          x: MARGIN_X,
+          y: bodyTop,
+          cx: CONTENT_W,
+          cy: bulletsH,
+          preset: 'roundRect',
+          fillHex: palette.surfaceHex,
+          borderHex: palette.borderHex,
+          padX: 300_000,
+          padY: 240_000,
+          paragraphs: slide.bullets.slice(0, 6).map((b, i) => ({
+            text: `${String(i + 1).padStart(2, '0')}   ${b}`,
+            sizePt: 16,
+            colorHex: palette.textPrimaryHex,
+            spaceAfterPt: 14,
+          })),
+        });
+
+        if (slide.callout) {
+          pushShape({
+            name: 'BulletsTakeaway',
+            x: MARGIN_X,
+            y: bodyBottom - 840_000,
+            cx: CONTENT_W,
+            cy: 840_000,
+            preset: 'roundRect',
+            fillHex: palette.surfaceAltHex,
+            borderHex: palette.accentHex,
+            anchor: 'ctr',
+            padX: 260_000,
+            padY: 140_000,
+            paragraphs: [
+              {
+                text: `Key Takeaway: ${slide.callout}`,
+                sizePt: 13,
+                colorHex: palette.accentSoftHex,
+                bold: true,
+              },
+            ],
+          });
+        }
       }
     }
   }
@@ -1226,7 +1410,10 @@ export function buildPptxBinaryBuffer(rawSpec: PptPresentationSpec): {
 } {
   const spec = validatePptPresentationSpec(rawSpec);
   const slides = spec.slides;
-  const palette = PPT_THEME_PALETTES[spec.theme ?? 'editorial_story'];
+  const palette = resolveEffectivePptPalette(
+    spec.theme ?? 'editorial_story',
+    spec.surfaceMode ?? 'dark',
+  );
 
   const slideOverrides = slides
     .map(
@@ -1431,6 +1618,8 @@ export class MockPptPresentationProvider implements PptPresentationProvider {
   public async generatePptPresentation(input: {
     readonly prompt: string;
     readonly maxOutputTokens: number;
+    readonly existingArtifactContext?: string;
+    readonly signal?: AbortSignal;
   }): Promise<PptPresentationGenerationResult> {
     const cleanTopic =
       input.prompt
@@ -1443,6 +1632,8 @@ export class MockPptPresentationProvider implements PptPresentationProvider {
     const titleTopic =
       cleanTopic.charAt(0).toUpperCase() + cleanTopic.slice(1).slice(0, 75);
     const theme = classifyPptDeckTheme(input.prompt);
+    const surfaceMode = classifyPptSurfaceMode(input.prompt);
+    const targetContentSlides = extractRequestedSlideCount(input.prompt);
     const todayIso = new Date().toISOString().slice(0, 10);
     const isTechnical = theme === 'technical_architecture';
 
@@ -1662,14 +1853,33 @@ export class MockPptPresentationProvider implements PptPresentationProvider {
           },
         ];
 
+    const sizedSlides = [...rawSlides.slice(0, targetContentSlides)];
+    while (sizedSlides.length < targetContentSlides) {
+      const extraNum = sizedSlides.length + 1;
+      sizedSlides.push({
+        layout: 'bullets' as const,
+        kicker: `Module ${String(extraNum).padStart(2, '0')}`,
+        title: `${titleTopic}: Focus Area ${extraNum}`,
+        subtitle: 'Additional Perspective & Supporting Detail',
+        bullets: [
+          `Key dimensions and practical examples within ${titleTopic}`,
+          'Notable patterns that reinforce the central theme',
+          'Actionable takeaway connecting back to the broader story',
+        ],
+        callout: `Each additional lens deepens understanding of ${titleTopic}.`,
+        speakerNotes: `Highlight this focused perspective on ${titleTopic} before transitioning to the next slide.`,
+      });
+    }
+
     const spec = validatePptPresentationSpec({
       title: titleTopic,
       subtitle: `${PPT_THEME_PALETTES[theme].label} · Structured Visual Deck`,
       theme,
+      surfaceMode,
       author: 'Kartik.ai Presentation Engine',
       generatedDate: todayIso,
       footer: 'Generated by Kartik.ai',
-      slides: rawSlides,
+      slides: sizedSlides,
     });
 
     const compiled = buildPptxBinaryBuffer(spec);

@@ -27,9 +27,13 @@ const AGENT_SHORT_TITLES: Record<SpecialistAgentName, string> = {
 
 export interface LoadingAnimationProps {
   readonly activeAgent?: SpecialistAgentName;
+  readonly stageLabel?: string;
 }
 
-export function LoadingAnimation({ activeAgent = 'chat' }: LoadingAnimationProps) {
+export function LoadingAnimation({
+  activeAgent = 'chat',
+  stageLabel,
+}: LoadingAnimationProps) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 6 }}
@@ -51,9 +55,11 @@ export function LoadingAnimation({ activeAgent = 'chat' }: LoadingAnimationProps
             {AGENT_SHORT_TITLES[activeAgent] ?? 'Chat'}
           </span>
         </div>
-        <div className="text-sm">
+        <div className="text-sm" data-thinking-stage-label="true">
           <TextShimmer>
-            {AGENT_STATUS_LABELS[activeAgent] ?? AGENT_STATUS_LABELS.chat}
+            {stageLabel?.trim() ||
+              AGENT_STATUS_LABELS[activeAgent] ||
+              AGENT_STATUS_LABELS.chat}
           </TextShimmer>
         </div>
       </div>

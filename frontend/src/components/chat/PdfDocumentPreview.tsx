@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   BookOpen,
@@ -10,6 +10,9 @@ import {
   ExternalLink,
   FileText,
   Layers,
+  Loader2,
+  Pencil,
+  RotateCcw,
   Sparkles,
   ZoomIn,
   ZoomOut,
@@ -18,12 +21,64 @@ import {
   buildArtifactRawDownloadUrl,
   parsePdfArtifactDocument,
   pdfDocumentSpecToMarkdown,
+  pdfViewModelToCompileSpec,
   type ParsedPdfDocumentType,
+  type ParsedPdfDocumentViewModel,
+  type ParsedVectorChart,
 } from '../slide-deck-and-markdown.js';
 import type { ArtifactRecord } from '../../types/index.js';
 
 export interface PdfDocumentPreviewProps {
   readonly artifact: ArtifactRecord;
+}
+
+function PdfVectorBarChart({
+  chart,
+  accentBarClass,
+}: {
+  readonly chart: ParsedVectorChart;
+  readonly accentBarClass: string;
+}) {
+  const maxVal = Math.max(1, ...chart.bars.map((b) => b.value));
+  return (
+    <div
+      data-pdf-vector-chart="true"
+      className="rounded-lg border border-zinc-200 bg-zinc-50/75 p-3 space-y-2"
+    >
+      {chart.title && (
+        <div className="flex items-center justify-between gap-2 text-[11px] font-semibold text-zinc-800">
+          <span>{chart.title}</span>
+          {chart.unit && (
+            <span className="text-[10px] font-mono text-zinc-500">{chart.unit}</span>
+          )}
+        </div>
+      )}
+      <div className="space-y-1.5">
+        {chart.bars.map((bar, idx) => {
+          const pct = Math.max(4, Math.min(100, (bar.value / maxVal) * 100));
+          const display =
+            bar.displayValue ??
+            `${bar.value}${chart.unit ? ` ${chart.unit}` : ''}`;
+          return (
+            <div key={`${bar.label}-${idx}`} className="space-y-0.5">
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="font-medium text-zinc-700 truncate">{bar.label}</span>
+                <span className="font-mono tabular-nums font-semibold text-zinc-900 shrink-0">
+                  {display}
+                </span>
+              </div>
+              <div className="h-2 w-full rounded bg-zinc-200/90 overflow-hidden">
+                <div
+                  className={`h-full rounded ${accentBarClass}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 interface PdfArchetypeStyle {
@@ -116,10 +171,24 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
   const specFile = artifact.filesManifest.find(
     (f) => f.path === 'document-spec.json',
   );
-  const doc = useMemo(
+  const parsedDoc = useMemo(
     () => parsePdfArtifactDocument(specFile?.content, artifact.title),
     [specFile?.content, artifact.title],
   );
+
+  const [editedDoc, setEditedDoc] = useState<ParsedPdfDocumentViewModel | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isRecompiling, setIsRecompiling] = useState(false);
+  const [recompileError, setRecompileError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEditedDoc(null);
+    setIsEditing(false);
+    setRecompileError(null);
+  }, [artifact.artifactId]);
+
+  const doc = editedDoc ?? parsedDoc;
+  const hasEdits = editedDoc !== null;
   const style = ARCHETYPE_STYLES[doc.documentType] ?? ARCHETYPE_STYLES.general_guide;
 
   const [viewMode, setViewMode] = useState<'reader' | 'pages'>('reader');
@@ -128,6 +197,12 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
 
   const zoomPct = ZOOM_STEPS[zoomIdx] ?? 100;
+
+  const updateDoc = (
+    updater: (prev: ParsedPdfDocumentViewModel) => ParsedPdfDocumentViewModel,
+  ) => {
+    setEditedDoc((prev) => updater(prev ?? parsedDoc));
+  };
 
   const a4Pages = useMemo(() => {
     const pages: Array<{
@@ -157,7 +232,7 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
   const downloadUrl = buildArtifactRawDownloadUrl(artifact.artifactId);
   const inlinePdfUrl = `${downloadUrl}?inline=1`;
   const safeFilename =
-    artifact.title
+    doc.title
       .replace(/[^A-Za-z0-9._-]+/g, '-')
       .replace(/^-+|-+$/g, '')
       .toLowerCase()
@@ -180,6 +255,41 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
     } catch {
       setCopiedMarkdown(true);
       setTimeout(() => setCopiedMarkdown(false), 1800);
+    }
+  };
+
+  const handleRecompilePdf = async () => {
+    setIsRecompiling(true);
+    setRecompileError(null);
+    try {
+      const res = await fetch('/api/v1/artifacts/recompile', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'pdf',
+          filename: safeFilename,
+          spec: pdfViewModelToCompileSpec(doc),
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`Re-compile failed (HTTP ${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${safeFilename}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      setRecompileError(
+        err instanceof Error ? err.message : 'Failed to re-compile PDF',
+      );
+    } finally {
+      setIsRecompiling(false);
     }
   };
 
@@ -281,6 +391,38 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
 
           <button
             type="button"
+            data-pdf-edit-toggle="true"
+            aria-pressed={isEditing}
+            onClick={() => {
+              setViewMode('reader');
+              setIsEditing((prev) => !prev);
+            }}
+            className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium border rounded-lg transition-colors cursor-pointer ${
+              isEditing
+                ? 'bg-white text-zinc-950 border-white font-semibold'
+                : 'bg-[#16161b] hover:bg-white/[0.1] border-white/[0.08] text-zinc-200'
+            }`}
+          >
+            <Pencil className="w-3 h-3" />
+            <span>{isEditing ? 'Done' : 'Edit'}</span>
+          </button>
+
+          {hasEdits && (
+            <button
+              type="button"
+              onClick={() => {
+                setEditedDoc(null);
+                setRecompileError(null);
+              }}
+              title="Reset edits to original document"
+              className="inline-flex items-center gap-1 px-2 py-1.5 text-[11px] font-medium bg-[#16161b] hover:bg-white/[0.1] border border-white/[0.08] text-zinc-300 rounded-lg transition-colors cursor-pointer"
+            >
+              <RotateCcw className="w-3 h-3" />
+            </button>
+          )}
+
+          <button
+            type="button"
             onClick={() => void handleCopyMarkdown()}
             title="Copy structured document as Markdown"
             className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium bg-[#16161b] hover:bg-white/[0.1] border border-white/[0.08] text-zinc-200 rounded-lg transition-colors cursor-pointer"
@@ -298,16 +440,39 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
             )}
           </button>
 
-          <a
-            href={downloadUrl}
-            download={`${safeFilename}.pdf`}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white hover:bg-zinc-200 text-zinc-950 rounded-lg transition-colors shrink-0"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>.PDF</span>
-          </a>
+          {hasEdits ? (
+            <button
+              type="button"
+              data-pdf-recompile-btn="true"
+              disabled={isRecompiling}
+              onClick={() => void handleRecompilePdf()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white hover:bg-zinc-200 disabled:opacity-60 text-zinc-950 rounded-lg transition-colors shrink-0 cursor-pointer"
+            >
+              {isRecompiling ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              <span>{isRecompiling ? 'Compiling…' : 'Re-compile .PDF'}</span>
+            </button>
+          ) : (
+            <a
+              href={downloadUrl}
+              download={`${safeFilename}.pdf`}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white hover:bg-zinc-200 text-zinc-950 rounded-lg transition-colors shrink-0"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>.PDF</span>
+            </a>
+          )}
         </div>
       </div>
+
+      {recompileError && (
+        <div className="px-4 py-2 bg-rose-950/50 border-b border-rose-500/30 text-xs text-rose-200">
+          {recompileError}
+        </div>
+      )}
 
       {viewMode === 'pages' ? (
         <div className="p-4 bg-[#09090b] space-y-4">
@@ -480,6 +645,12 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                             </table>
                           </div>
                         )}
+                        {sec.chart && (
+                          <PdfVectorBarChart
+                            chart={sec.chart}
+                            accentBarClass="bg-zinc-900"
+                          />
+                        )}
                       </section>
                     ))}
                   </div>
@@ -530,6 +701,126 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
           )}
 
           {/* Crisp Editorial Paper Sheet Preview Framed in Obsidian Chrome */}
+          {isEditing ? (
+            <div
+              data-pdf-inline-editor="true"
+              className="rounded-xl bg-[#111114] border border-white/[0.1] p-4 space-y-4 max-h-[560px] overflow-y-auto"
+            >
+              <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/[0.08]">
+                <span className="text-xs font-semibold text-white">
+                  Inline Document Editor · Click Re-compile .PDF to export changes
+                </span>
+                <span className="text-[10px] font-mono text-zinc-400">
+                  {doc.sections.length} Sections
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5">
+                <label className="space-y-1">
+                  <span className="text-[11px] font-medium text-zinc-400">Document Title</span>
+                  <input
+                    type="text"
+                    data-pdf-edit-title="true"
+                    value={doc.title}
+                    onChange={(e) =>
+                      updateDoc((prev) => ({ ...prev, title: e.target.value }))
+                    }
+                    className="w-full px-3 py-1.5 rounded-lg bg-[#09090b] border border-white/[0.1] text-sm text-white focus:outline-none focus:border-white/30"
+                  />
+                </label>
+
+                <label className="space-y-1">
+                  <span className="text-[11px] font-medium text-zinc-400">Subtitle</span>
+                  <input
+                    type="text"
+                    value={doc.subtitle}
+                    onChange={(e) =>
+                      updateDoc((prev) => ({ ...prev, subtitle: e.target.value }))
+                    }
+                    className="w-full px-3 py-1.5 rounded-lg bg-[#09090b] border border-white/[0.1] text-xs text-zinc-200 focus:outline-none focus:border-white/30"
+                  />
+                </label>
+
+                <label className="space-y-1">
+                  <span className="text-[11px] font-medium text-zinc-400">
+                    {style.summaryLabel}
+                  </span>
+                  <textarea
+                    rows={3}
+                    value={doc.executiveSummary ?? ''}
+                    onChange={(e) =>
+                      updateDoc((prev) => ({
+                        ...prev,
+                        executiveSummary: e.target.value,
+                      }))
+                    }
+                    className="w-full px-3 py-2 rounded-lg bg-[#09090b] border border-white/[0.1] text-xs text-zinc-200 leading-relaxed focus:outline-none focus:border-white/30"
+                  />
+                </label>
+              </div>
+
+              <div className="space-y-3">
+                {doc.sections.map((sec, sIdx) => (
+                  <div
+                    key={sec.sectionNumber}
+                    className="rounded-lg border border-white/[0.08] bg-[#0b0b0e] p-3 space-y-2"
+                  >
+                    <div className="text-[10px] font-mono text-zinc-500">
+                      Section {sec.sectionNumber}
+                    </div>
+                    <input
+                      type="text"
+                      value={sec.heading}
+                      onChange={(e) =>
+                        updateDoc((prev) => ({
+                          ...prev,
+                          sections: prev.sections.map((item, idx) =>
+                            idx === sIdx ? { ...item, heading: e.target.value } : item,
+                          ),
+                        }))
+                      }
+                      className="w-full px-2.5 py-1.5 rounded-md bg-[#111114] border border-white/[0.1] text-xs font-semibold text-white focus:outline-none focus:border-white/30"
+                    />
+                    <textarea
+                      rows={3}
+                      value={sec.content}
+                      onChange={(e) =>
+                        updateDoc((prev) => ({
+                          ...prev,
+                          sections: prev.sections.map((item, idx) =>
+                            idx === sIdx ? { ...item, content: e.target.value } : item,
+                          ),
+                        }))
+                      }
+                      className="w-full px-2.5 py-1.5 rounded-md bg-[#111114] border border-white/[0.1] text-xs text-zinc-200 leading-relaxed focus:outline-none focus:border-white/30"
+                    />
+                    <label className="block space-y-1">
+                      <span className="text-[10px] text-zinc-500">
+                        Bullets (one per line)
+                      </span>
+                      <textarea
+                        rows={Math.max(2, Math.min(5, sec.bullets.length || 2))}
+                        value={sec.bullets.join('\n')}
+                        onChange={(e) => {
+                          const nextBullets = e.target.value
+                            .split('\n')
+                            .map((line) => line.trim())
+                            .filter(Boolean);
+                          updateDoc((prev) => ({
+                            ...prev,
+                            sections: prev.sections.map((item, idx) =>
+                              idx === sIdx ? { ...item, bullets: nextBullets } : item,
+                            ),
+                          }));
+                        }}
+                        className="w-full px-2.5 py-1.5 rounded-md bg-[#111114] border border-white/[0.1] text-xs text-zinc-300 font-mono focus:outline-none focus:border-white/30"
+                      />
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
           <div
             style={{ fontSize: `${zoomPct}%` }}
             className="rounded-xl bg-white text-zinc-900 shadow-2xl overflow-hidden border border-white/15 max-h-[560px] overflow-y-auto"
@@ -689,6 +980,13 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                       </div>
                     </div>
                   )}
+
+                  {sec.chart && (
+                    <PdfVectorBarChart
+                      chart={sec.chart}
+                      accentBarClass="bg-zinc-900"
+                    />
+                  )}
                 </section>
               ))}
 
@@ -701,6 +999,7 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
               </div>
             </div>
           </div>
+          )}
 
           {selectedSectionIdx !== null && (
             <div className="flex items-center justify-between">

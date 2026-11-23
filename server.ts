@@ -28,6 +28,12 @@ import type {
   SpecialistAgentName,
 } from './backend/shared/contracts/index.js';
 import {
+  buildPdfBinaryBuffer,
+  buildPptxBinaryBuffer,
+  validatePdfDocumentSpec,
+  validatePptPresentationSpec,
+} from './backend/services/agent/src/index.js';
+import {
   assertRootRuntimeDemoOrLocalOnly,
   type KartikPlatformRuntime,
   sharedPlatformRuntime,
@@ -356,6 +362,140 @@ export function createKartikExpressApp(
       }
     },
   );
+
+  app.post(
+    '/api/v1/conversations/:conversationId/messages/stream',
+    async (req, res) => {
+      const requestId =
+        readHeaderString(req, 'idempotency-key') ??
+        readHeaderString(req, 'x-request-id') ??
+        `req_${crypto.randomBytes(6).toString('hex')}`;
+      const traceId =
+        readHeaderString(req, 'x-trace-id') ??
+        `trc_${crypto.randomBytes(8).toString('hex')}`;
+
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders?.();
+
+      const abortController = new AbortController();
+      let closed = false;
+      res.on('close', () => {
+        if (!res.writableEnded) {
+          closed = true;
+          abortController.abort(new Error('Client disconnected'));
+        }
+      });
+
+      const writeSse = (event: string, data: unknown) => {
+        if (closed || res.writableEnded) return;
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+
+      try {
+        const actor = resolveWorkspaceIdentity(req);
+        const body = (req.body ?? {}) as {
+          prompt?: string;
+          preferredAgent?: SpecialistAgentName;
+          responseDepth?: ChatResponseDepth;
+          attachmentFileIds?: string[];
+        };
+        const responseDepth: ChatResponseDepth | undefined =
+          body.responseDepth === 'concise' ||
+          body.responseDepth === 'balanced' ||
+          body.responseDepth === 'deep'
+            ? body.responseDepth
+            : undefined;
+
+        const turn = await runtime.sendMessageTurn(actor, {
+          conversationId: req.params.conversationId ?? '',
+          requestId,
+          traceId,
+          prompt: String(body.prompt ?? ''),
+          preferredAgent: body.preferredAgent,
+          responseDepth,
+          attachmentFileIds: body.attachmentFileIds,
+          signal: abortController.signal,
+          onProgress: (ev) => writeSse('stage', ev),
+          onTextDelta: (delta) => writeSse('delta', { text: delta }),
+        });
+
+        writeSse('complete', {
+          ok: true,
+          ...createSuccessEnvelope(traceId, turn, { requestId }),
+        });
+        if (!res.writableEnded) {
+          res.end();
+        }
+      } catch (err) {
+        if (!closed && !res.writableEnded) {
+          const message =
+            err instanceof AppError
+              ? err.message
+              : err instanceof Error
+                ? err.message
+                : 'Stream execution failed';
+          const code = err instanceof AppError ? err.code : 'INTERNAL_ERROR';
+          writeSse('error', { code, message });
+          res.end();
+        }
+      }
+    },
+  );
+
+  app.post('/api/v1/artifacts/recompile', (req, res) => {
+    try {
+      resolveWorkspaceIdentity(req);
+      const body = (req.body ?? {}) as {
+        kind?: 'pdf' | 'ppt';
+        spec?: unknown;
+        filename?: string;
+      };
+      const safeStem =
+        String(body.filename ?? 'kartik-artifact')
+          .replace(/[^A-Za-z0-9._-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 60) || 'kartik-artifact';
+
+      if (body.kind === 'pdf') {
+        const validatedSpec = validatePdfDocumentSpec(body.spec);
+        const compiled = buildPdfBinaryBuffer(validatedSpec);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${safeStem}.pdf"`,
+        );
+        res.status(200).send(compiled.pdfBytes);
+        return;
+      }
+
+      if (body.kind === 'ppt') {
+        const validatedSpec = validatePptPresentationSpec(body.spec);
+        const compiled = buildPptxBinaryBuffer(validatedSpec);
+        res.setHeader(
+          'Content-Type',
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        );
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${safeStem}.pptx"`,
+        );
+        res.status(200).send(compiled.pptxBytes);
+        return;
+      }
+
+      throw new AppError(
+        'VALIDATION_FAILED',
+        'kind must be either "pdf" or "ppt"',
+      );
+    } catch (err) {
+      sendError(req, res, err);
+    }
+  });
 
   app.delete(
     '/api/v1/conversations/:conversationId',

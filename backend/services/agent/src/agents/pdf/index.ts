@@ -17,6 +17,7 @@ import {
   type PdfMetricSpec,
   type PdfSectionSpec,
   type PdfTableSpec,
+  type VectorChartSpec,
 } from '../../schemas/index.js';
 
 export interface PdfDocumentGenerationResult {
@@ -32,6 +33,8 @@ export interface PdfDocumentProvider {
   generatePdfDocument(input: {
     readonly prompt: string;
     readonly maxOutputTokens: number;
+    readonly existingArtifactContext?: string;
+    readonly signal?: AbortSignal;
   }): Promise<PdfDocumentGenerationResult>;
 }
 
@@ -837,6 +840,116 @@ function renderSectionTable(
   canvas.cursorY -= 12;
 }
 
+function renderVectorBarChart(
+  canvas: PdfPageCanvas,
+  chart: VectorChartSpec,
+  theme: PdfThemePalette,
+): void {
+  const bars = chart.bars;
+  if (bars.length < 2) return;
+
+  const rowHeight = 20;
+  const headerH = chart.title ? 20 : 8;
+  const boxHeight = headerH + bars.length * rowHeight + 14;
+  canvas.ensureSpace(boxHeight + 10);
+
+  const boxBottomY = canvas.cursorY - boxHeight;
+  drawFilledRect(
+    canvas.stream,
+    MARGIN_X,
+    boxBottomY,
+    CONTENT_WIDTH,
+    boxHeight,
+    [0.985, 0.99, 0.996],
+    theme.borderRgb,
+    0.65,
+  );
+  drawFilledRect(
+    canvas.stream,
+    MARGIN_X,
+    boxBottomY + boxHeight - 2.5,
+    CONTENT_WIDTH,
+    2.5,
+    theme.accentRgb,
+  );
+
+  let y = canvas.cursorY - 14;
+  if (chart.title) {
+    drawText(
+      canvas.stream,
+      'F2',
+      8.6,
+      theme.bannerRgb,
+      MARGIN_X + 12,
+      y,
+      chart.unit && !chart.title.toLowerCase().includes(chart.unit.toLowerCase())
+        ? `${chart.title} (${chart.unit})`
+        : chart.title,
+    );
+    y -= 18;
+  } else {
+    y -= 6;
+  }
+
+  const maxVal = Math.max(1, ...bars.map((b) => b.value));
+  const labelColW = 148;
+  const valueColW = 64;
+  const trackX = MARGIN_X + labelColW + 10;
+  const trackW = CONTENT_WIDTH - labelColW - valueColW - 24;
+
+  for (const bar of bars) {
+    const labelText =
+      bar.label.length > 24 ? `${bar.label.slice(0, 22)}..` : bar.label;
+    drawText(
+      canvas.stream,
+      'F1',
+      8.5,
+      [0.18, 0.21, 0.27],
+      MARGIN_X + 12,
+      y - 1,
+      labelText,
+    );
+
+    // Track background
+    drawFilledRect(
+      canvas.stream,
+      trackX,
+      y - 3,
+      trackW,
+      9,
+      [0.91, 0.93, 0.96],
+    );
+
+    // Filled proportional bar
+    const ratio = Math.max(0.03, Math.min(1, bar.value / maxVal));
+    drawFilledRect(
+      canvas.stream,
+      trackX,
+      y - 3,
+      Math.max(4, trackW * ratio),
+      9,
+      theme.accentRgb,
+    );
+
+    const valLabel =
+      bar.displayValue ||
+      `${bar.value}${chart.unit ? ` ${chart.unit}` : ''}`;
+    drawText(
+      canvas.stream,
+      'F2',
+      8.4,
+      theme.bannerRgb,
+      trackX + trackW + 8,
+      y - 1,
+      valLabel.slice(0, 14),
+    );
+
+    y -= rowHeight;
+  }
+
+  canvas.cursorY = boxBottomY - 12;
+}
+
 /**
  * Compiles a validated `PdfDocumentSpec` into a publication-grade standards-compliant `%PDF-1.4`
  * binary buffer with executive masthead, metrics, tables, callouts, `/Info` metadata,
@@ -970,6 +1083,12 @@ export function buildPdfBinaryBuffer(rawSpec: PdfDocumentSpec): {
     if (section.table) {
       canvas.cursorY -= 4;
       renderSectionTable(canvas, section.table, theme);
+    }
+
+    // Optional vector horizontal bar chart
+    if (section.chart) {
+      canvas.cursorY -= 4;
+      renderVectorBarChart(canvas, section.chart, theme);
     }
   }
 
@@ -1122,6 +1241,7 @@ export function buildPdfBinaryBuffer(rawSpec: PdfDocumentSpec): {
  */
 export function formatPdfSummaryMarkdown(spec: PdfDocumentSpec, pageCount: number): string {
   const tableCount = spec.sections.filter((s) => Boolean(s.table)).length;
+  const chartCount = spec.sections.filter((s) => Boolean(s.chart)).length;
   const metricCount = spec.keyMetrics?.length ?? 0;
   const highlights: string[] = [
     `**${pageCount} page${pageCount === 1 ? '' : 's'}**`,
@@ -1138,6 +1258,9 @@ export function formatPdfSummaryMarkdown(spec: PdfDocumentSpec, pageCount: numbe
   }
   if (tableCount > 0) {
     highlights.push(`**${tableCount} table${tableCount === 1 ? '' : 's'}**`);
+  }
+  if (chartCount > 0) {
+    highlights.push(`**${chartCount} chart${chartCount === 1 ? '' : 's'}**`);
   }
 
   const lines: string[] = [

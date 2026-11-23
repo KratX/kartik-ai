@@ -8,22 +8,102 @@ import {
   Download,
   FileText,
   LayoutGrid,
+  Loader2,
   Maximize2,
   Minimize2,
   MonitorPlay,
+  Moon,
+  Pencil,
   Presentation,
+  RotateCcw,
+  Sun,
 } from 'lucide-react';
 import {
   buildArtifactRawDownloadUrl,
   parsePptArtifactSlideDeck,
   pptDeckSpecToMarkdown,
+  pptViewModelToCompileSpec,
   type InteractiveSlideViewModel,
   type ParsedPptDeckTheme,
+  type ParsedPptSurfaceMode,
+  type ParsedSlideDeckViewModel,
+  type ParsedVectorChart,
 } from '../slide-deck-and-markdown.js';
 import type { ArtifactRecord } from '../../types/index.js';
 
 export interface SlideDeckPreviewProps {
   readonly artifact: ArtifactRecord;
+}
+
+function SlideVectorBarChart({
+  chart,
+  isLight,
+  accentBarClass,
+}: {
+  readonly chart: ParsedVectorChart;
+  readonly isLight: boolean;
+  readonly accentBarClass: string;
+}) {
+  const maxVal = Math.max(1, ...chart.bars.map((b) => b.value));
+  return (
+    <div
+      data-slide-vector-chart="true"
+      className={`rounded-xl border p-3.5 space-y-2 ${
+        isLight
+          ? 'border-zinc-200 bg-white'
+          : 'border-white/[0.09] bg-black/25'
+      }`}
+    >
+      {chart.title && (
+        <div
+          className={`flex items-center justify-between gap-2 text-[11px] font-semibold ${
+            isLight ? 'text-zinc-800' : 'text-zinc-200'
+          }`}
+        >
+          <span>{chart.title}</span>
+          {chart.unit && (
+            <span className="text-[10px] font-mono text-zinc-500">{chart.unit}</span>
+          )}
+        </div>
+      )}
+      <div className="space-y-1.5">
+        {chart.bars.map((bar, idx) => {
+          const pct = Math.max(5, Math.min(100, (bar.value / maxVal) * 100));
+          const display =
+            bar.displayValue ??
+            `${bar.value}${chart.unit ? ` ${chart.unit}` : ''}`;
+          return (
+            <div key={`${bar.label}-${idx}`} className="space-y-0.5">
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span
+                  className={`truncate ${isLight ? 'text-zinc-700' : 'text-zinc-300'}`}
+                >
+                  {bar.label}
+                </span>
+                <span
+                  className={`font-mono tabular-nums font-semibold shrink-0 ${
+                    isLight ? 'text-zinc-950' : 'text-white'
+                  }`}
+                >
+                  {display}
+                </span>
+              </div>
+              <div
+                className={`h-2 w-full rounded overflow-hidden ${
+                  isLight ? 'bg-zinc-200' : 'bg-white/[0.08]'
+                }`}
+              >
+                <div
+                  className={`h-full rounded ${isLight ? 'bg-zinc-900' : accentBarClass}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 interface ThemeVisualTokens {
@@ -143,29 +223,41 @@ const LAYOUT_SHORT_LABELS: Readonly<Record<string, string>> = {
 function SlideStageBody({
   slide,
   tokens,
+  isLight = false,
   deckAuthor,
   deckDate,
 }: {
   readonly slide: InteractiveSlideViewModel;
   readonly tokens: ThemeVisualTokens;
+  readonly isLight?: boolean;
   readonly deckAuthor?: string;
   readonly deckDate?: string;
 }) {
+  const headingText = isLight ? 'text-zinc-950' : 'text-white';
+  const bodyText = isLight ? 'text-zinc-700' : 'text-zinc-200';
+  const mutedText = isLight ? 'text-zinc-500' : 'text-zinc-400';
+  const surfaceBg = isLight ? 'bg-white' : tokens.surfaceBg;
+  const surfaceAltBg = isLight ? 'bg-zinc-100/90' : tokens.surfaceAltBg;
+  const borderClass = isLight ? 'border-zinc-200' : tokens.border;
+  const accentBorderClass = isLight ? 'border-zinc-300' : tokens.accentBorder;
+  const accentBarClass = isLight ? 'bg-zinc-900' : tokens.accentBar;
+  const accentTextClass = isLight ? 'text-zinc-700' : tokens.accentText;
+
   if (slide.kind === 'cover') {
     return (
       <div className="my-auto flex flex-col justify-center py-4">
-        <div className={`text-xs font-mono tracking-wide ${tokens.accentText}`}>
+        <div className={`text-xs font-mono tracking-wide ${accentTextClass}`}>
           {tokens.label}
         </div>
-        <h3 className="mt-2.5 text-2xl sm:text-3xl font-semibold text-white tracking-tight leading-tight text-balance max-w-2xl">
+        <h3 className={`mt-2.5 text-2xl sm:text-3xl font-semibold ${headingText} tracking-tight leading-tight text-balance max-w-2xl`}>
           {slide.title}
         </h3>
         {slide.subtitle && (
-          <p className="mt-2.5 text-sm sm:text-base text-zinc-300 max-w-2xl leading-relaxed">
+          <p className={`mt-2.5 text-sm sm:text-base ${isLight ? 'text-zinc-600' : 'text-zinc-300'} max-w-2xl leading-relaxed`}>
             {slide.subtitle}
           </p>
         )}
-        <div className={`mt-6 h-0.5 w-16 rounded-full ${tokens.accentBar}`} />
+        <div className={`mt-6 h-0.5 w-16 rounded-full ${accentBarClass}`} />
         <div className="mt-5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-zinc-400 tabular-nums">
           <span>{slide.totalSlides} Slides</span>
           <span aria-hidden="true">·</span>
@@ -190,20 +282,20 @@ function SlideStageBody({
   if (slide.kind === 'closing') {
     return (
       <div
-        className={`my-auto rounded-xl border ${tokens.border} ${tokens.surfaceBg} p-6 sm:p-8 text-center`}
+        className={`my-auto rounded-xl border ${borderClass} ${surfaceBg} p-6 sm:p-8 text-center`}
       >
-        <div className={`text-xs font-mono tracking-wide ${tokens.accentText}`}>
+        <div className={`text-xs font-mono tracking-wide ${accentTextClass}`}>
           Closing Summary
         </div>
-        <h3 className="mt-2 text-2xl sm:text-3xl font-semibold text-white tracking-tight text-balance">
+        <h3 className={`mt-2 text-2xl sm:text-3xl font-semibold ${headingText} tracking-tight text-balance`}>
           {slide.title}
         </h3>
         {slide.subtitle && (
-          <p className="mt-2 text-sm text-zinc-300 max-w-xl mx-auto">
+          <p className={`mt-2 text-sm ${isLight ? 'text-zinc-600' : 'text-zinc-300'} max-w-xl mx-auto`}>
             {slide.subtitle}
           </p>
         )}
-        <div className="mt-5 space-y-1.5 text-xs text-zinc-400">
+        <div className={`mt-5 space-y-1.5 text-xs ${mutedText}`}>
           {slide.bullets.map((line, i) => (
             <p key={i}>{line}</p>
           ))}
@@ -225,33 +317,41 @@ function SlideStageBody({
           {slide.metrics.map((m, i) => (
             <div
               key={i}
-              className={`rounded-xl border ${tokens.border} ${tokens.surfaceBg} p-3.5 flex flex-col justify-between`}
+              className={`rounded-xl border ${borderClass} ${surfaceBg} p-3.5 flex flex-col justify-between`}
             >
-              <span className="text-[11px] font-medium text-zinc-400 line-clamp-2 leading-tight">
+              <span className={`text-[11px] font-medium ${mutedText} line-clamp-2 leading-tight`}>
                 {m.label}
               </span>
-              <span className="mt-2 text-xl sm:text-2xl font-semibold font-mono tabular-nums tracking-tight text-white">
+              <span className={`mt-2 text-xl sm:text-2xl font-semibold font-mono tabular-nums tracking-tight ${headingText}`}>
                 {m.value}
               </span>
               {m.delta && (
-                <span className="mt-1 text-[11px] text-emerald-400 font-mono tabular-nums line-clamp-1">
+                <span className={`mt-1 text-[11px] font-mono tabular-nums line-clamp-1 ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
                   {m.delta}
                 </span>
               )}
             </div>
           ))}
         </div>
-        {slide.bullets.length > 0 && (
-          <div className={`rounded-xl border ${tokens.border} ${tokens.surfaceAltBg} p-3.5`}>
-            <ul className="space-y-1.5">
-              {slide.bullets.slice(0, 3).map((b, i) => (
-                <li key={i} className="flex items-start gap-2.5 text-xs sm:text-sm text-zinc-200">
-                  <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${tokens.accentBar}`} />
-                  <span>{b}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
+        {slide.chart ? (
+          <SlideVectorBarChart
+            chart={slide.chart}
+            isLight={isLight}
+            accentBarClass={tokens.accentBar}
+          />
+        ) : (
+          slide.bullets.length > 0 && (
+            <div className={`rounded-xl border ${borderClass} ${surfaceAltBg} p-3.5`}>
+              <ul className="space-y-1.5">
+                {slide.bullets.slice(0, 3).map((b, i) => (
+                  <li key={i} className={`flex items-start gap-2.5 text-xs sm:text-sm ${bodyText}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${accentBarClass}`} />
+                    <span>{b}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
         )}
       </div>
     );
@@ -266,21 +366,21 @@ function SlideStageBody({
               key={idx}
               className={`rounded-xl border p-4 flex flex-col ${
                 idx === 1
-                  ? `${tokens.accentBorder} ${tokens.surfaceAltBg}`
-                  : `${tokens.border} ${tokens.surfaceBg}`
+                  ? `${accentBorderClass} ${surfaceAltBg}`
+                  : `${borderClass} ${surfaceBg}`
               }`}
             >
               <h4
-                className={`text-sm font-semibold pb-2 border-b ${tokens.border} ${
-                  idx === 1 ? 'text-white' : 'text-zinc-200'
+                className={`text-sm font-semibold pb-2 border-b ${borderClass} ${
+                  idx === 1 ? headingText : bodyText
                 }`}
               >
                 {col.heading}
               </h4>
               <ul className="mt-2.5 space-y-2">
                 {col.points.map((pt, pIdx) => (
-                  <li key={pIdx} className="flex items-start gap-2 text-xs text-zinc-300 leading-relaxed">
-                    <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${tokens.accentBar}`} />
+                  <li key={pIdx} className={`flex items-start gap-2 text-xs ${bodyText} leading-relaxed`}>
+                    <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${accentBarClass}`} />
                     <span>{pt}</span>
                   </li>
                 ))}
@@ -289,9 +389,9 @@ function SlideStageBody({
           ))}
         </div>
         {slide.callout && (
-          <div className={`rounded-xl border ${tokens.accentBorder} ${tokens.surfaceBg} px-3.5 py-2.5 text-xs text-zinc-100`}>
-            <span className="font-semibold text-white">Key Takeaway: </span>
-            <span className="text-zinc-300">{slide.callout}</span>
+          <div className={`rounded-xl border ${accentBorderClass} ${surfaceBg} px-3.5 py-2.5 text-xs`}>
+            <span className={`font-semibold ${headingText}`}>Key Takeaway: </span>
+            <span className={bodyText}>{slide.callout}</span>
           </div>
         )}
       </div>
@@ -311,24 +411,24 @@ function SlideStageBody({
           {slide.steps.map((st, idx) => (
             <div
               key={idx}
-              className={`rounded-xl border ${tokens.border} ${tokens.surfaceBg} p-3.5 flex flex-col`}
+              className={`rounded-xl border ${borderClass} ${surfaceBg} p-3.5 flex flex-col`}
             >
-              <span className="text-xs font-mono font-semibold tabular-nums text-zinc-400">
+              <span className={`text-xs font-mono font-semibold tabular-nums ${mutedText}`}>
                 {st.step}
               </span>
-              <h4 className="mt-1.5 text-xs sm:text-sm font-semibold text-white leading-snug">
+              <h4 className={`mt-1.5 text-xs sm:text-sm font-semibold ${headingText} leading-snug`}>
                 {st.title}
               </h4>
-              <p className="mt-1.5 text-[11px] sm:text-xs text-zinc-400 leading-relaxed">
+              <p className={`mt-1.5 text-[11px] sm:text-xs ${mutedText} leading-relaxed`}>
                 {st.detail}
               </p>
             </div>
           ))}
         </div>
         {slide.callout && (
-          <div className={`rounded-xl border ${tokens.accentBorder} ${tokens.surfaceAltBg} px-3.5 py-2.5 text-xs text-zinc-100`}>
-            <span className="font-semibold text-white">Outcome: </span>
-            <span className="text-zinc-300">{slide.callout}</span>
+          <div className={`rounded-xl border ${accentBorderClass} ${surfaceAltBg} px-3.5 py-2.5 text-xs`}>
+            <span className={`font-semibold ${headingText}`}>Outcome: </span>
+            <span className={bodyText}>{slide.callout}</span>
           </div>
         )}
       </div>
@@ -339,23 +439,23 @@ function SlideStageBody({
     return (
       <div className="my-auto grid grid-cols-1 sm:grid-cols-12 gap-3.5 items-stretch py-2">
         <div
-          className={`sm:col-span-5 rounded-xl border ${tokens.accentBorder} ${tokens.surfaceAltBg} p-4 flex flex-col justify-center`}
+          className={`sm:col-span-5 rounded-xl border ${accentBorderClass} ${surfaceAltBg} p-4 flex flex-col justify-center`}
         >
-          <span className="text-[11px] font-mono text-zinc-400">Core Thesis</span>
-          <p className="mt-2 text-sm sm:text-base font-semibold text-white leading-snug text-balance">
+          <span className={`text-[11px] font-mono ${mutedText}`}>Core Thesis</span>
+          <p className={`mt-2 text-sm sm:text-base font-semibold ${headingText} leading-snug text-balance`}>
             &ldquo;{slide.callout}&rdquo;
           </p>
         </div>
         <div
-          className={`sm:col-span-7 rounded-xl border ${tokens.border} ${tokens.surfaceBg} p-4 flex flex-col justify-center`}
+          className={`sm:col-span-7 rounded-xl border ${borderClass} ${surfaceBg} p-4 flex flex-col justify-center`}
         >
-          <span className="text-[11px] font-mono text-zinc-500">
+          <span className={`text-[11px] font-mono ${mutedText}`}>
             Supporting Evidence
           </span>
           <ul className="mt-2.5 space-y-2.5">
             {slide.bullets.slice(0, 4).map((b, i) => (
-              <li key={i} className="flex items-start gap-2.5 text-xs sm:text-sm text-zinc-200 leading-relaxed">
-                <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${tokens.accentBar}`} />
+              <li key={i} className={`flex items-start gap-2.5 text-xs sm:text-sm ${bodyText} leading-relaxed`}>
+                <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${accentBarClass}`} />
                 <span>{b}</span>
               </li>
             ))}
@@ -367,25 +467,52 @@ function SlideStageBody({
 
   return (
     <div className="my-auto space-y-3 py-2">
-      <div className={`rounded-xl border ${tokens.border} ${tokens.surfaceBg} p-4`}>
-        <ul className="space-y-2.5">
-          {slide.bullets.slice(0, 6).map((bullet, idx) => (
-            <li
-              key={idx}
-              className="flex items-start gap-3 text-xs sm:text-sm text-zinc-200 leading-relaxed"
-            >
-              <span className="text-xs font-mono font-semibold tabular-nums mt-0.5 shrink-0 text-zinc-500">
-                {String(idx + 1).padStart(2, '0')}
-              </span>
-              <span>{bullet}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
+      {slide.chart ? (
+        <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-stretch">
+          <div className={`sm:col-span-6 rounded-xl border ${borderClass} ${surfaceBg} p-4`}>
+            <ul className="space-y-2.5">
+              {slide.bullets.slice(0, 5).map((bullet, idx) => (
+                <li
+                  key={idx}
+                  className={`flex items-start gap-2.5 text-xs sm:text-sm ${bodyText} leading-relaxed`}
+                >
+                  <span className={`text-xs font-mono font-semibold tabular-nums mt-0.5 shrink-0 ${mutedText}`}>
+                    {String(idx + 1).padStart(2, '0')}
+                  </span>
+                  <span>{bullet}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="sm:col-span-6 flex flex-col justify-center">
+            <SlideVectorBarChart
+              chart={slide.chart}
+              isLight={isLight}
+              accentBarClass={tokens.accentBar}
+            />
+          </div>
+        </div>
+      ) : (
+        <div className={`rounded-xl border ${borderClass} ${surfaceBg} p-4`}>
+          <ul className="space-y-2.5">
+            {slide.bullets.slice(0, 6).map((bullet, idx) => (
+              <li
+                key={idx}
+                className={`flex items-start gap-3 text-xs sm:text-sm ${bodyText} leading-relaxed`}
+              >
+                <span className={`text-xs font-mono font-semibold tabular-nums mt-0.5 shrink-0 ${mutedText}`}>
+                  {String(idx + 1).padStart(2, '0')}
+                </span>
+                <span>{bullet}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {slide.callout && (
-        <div className={`rounded-xl border ${tokens.accentBorder} ${tokens.surfaceAltBg} px-3.5 py-2.5 text-xs text-zinc-100`}>
-          <span className="font-semibold text-white">Key Takeaway: </span>
-          <span className="text-zinc-300">{slide.callout}</span>
+        <div className={`rounded-xl border ${accentBorderClass} ${surfaceAltBg} px-3.5 py-2.5 text-xs`}>
+          <span className={`font-semibold ${headingText}`}>Key Takeaway: </span>
+          <span className={bodyText}>{slide.callout}</span>
         </div>
       )}
     </div>
@@ -394,10 +521,37 @@ function SlideStageBody({
 
 export function SlideDeckPreview({ artifact }: SlideDeckPreviewProps) {
   const specFile = artifact.filesManifest.find((f) => f.path === 'slides-spec.json');
-  const deck = useMemo(
+  const parsedDeck = useMemo(
     () => parsePptArtifactSlideDeck(specFile?.content, artifact.title),
     [specFile?.content, artifact.title],
   );
+
+  const [editedDeck, setEditedDeck] = useState<ParsedSlideDeckViewModel | null>(null);
+  const [surfaceMode, setSurfaceMode] = useState<ParsedPptSurfaceMode>(
+    parsedDeck.surfaceMode,
+  );
+  const [isEditingSlide, setIsEditingSlide] = useState(false);
+  const [isRecompiling, setIsRecompiling] = useState(false);
+  const [recompileError, setRecompileError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEditedDeck(null);
+    setSurfaceMode(parsedDeck.surfaceMode);
+    setIsEditingSlide(false);
+    setRecompileError(null);
+  }, [artifact.artifactId, parsedDeck.surfaceMode]);
+
+  const deck: ParsedSlideDeckViewModel = useMemo(() => {
+    const base = editedDeck ?? parsedDeck;
+    if (base.surfaceMode === surfaceMode) {
+      return base;
+    }
+    return { ...base, surfaceMode };
+  }, [editedDeck, parsedDeck, surfaceMode]);
+
+  const hasModifications =
+    editedDeck !== null || surfaceMode !== parsedDeck.surfaceMode;
+  const isLight = surfaceMode === 'light';
   const tokens = DECK_THEME_TOKENS[deck.theme] ?? DECK_THEME_TOKENS.editorial_story;
 
   const [activeIndex, setActiveIndex] = useState(0);
@@ -410,11 +564,32 @@ export function SlideDeckPreview({ artifact }: SlideDeckPreviewProps) {
   const currentSlide = deck.slides[safeIndex] ?? deck.slides[0]!;
   const downloadUrl = buildArtifactRawDownloadUrl(artifact.artifactId);
   const safeFilename =
-    artifact.title
+    deck.deckTitle
       .replace(/[^A-Za-z0-9._-]+/g, '-')
       .replace(/^-+|-+$/g, '')
       .toLowerCase()
       .slice(0, 60) || 'kartik-presentation';
+
+  const updateCurrentSlide = (
+    updater: (slide: InteractiveSlideViewModel) => InteractiveSlideViewModel,
+  ) => {
+    setEditedDeck((prev) => {
+      const base = prev ?? parsedDeck;
+      const nextSlides = base.slides.map((s, idx) =>
+        idx === safeIndex ? updater(s) : s,
+      );
+      const nextDeckTitle =
+        safeIndex === 0 && nextSlides[0]?.title
+          ? nextSlides[0].title
+          : base.deckTitle;
+      return {
+        ...base,
+        deckTitle: nextDeckTitle,
+        surfaceMode,
+        slides: nextSlides,
+      };
+    });
+  };
 
   useEffect(() => {
     if (!isFullscreen) return;
@@ -444,8 +619,43 @@ export function SlideDeckPreview({ artifact }: SlideDeckPreviewProps) {
     }
   };
 
+  const handleRecompilePptx = async () => {
+    setIsRecompiling(true);
+    setRecompileError(null);
+    try {
+      const res = await fetch('/api/v1/artifacts/recompile', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'ppt',
+          filename: safeFilename,
+          spec: pptViewModelToCompileSpec(deck),
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`Re-compile failed (HTTP ${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${safeFilename}.pptx`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      setRecompileError(
+        err instanceof Error ? err.message : 'Failed to re-compile PPTX',
+      );
+    } finally {
+      setIsRecompiling(false);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (viewMode !== 'stage') return;
+    if (viewMode !== 'stage' || isEditingSlide) return;
     if (e.key === 'ArrowRight') {
       e.preventDefault();
       setActiveIndex((i) => Math.min(deck.slides.length - 1, i + 1));
@@ -455,18 +665,26 @@ export function SlideDeckPreview({ artifact }: SlideDeckPreviewProps) {
     }
   };
 
+  const stageBorder = isLight ? 'border-zinc-200' : tokens.border;
+  const stageBg = isLight ? 'bg-[#fafafa]' : tokens.canvasBg;
+
   const renderStageCanvas = (expanded = false) => (
     <div
+      data-slide-surface={surfaceMode}
       className={`relative ${
         expanded ? 'w-full max-w-5xl aspect-video' : 'min-h-[340px] sm:aspect-video w-full'
-      } rounded-xl border ${tokens.border} ${tokens.canvasBg} overflow-hidden flex flex-col justify-between shadow-2xl`}
+      } rounded-xl border ${stageBorder} ${stageBg} overflow-hidden flex flex-col justify-between shadow-2xl transition-colors`}
     >
-      <div className="h-[2px] w-full shrink-0 bg-gradient-to-r from-transparent via-white/55 to-transparent" />
+      <div
+        className={`h-[2px] w-full shrink-0 bg-gradient-to-r from-transparent ${
+          isLight ? 'via-zinc-900/45' : 'via-white/55'
+        } to-transparent`}
+      />
       <div className="flex-1 flex flex-col justify-between px-5 sm:px-8 py-4 sm:py-6 overflow-y-auto">
         {currentSlide.kind === 'content' && (
-          <div className={`pb-3 border-b ${tokens.border}`}>
+          <div className={`pb-3 border-b ${stageBorder}`}>
             <div className="flex items-center justify-between gap-2 text-[11px] tabular-nums">
-              <span className="font-mono text-zinc-400 truncate">
+              <span className={`font-mono truncate ${isLight ? 'text-zinc-500' : 'text-zinc-400'}`}>
                 {currentSlide.kicker ||
                   `${tokens.label} · Module ${String(currentSlide.slideNumber - 1).padStart(2, '0')}`}
               </span>
@@ -476,11 +694,19 @@ export function SlideDeckPreview({ artifact }: SlideDeckPreviewProps) {
                 {String(currentSlide.totalSlides).padStart(2, '0')}
               </span>
             </div>
-            <h3 className="mt-1.5 text-lg sm:text-xl font-semibold text-white tracking-tight leading-snug text-balance">
+            <h3
+              className={`mt-1.5 text-lg sm:text-xl font-semibold tracking-tight leading-snug text-balance ${
+                isLight ? 'text-zinc-950' : 'text-white'
+              }`}
+            >
               {currentSlide.title}
             </h3>
             {currentSlide.subtitle && (
-              <p className="mt-0.5 text-xs text-zinc-400 leading-normal">
+              <p
+                className={`mt-0.5 text-xs leading-normal ${
+                  isLight ? 'text-zinc-600' : 'text-zinc-400'
+                }`}
+              >
                 {currentSlide.subtitle}
               </p>
             )}
@@ -489,7 +715,7 @@ export function SlideDeckPreview({ artifact }: SlideDeckPreviewProps) {
 
         <AnimatePresence mode="wait">
           <motion.div
-            key={currentSlide.slideNumber}
+            key={`${currentSlide.slideNumber}-${surfaceMode}`}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
@@ -499,6 +725,7 @@ export function SlideDeckPreview({ artifact }: SlideDeckPreviewProps) {
             <SlideStageBody
               slide={currentSlide}
               tokens={tokens}
+              isLight={isLight}
               deckAuthor={deck.author}
               deckDate={deck.generatedDate}
             />
@@ -506,7 +733,7 @@ export function SlideDeckPreview({ artifact }: SlideDeckPreviewProps) {
         </AnimatePresence>
 
         <div
-          className={`flex items-center justify-between pt-2.5 border-t ${tokens.border} text-[11px] text-zinc-500 tabular-nums`}
+          className={`flex items-center justify-between pt-2.5 border-t ${stageBorder} text-[11px] text-zinc-500 tabular-nums`}
         >
           <span className="truncate">{currentSlide.footer}</span>
           <span className="font-mono shrink-0">
@@ -593,6 +820,63 @@ export function SlideDeckPreview({ artifact }: SlideDeckPreviewProps) {
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
+              {/* Light / Dark Deck Surface Toggle */}
+              <button
+                type="button"
+                data-slide-surface-toggle="true"
+                onClick={() =>
+                  setSurfaceMode((prev) => (prev === 'dark' ? 'light' : 'dark'))
+                }
+                title={isLight ? 'Switch deck to Obsidian Dark theme' : 'Switch deck to Paper & Ink Light theme'}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-white/[0.08] bg-[#16161b] text-zinc-300 hover:bg-white/[0.08] hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {isLight ? (
+                  <>
+                    <Moon className="w-3.5 h-3.5" />
+                    <span>Dark</span>
+                  </>
+                ) : (
+                  <>
+                    <Sun className="w-3.5 h-3.5" />
+                    <span>Light</span>
+                  </>
+                )}
+              </button>
+
+              {/* Inline Slide Edit Toggle */}
+              <button
+                type="button"
+                data-slide-edit-toggle="true"
+                aria-pressed={isEditingSlide}
+                onClick={() => {
+                  setViewMode('stage');
+                  setIsEditingSlide((v) => !v);
+                }}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  isEditingSlide
+                    ? 'border-white bg-white text-zinc-950 font-semibold'
+                    : 'border-white/[0.08] bg-[#16161b] text-zinc-300 hover:bg-white/[0.08] hover:text-white'
+                }`}
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>{isEditingSlide ? 'Done' : 'Edit'}</span>
+              </button>
+
+              {hasModifications && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditedDeck(null);
+                    setSurfaceMode(parsedDeck.surfaceMode);
+                    setRecompileError(null);
+                  }}
+                  title="Reset slide edits & theme"
+                  className="inline-flex items-center justify-center p-1.5 text-xs rounded-lg border border-white/[0.08] bg-[#16161b] text-zinc-300 hover:bg-white/[0.08] hover:text-white transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              )}
+
               <button
                 type="button"
                 aria-expanded={showNotes}
@@ -631,17 +915,40 @@ export function SlideDeckPreview({ artifact }: SlideDeckPreviewProps) {
                 <span>{copiedMd ? 'Copied' : 'Copy MD'}</span>
               </button>
 
-              <a
-                href={downloadUrl}
-                download={`${safeFilename}.pptx`}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white hover:bg-zinc-200 text-zinc-950 transition-colors whitespace-nowrap shrink-0"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>.PPTX</span>
-              </a>
+              {hasModifications ? (
+                <button
+                  type="button"
+                  data-slide-recompile-btn="true"
+                  disabled={isRecompiling}
+                  onClick={() => void handleRecompilePptx()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white hover:bg-zinc-200 disabled:opacity-60 text-zinc-950 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {isRecompiling ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Download className="w-3.5 h-3.5" />
+                  )}
+                  <span>{isRecompiling ? 'Compiling…' : 'Re-compile .PPTX'}</span>
+                </button>
+              ) : (
+                <a
+                  href={downloadUrl}
+                  download={`${safeFilename}.pptx`}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white hover:bg-zinc-200 text-zinc-950 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>.PPTX</span>
+                </a>
+              )}
             </div>
           </div>
         </div>
+
+        {recompileError && (
+          <div className="px-4 py-2 bg-rose-950/50 border-b border-rose-500/30 text-xs text-rose-200">
+            {recompileError}
+          </div>
+        )}
 
         {/* Body: Stage View OR Grid Overview */}
         {viewMode === 'grid' ? (
@@ -706,6 +1013,95 @@ export function SlideDeckPreview({ artifact }: SlideDeckPreviewProps) {
         ) : (
           <div className="p-4 space-y-3">
             {renderStageCanvas(false)}
+
+            {/* Inline Quick-Edit Drawer for Active Slide */}
+            {isEditingSlide && (
+              <div
+                data-slide-inline-editor="true"
+                className="rounded-xl border border-white/[0.1] bg-[#111114] p-4 space-y-3"
+              >
+                <div className="flex items-center justify-between text-[11px] text-zinc-400">
+                  <span className="font-semibold text-white">
+                    Editing Slide {currentSlide.slideNumber} of {deck.slides.length}
+                  </span>
+                  <span className="font-mono text-[10px]">
+                    Updates live · Click Re-compile .PPTX to export
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <label className="space-y-1">
+                    <span className="text-[10px] text-zinc-400">Slide Title</span>
+                    <input
+                      type="text"
+                      data-slide-edit-title="true"
+                      value={currentSlide.title}
+                      onChange={(e) =>
+                        updateCurrentSlide((s) => ({ ...s, title: e.target.value }))
+                      }
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-[#09090b] border border-white/[0.1] text-xs text-white focus:outline-none focus:border-white/30"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[10px] text-zinc-400">Subtitle</span>
+                    <input
+                      type="text"
+                      value={currentSlide.subtitle}
+                      onChange={(e) =>
+                        updateCurrentSlide((s) => ({ ...s, subtitle: e.target.value }))
+                      }
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-[#09090b] border border-white/[0.1] text-xs text-zinc-200 focus:outline-none focus:border-white/30"
+                    />
+                  </label>
+                </div>
+                <label className="block space-y-1">
+                  <span className="text-[10px] text-zinc-400">
+                    Bullet Points (one per line)
+                  </span>
+                  <textarea
+                    rows={3}
+                    value={currentSlide.bullets.join('\n')}
+                    onChange={(e) => {
+                      const nextBullets = e.target.value
+                        .split('\n')
+                        .map((line) => line.trim())
+                        .filter(Boolean);
+                      updateCurrentSlide((s) => ({ ...s, bullets: nextBullets }));
+                    }}
+                    className="w-full px-2.5 py-1.5 rounded-lg bg-[#09090b] border border-white/[0.1] text-xs text-zinc-200 font-mono focus:outline-none focus:border-white/30"
+                  />
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <label className="space-y-1">
+                    <span className="text-[10px] text-zinc-400">Key Takeaway / Callout</span>
+                    <input
+                      type="text"
+                      value={currentSlide.callout ?? ''}
+                      onChange={(e) =>
+                        updateCurrentSlide((s) => ({
+                          ...s,
+                          callout: e.target.value || undefined,
+                        }))
+                      }
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-[#09090b] border border-white/[0.1] text-xs text-zinc-200 focus:outline-none focus:border-white/30"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[10px] text-zinc-400">Speaker Notes</span>
+                    <input
+                      type="text"
+                      value={currentSlide.speakerNotes ?? ''}
+                      onChange={(e) =>
+                        updateCurrentSlide((s) => ({
+                          ...s,
+                          speakerNotes: e.target.value || undefined,
+                        }))
+                      }
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-[#09090b] border border-white/[0.1] text-xs text-zinc-200 focus:outline-none focus:border-white/30"
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
 
             {/* Collapsible Presenter Speaker Notes */}
             <AnimatePresence>

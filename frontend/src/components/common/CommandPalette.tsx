@@ -3,10 +3,11 @@ import { AnimatePresence, motion } from 'motion/react';
 import {
   Code2,
   CreditCard,
+  Download,
   Eye,
+  FileCode2,
   FileSearch,
   FileText,
-  FolderArchive,
   Globe,
   Image as ImageIcon,
   Keyboard,
@@ -42,6 +43,7 @@ export interface CommandPaletteProps {
   readonly selectedAgent: SpecialistAgentName;
   readonly responseDepth: ChatResponseDepth;
   readonly hasArtifacts: boolean;
+  readonly hasMessages?: boolean;
   readonly onSelectConversation: (conversationId: string) => void;
   readonly onCreateConversation: () => void;
   readonly onSelectAgent: (agent: SpecialistAgentName) => void;
@@ -49,7 +51,8 @@ export interface CommandPaletteProps {
   readonly onOpenBilling: () => void;
   readonly onOpenShortcuts?: () => void;
   readonly onToggleArtifactCanvas: () => void;
-  readonly onOpenFixDownloads?: () => void;
+  readonly onExportMarkdown?: () => void;
+  readonly onExportPdf?: () => void;
 }
 
 interface PaletteEntry extends CommandPaletteSearchable {
@@ -90,6 +93,7 @@ export function CommandPalette({
   selectedAgent,
   responseDepth,
   hasArtifacts,
+  hasMessages = false,
   onSelectConversation,
   onCreateConversation,
   onSelectAgent,
@@ -97,7 +101,8 @@ export function CommandPalette({
   onOpenBilling,
   onOpenShortcuts,
   onToggleArtifactCanvas,
-  onOpenFixDownloads,
+  onExportMarkdown,
+  onExportPdf,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
@@ -171,16 +176,31 @@ export function CommandPalette({
       });
     }
 
-    if (onOpenFixDownloads) {
+    if (hasMessages && onExportMarkdown) {
       entries.push({
-        id: 'action:downloads',
+        id: 'action:export-md',
         section: 'Quick Actions',
-        label: 'Fix & ZIP Downloads',
-        subtitle: 'Download changed file archives & Git commit messages',
-        keywords: ['zip', 'download', 'fix', 'git', 'export'],
-        icon: <FolderArchive className="w-4 h-4" />,
+        label: 'Export Conversation as Markdown (.md)',
+        subtitle: 'Download this entire thread as clean GitHub-Flavored Markdown',
+        keywords: ['export', 'markdown', 'md', 'download', 'transcript', 'save'],
+        icon: <FileCode2 className="w-4 h-4" />,
         onSelect: () => {
-          onOpenFixDownloads();
+          onExportMarkdown();
+          onClose();
+        },
+      });
+    }
+
+    if (hasMessages && onExportPdf) {
+      entries.push({
+        id: 'action:export-pdf',
+        section: 'Quick Actions',
+        label: 'Export Conversation as PDF (.pdf)',
+        subtitle: 'Compile this thread into a formatted %PDF-1.4 document',
+        keywords: ['export', 'pdf', 'download', 'transcript', 'print', 'save'],
+        icon: <Download className="w-4 h-4" />,
+        onSelect: () => {
+          onExportPdf();
           onClose();
         },
       });
@@ -243,10 +263,12 @@ export function CommandPalette({
   }, [
     conversations,
     hasArtifacts,
+    hasMessages,
     onClose,
     onCreateConversation,
+    onExportMarkdown,
+    onExportPdf,
     onOpenBilling,
-    onOpenFixDownloads,
     onOpenShortcuts,
     onSelectAgent,
     onSelectConversation,

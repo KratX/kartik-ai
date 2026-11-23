@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {
   HERO_SCRAMBLE_LINES,
   SLASH_COMMANDS,
+  buildClientZipBytes,
+  buildConversationMarkdownExport,
+  buildConversationTranscriptPdfSpec,
   clampCanvasWidthPct,
   computeCreditCapacity,
   computeScrambleFrame,
@@ -17,6 +20,7 @@ import {
   groupConversationsByDate,
   inferConversationArtifactKind,
   matchSlashCommands,
+  parseSseEventBlock,
   stripLeadingSlashCommand,
   summarizeCreditLedger,
 } from '../src/components/workspace-ux-helpers.js';
@@ -375,5 +379,79 @@ test('inferConversationArtifactKind prioritizes recorded artifactType and falls 
   assert.equal(inferConversationArtifactKind('Generate monochrome architectural artwork'), 'generated_image');
   assert.equal(inferConversationArtifactKind('Explain PostgreSQL MVCC locking'), null);
 });
+
+test('parseSseEventBlock parses typed SSE frames, multi-line data, and ignores comment keepalives', () => {
+  assert.equal(parseSseEventBlock(': keepalive\n'), null);
+  const delta = parseSseEventBlock('event: delta\ndata: {"text":"Hello "}\n');
+  assert.deepEqual(delta, { event: 'delta', data: '{"text":"Hello "}' });
+
+  const multiline = parseSseEventBlock('event: stage\ndata: line1\ndata: line2');
+  assert.deepEqual(multiline, { event: 'stage', data: 'line1\nline2' });
+
+  const defaultEvent = parseSseEventBlock('data: {"ok":true}');
+  assert.deepEqual(defaultEvent, { event: 'message', data: '{"ok":true}' });
+});
+
+test('buildClientZipBytes produces a valid PKZIP archive with local headers, filenames, contents, and EOCD', () => {
+  const bytes = buildClientZipBytes([
+    { path: 'index.html', content: '<!doctype html><h1>Pomodoro</h1>' },
+    { path: '/styles.css', content: 'body { background: #09090b; }' },
+    { path: 'app.js', content: 'console.log("ready");' },
+  ]);
+
+  // Verify PKZIP local file header magic bytes PK\x03\x04
+  assert.equal(bytes[0], 0x50);
+  assert.equal(bytes[1], 0x4b);
+  assert.equal(bytes[2], 0x03);
+  assert.equal(bytes[3], 0x04);
+
+  // Verify End of Central Directory signature PK\x05\x06 at tail
+  const tailOffset = bytes.length - 22;
+  assert.equal(bytes[tailOffset], 0x50);
+  assert.equal(bytes[tailOffset + 1], 0x4b);
+  assert.equal(bytes[tailOffset + 2], 0x05);
+  assert.equal(bytes[tailOffset + 3], 0x06);
+
+  const decoded = new TextDecoder().decode(bytes);
+  assert.ok(decoded.includes('index.html'));
+  assert.ok(decoded.includes('styles.css'));
+  assert.ok(decoded.includes('app.js'));
+  assert.ok(decoded.includes('Pomodoro'));
+});
+
+test('buildConversationMarkdownExport and buildConversationTranscriptPdfSpec format thread transcripts cleanly', () => {
+  const threadMessages: PlatformMessage[] = [
+    {
+      messageId: 'm1',
+      conversationId: 'c1',
+      role: 'user',
+      content: 'Tell me about Kyoto tea ceremonies.',
+      createdAt: '2026-11-22T10:00:00.000Z',
+    },
+    {
+      messageId: 'm2',
+      conversationId: 'c1',
+      role: 'assistant',
+      content: 'Kyoto chado centers on harmony, respect, purity, and tranquility.',
+      agentUsed: 'chat',
+      creditsCharged: 1,
+      createdAt: '2026-11-22T10:00:02.000Z',
+      citations: [{ sourceId: 'src_1', title: 'Urasenke Tradition', urlOrPage: 'https://example.org/chado' }],
+    },
+  ];
+
+  const md = buildConversationMarkdownExport('Kyoto Tea Culture', threadMessages);
+  assert.ok(md.includes('# Kyoto Tea Culture'));
+  assert.ok(md.includes('## You'));
+  assert.ok(md.includes('## Kartik.ai (CHAT)'));
+  assert.ok(md.includes('Urasenke Tradition'));
+
+  const pdfSpec = buildConversationTranscriptPdfSpec('Kyoto Tea Culture', threadMessages);
+  assert.equal(pdfSpec.title, 'Kyoto Tea Culture');
+  assert.equal(pdfSpec.sections.length, 2);
+  assert.equal(pdfSpec.keyMetrics[0]?.value, '2');
+  assert.ok(pdfSpec.sections[1]?.bullets.some((b) => b.includes('Urasenke Tradition')));
+});
+
 
 

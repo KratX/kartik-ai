@@ -21,6 +21,7 @@ import type {
 import {
   HERO_SCRAMBLE_LINES,
   getTimeOfDayGreeting,
+  type LiveStreamProgressState,
 } from '../workspace-ux-helpers.js';
 import {
   BackgroundBeams,
@@ -40,44 +41,44 @@ const HERO_STARTER_PROMPTS: ReadonlyArray<{
 }> = [
   {
     agent: 'coding',
-    label: 'Build Interactive App',
-    subtitle: '3-file HTML/CSS/JS live sandbox preview',
+    label: 'Pomodoro Focus Studio',
+    subtitle: 'Interactive HTML/CSS/JS timer with session log & ring',
     tag: 'Code',
     prompt:
-      'Build an interactive calculator app in HTML, CSS, and JavaScript',
+      'Build an interactive Pomodoro focus timer web app with customizable work/break intervals, circular progress ring, and session history in HTML, CSS, and JavaScript',
     icon: <Code2 className="w-4 h-4 text-zinc-200" />,
   },
   {
     agent: 'ppt',
-    label: 'Design Keynote Deck',
-    subtitle: '16:9 interactive slides + .pptx download',
+    label: 'Studio Ghibli Keynote',
+    subtitle: 'Custom 16:9 presentation + light/dark .pptx export',
     tag: 'Slides',
     prompt:
-      'Create a 6-slide presentation on Zero-Trust Cloud Microservices Architecture',
+      'Create a 6-slide presentation on the Art, Worldbuilding, and Storytelling of Studio Ghibli',
     icon: <Presentation className="w-4 h-4 text-zinc-200" />,
   },
   {
     agent: 'pdf',
-    label: 'Compile PDF Report',
-    subtitle: 'Editorial %PDF-1.4 document with KPIs',
+    label: 'Kyoto Cultural Guide',
+    subtitle: 'Editorial multi-page %PDF-1.4 guide with itinerary & tables',
     tag: 'PDF',
     prompt:
-      'Generate a PDF technical report on Distributed Consensus & Raft Quorum Safety',
+      'Generate a beautifully structured PDF travel and cultural guide for 3 days in Kyoto covering temples, seasonal food, neighborhoods, and etiquette',
     icon: <FileText className="w-4 h-4 text-zinc-200" />,
   },
   {
     agent: 'search',
-    label: 'Live Web Research',
-    subtitle: 'Cited synthesis with verified sources',
+    label: 'Fusion Energy 2026',
+    subtitle: 'Live web research with verified citations & sources',
     tag: 'Search',
     prompt:
-      'Search the web for PostgreSQL MVCC concurrency control benchmarks and cite sources',
+      'Search the web for the latest nuclear fusion energy breakthroughs and commercial milestones in 2025-2026 and cite sources',
     icon: <Globe className="w-4 h-4 text-zinc-200" />,
   },
   {
     agent: 'image',
-    label: 'Create Studio Artwork',
-    subtitle: 'Art-directed visuals + prompt inspector',
+    label: 'Architectural Pavilion',
+    subtitle: '16:9 studio artwork + art-directed prompt inspector',
     tag: 'Image',
     prompt:
       'Create a 16:9 widescreen architectural minimalist monochrome concrete pavilion at dusk with volumetric skylight',
@@ -85,11 +86,11 @@ const HERO_STARTER_PROMPTS: ReadonlyArray<{
   },
   {
     agent: 'chat',
-    label: 'Deep Technical Brief',
-    subtitle: '5-mode reasoning with follow-ups & handoffs',
+    label: 'CRISPR Gene Editing',
+    subtitle: 'Structured explainer with medical breakthroughs & ethics',
     tag: 'Chat',
     prompt:
-      'Explain PostgreSQL MVCC vs optimistic locking in TypeScript services with an actionable checklist',
+      'Explain how CRISPR-Cas9 gene editing works, its breakthroughs in medicine, and the ethical trade-offs in clear structured sections',
     icon: <Sparkles className="w-4 h-4 text-zinc-200" />,
   },
 ];
@@ -98,6 +99,7 @@ export interface ChatAreaProps {
   readonly messages: readonly PlatformMessage[];
   readonly isLoading: boolean;
   readonly activeAgent?: SpecialistAgentName;
+  readonly liveStreamState?: LiveStreamProgressState | null;
   readonly userDisplayName?: string | null;
   readonly streamingMessageIds?: ReadonlySet<string>;
   readonly activeCanvasArtifactId?: string | null;
@@ -140,6 +142,7 @@ export function ChatArea({
   messages,
   isLoading,
   activeAgent,
+  liveStreamState = null,
   userDisplayName,
   streamingMessageIds,
   activeCanvasArtifactId,
@@ -168,7 +171,9 @@ export function ChatArea({
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const dragDepthRef = useRef(0);
-  const isActivelyStreaming = (streamingMessageIds?.size ?? 0) > 0;
+  const isActivelyStreaming =
+    (streamingMessageIds?.size ?? 0) > 0 ||
+    Boolean(isLoading && liveStreamState?.partialText);
 
   const lightboxImage =
     controlledLightbox !== undefined ? controlledLightbox : internalLightbox;
@@ -409,6 +414,7 @@ export function ChatArea({
               messages={messages}
               isLoading={isLoading}
               activeAgent={activeAgent}
+              liveStreamState={liveStreamState}
               streamingMessageIds={streamingMessageIds}
               activeCanvasArtifactId={activeCanvasArtifactId}
               isCanvasOpen={isCanvasOpen}

@@ -44,6 +44,7 @@ import {
   RedisAgentRateLimitStore,
   RedisDailyBudgetStore,
   type AgentCitation,
+  type AgentProgressEvent,
   type ArtifactRecord,
   type SearchImageGalleryItem,
   type UploadedFileRecord,
@@ -1110,6 +1111,9 @@ export class KartikPlatformRuntime {
       readonly preferredAgent?: SpecialistAgentName;
       readonly responseDepth?: ChatResponseDepth;
       readonly attachmentFileIds?: readonly string[];
+      readonly onProgress?: (event: AgentProgressEvent) => void;
+      readonly onTextDelta?: (delta: string) => void;
+      readonly signal?: AbortSignal;
     },
   ) {
     const user = await this.hydrateUserFromPersistence(actor);
@@ -1376,22 +1380,81 @@ export class KartikPlatformRuntime {
           }
         : undefined;
 
+    // Extract latest matching artifact in this thread so follow-up turns iteratively refine it
+    let activeArtifactContext:
+      | {
+          readonly artifactType: 'code_bundle' | 'pdf_document' | 'ppt_presentation';
+          readonly title: string;
+          readonly serializedContext: string;
+        }
+      | undefined;
+    const desiredArtifactType =
+      targetAgent === 'coding'
+        ? 'code_bundle'
+        : targetAgent === 'pdf'
+          ? 'pdf_document'
+          : targetAgent === 'ppt'
+            ? 'ppt_presentation'
+            : null;
+    if (desiredArtifactType) {
+      for (let i = priorMessages.length - 1; i >= 0 && !activeArtifactContext; i -= 1) {
+        const msgArtifacts = priorMessages[i]?.artifacts ?? [];
+        for (let j = msgArtifacts.length - 1; j >= 0; j -= 1) {
+          const cand = msgArtifacts[j];
+          if (cand && cand.artifactType === desiredArtifactType) {
+            const serializedContext =
+              desiredArtifactType === 'code_bundle'
+                ? JSON.stringify({
+                    title: cand.title,
+                    files: cand.filesManifest.map((f) => ({
+                      path: f.path,
+                      content: f.content.slice(0, 3500),
+                    })),
+                  })
+                : (cand.filesManifest[0]?.content ?? '').slice(0, 6500);
+            if (serializedContext.length > 0) {
+              activeArtifactContext = {
+                artifactType: desiredArtifactType,
+                title: cand.title,
+                serializedContext,
+              };
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    input.onProgress?.({
+      stage: 'routing',
+      label: `Routed to ${targetAgent.toUpperCase()} specialist…`,
+      agent: targetAgent,
+    });
+
     // 5. Phase 2 — Execute Specialist Agent via Unified Chat / LangGraph Router
     let execResult: Awaited<ReturnType<AgentGraphExecutor['execute']>>;
     try {
-      execResult = await this.graphExecutor.execute({
-        requestId,
-        traceId: input.traceId,
-        userId: user.userId,
-        conversationId: conv.conversationId,
-        messageId: userMessage.messageId,
-        prompt: trimmedPrompt,
-        preferredAgent: input.preferredAgent,
-        attachmentFileIds: effectiveAttachmentFileIds,
-        responseDepth: input.responseDepth,
-        conversationHistory,
-        threadContext,
-      });
+      execResult = await this.graphExecutor.execute(
+        {
+          requestId,
+          traceId: input.traceId,
+          userId: user.userId,
+          conversationId: conv.conversationId,
+          messageId: userMessage.messageId,
+          prompt: trimmedPrompt,
+          preferredAgent: input.preferredAgent,
+          attachmentFileIds: effectiveAttachmentFileIds,
+          responseDepth: input.responseDepth,
+          conversationHistory,
+          threadContext,
+        },
+        {
+          activeArtifactContext,
+          onProgress: input.onProgress,
+          onTextDelta: input.onTextDelta,
+          signal: input.signal,
+        },
+      );
     } catch (err) {
       const failNowIso = new Date().toISOString();
       const errCode =

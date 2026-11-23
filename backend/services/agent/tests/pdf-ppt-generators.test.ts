@@ -23,6 +23,8 @@ import {
   buildPptxBinaryBuffer,
   classifyPdfDocumentType,
   classifyPptDeckTheme,
+  classifyPptSurfaceMode,
+  extractRequestedSlideCount,
   loadAgentConfig,
   routePromptToSpecialist,
   transliterateForPdf,
@@ -517,6 +519,96 @@ describe('@kartik/agent — Phase 10 PDF & PPTX Generators & Schemas (Micro-step
       ghibliFollowUps.some((q) => /engineering workshop|ROI KPIs/i.test(q)),
       false,
     );
+  });
+
+  it('Fix #28: parses dynamic slide counts (3..10), detects Light/Dark deck surfaces, and renders vector bar charts into both %PDF-1.4 and OpenXML .pptx binaries', async () => {
+    // 1. Dynamic slide count extraction & clamping
+    assert.equal(extractRequestedSlideCount('Make a 4-slide deck on Kyoto tea culture'), 4);
+    assert.equal(extractRequestedSlideCount('Build a 9 slides presentation on space travel'), 9);
+    assert.equal(extractRequestedSlideCount('Create a 2-slide overview'), 3); // clamped min 3
+    assert.equal(extractRequestedSlideCount('Create a 25-slide encyclopedia'), 10); // clamped max 10
+    assert.equal(extractRequestedSlideCount('Create a deck on cinema'), 6); // default 6
+
+    // 2. Light vs Dark surface mode detection
+    assert.equal(
+      classifyPptSurfaceMode('Create a clean white light mode presentation on minimalist architecture'),
+      'light',
+    );
+    assert.equal(
+      classifyPptSurfaceMode('Build an Obsidian dark presentation on jazz history'),
+      'dark',
+    );
+    assert.equal(
+      classifyPptSurfaceMode('Create a presentation on Studio Ghibli'),
+      'dark',
+    );
+
+    // 3. Dynamic slide count + light surface compiled into real .pptx XML
+    const mockPpt = new MockPptPresentationProvider();
+    const fourSlideLight = await mockPpt.generatePptPresentation({
+      prompt: 'Create a 4-slide light mode presentation on Kyoto Seasonal Cuisine',
+      maxOutputTokens: 4096,
+    });
+    assert.equal(fourSlideLight.slideCount, 6); // Cover + 4 content + Closing
+    assert.equal(fourSlideLight.spec.surfaceMode, 'light');
+    const lightZipText = Buffer.from(fourSlideLight.pptxBytes).toString('utf8');
+    assert.ok(lightZipText.includes('FAFAFA'), 'Light mode PPTX must use Paper & Ink #FAFAFA canvas');
+
+    // 4. Vector bar chart compiled into both %PDF-1.4 and OpenXML .pptx
+    const pdfWithChart = validatePdfDocumentSpec({
+      title: 'Renewable Capacity Growth 2026',
+      subtitle: 'Regional Output Comparison',
+      documentType: 'general_guide',
+      sections: [
+        {
+          heading: 'Installed Output by Source',
+          content: 'Solar and wind capacity expanded rapidly across global grids.',
+          bullets: ['Utility-scale solar led net additions'],
+          chart: {
+            title: 'Added Capacity (GW)',
+            unit: 'GW',
+            bars: [
+              { label: 'Solar PV', value: 420, displayValue: '420 GW' },
+              { label: 'Wind', value: 185, displayValue: '185 GW' },
+              { label: 'Hydro', value: 45, displayValue: '45 GW' },
+            ],
+          },
+        },
+      ],
+    });
+    assert.equal(pdfWithChart.sections[0]?.chart?.bars.length, 3);
+    const compiledPdf = buildPdfBinaryBuffer(pdfWithChart);
+    const pdfAscii = compiledPdf.pdfBytes.toString('ascii');
+    assert.ok(pdfAscii.includes('Added Capacity \\(GW\\)'));
+    assert.ok(pdfAscii.includes('Solar PV'));
+    assert.ok(pdfAscii.includes('420 GW'));
+
+    const pptWithChart = validatePptPresentationSpec({
+      title: 'Renewable Capacity Growth 2026',
+      subtitle: 'Key Highlights',
+      surfaceMode: 'light',
+      slides: [
+        {
+          layout: 'bullets',
+          title: 'Global Additions',
+          subtitle: '2026 Breakdown',
+          bullets: ['Solar PV accounts for over 60% of net new capacity'],
+          chart: {
+            title: 'Net Additions (GW)',
+            unit: 'GW',
+            bars: [
+              { label: 'Solar PV', value: 420, displayValue: '420 GW' },
+              { label: 'Wind', value: 185, displayValue: '185 GW' },
+            ],
+          },
+        },
+      ],
+    });
+    const compiledPpt = buildPptxBinaryBuffer(pptWithChart);
+    const chartPptXml = compiledPpt.pptxBytes.toString('utf8');
+    assert.ok(chartPptXml.includes('ChartBar_1'), 'PPTX must render DrawingML vector chart bars');
+    assert.ok(chartPptXml.includes('Net Additions (GW)'));
+    assert.ok(chartPptXml.includes('420 GW'));
   });
 });
 

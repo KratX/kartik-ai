@@ -11,8 +11,15 @@
  * - Global Overlays: `CommandPalette` (⌘K / Ctrl+K), `BillingDrawer`, `AuthModal`, `ShortcutsModal`, and Dev-only `StepFileDownloads`.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import React, {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type {
   ApiEnvelope,
   ArtifactRecord,
@@ -30,17 +37,15 @@ import {
   type AgentSelectorPillSpec,
 } from './components/slide-deck-and-markdown.js';
 import {
+  buildConversationMarkdownExport,
+  buildConversationTranscriptPdfSpec,
   clampCanvasWidthPct,
   extractThreadArtifacts,
+  parseSseEventBlock,
+  type LiveStreamProgressState,
 } from './components/workspace-ux-helpers.js';
-import { ArtifactPanel } from './components/artifacts/ArtifactPanel.js';
-import { AuthModal } from './components/auth/AuthModal.js';
-import { BillingDrawer } from './components/billing/BillingDrawer.js';
 import { ChatArea } from './components/chat/ChatArea.js';
 import { ChatInput } from './components/chat/ChatInput.js';
-import { AttachmentLightbox } from './components/common/AttachmentLightbox.js';
-import { CommandPalette } from './components/common/CommandPalette.js';
-import { ShortcutsModal } from './components/common/ShortcutsModal.js';
 import {
   ToastStack,
   type WorkspaceToast,
@@ -48,7 +53,37 @@ import {
 } from './components/common/ToastStack.js';
 import { Nav } from './components/layout/Nav.js';
 import { Sidebar } from './components/layout/Sidebar.js';
-import { StepFileDownloads } from './components/common/StepFileDownloads.js';
+
+const LazyArtifactPanel = lazy(() =>
+  import('./components/artifacts/ArtifactPanel.js').then((m) => ({
+    default: m.ArtifactPanel,
+  })),
+);
+const LazyAuthModal = lazy(() =>
+  import('./components/auth/AuthModal.js').then((m) => ({
+    default: m.AuthModal,
+  })),
+);
+const LazyBillingDrawer = lazy(() =>
+  import('./components/billing/BillingDrawer.js').then((m) => ({
+    default: m.BillingDrawer,
+  })),
+);
+const LazyAttachmentLightbox = lazy(() =>
+  import('./components/common/AttachmentLightbox.js').then((m) => ({
+    default: m.AttachmentLightbox,
+  })),
+);
+const LazyCommandPalette = lazy(() =>
+  import('./components/common/CommandPalette.js').then((m) => ({
+    default: m.CommandPalette,
+  })),
+);
+const LazyShortcutsModal = lazy(() =>
+  import('./components/common/ShortcutsModal.js').then((m) => ({
+    default: m.ShortcutsModal,
+  })),
+);
 
 function createClientIdempotencyKey(): string {
   return `idem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -202,7 +237,7 @@ export function App() {
   const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
   const [isBillingDrawerOpen, setIsBillingDrawerOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isFixDownloadsOpen, setIsFixDownloadsOpen] = useState(false);
+  const [isExportingThreadPdf, setIsExportingThreadPdf] = useState(false);
   const [previewAttachment, setPreviewAttachment] =
     useState<UploadedFileRecord | null>(null);
   const [lightboxImage, setLightboxImage] = useState<{
@@ -227,6 +262,8 @@ export function App() {
   const [streamingMessageIds, setStreamingMessageIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
+  const [liveStreamState, setLiveStreamState] =
+    useState<LiveStreamProgressState | null>(null);
   const [threadArtifactTypes, setThreadArtifactTypes] = useState<
     Readonly<Record<string, ArtifactRecord['artifactType']>>
   >({});
@@ -257,6 +294,7 @@ export function App() {
   const [isTurnLoading, setIsTurnLoading] = useState(false);
   const [toasts, setToasts] = useState<readonly WorkspaceToast[]>([]);
   const toastTimersRef = useRef<Map<string, number>>(new Map());
+  const activeTurnAbortRef = useRef<AbortController | null>(null);
 
   const activeConversationIdRef = useRef<string | null>(activeConversationId);
   const messagesLoadSeqRef = useRef(0);
@@ -648,7 +686,15 @@ export function App() {
     }
   };
 
-  // Send or replay a Multi-Agent Turn
+  // Stop an in-flight streaming generation cleanly
+  const handleStopGeneration = useCallback(() => {
+    if (activeTurnAbortRef.current) {
+      activeTurnAbortRef.current.abort();
+      activeTurnAbortRef.current = null;
+    }
+  }, []);
+
+  // Send or replay a Multi-Agent Turn over real-time SSE streaming
   const executeTurnRequest = async (input: {
     readonly conversationId?: string | null;
     readonly requestId: string;
@@ -657,18 +703,44 @@ export function App() {
     readonly responseDepth?: ChatResponseDepth;
     readonly attachmentFileIds?: string[];
   }) => {
+    if (activeTurnAbortRef.current) {
+      activeTurnAbortRef.current.abort();
+    }
+    const abortController = new AbortController();
+    activeTurnAbortRef.current = abortController;
+
+    const initialAgent: SpecialistAgentName = input.preferredAgent ?? 'chat';
     setIsTurnLoading(true);
+    setLiveStreamState({
+      agent: initialAgent,
+      stage: 'routing',
+      stageLabel: 'Connecting to specialist pipeline…',
+      partialText: '',
+    });
+
+    type TurnCompletionPayload = {
+      conversationId: string;
+      requestId: string;
+      traceId: string;
+      remainingCredits: number;
+      creditsCharged: number;
+      idempotentReplay: boolean;
+      userMessage: PlatformMessage;
+      assistantMessage: PlatformMessage;
+    };
 
     try {
       const targetConvId =
         input.conversationId || (await ensureActiveConversationId(input.prompt));
 
       const res = await apiFetch(
-        `/api/v1/conversations/${encodeURIComponent(targetConvId)}/messages`,
+        `/api/v1/conversations/${encodeURIComponent(targetConvId)}/messages/stream`,
         {
           method: 'POST',
+          signal: abortController.signal,
           headers: {
             'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
             'Idempotency-Key': input.requestId,
           },
           body: JSON.stringify({
@@ -680,35 +752,127 @@ export function App() {
         },
       );
 
-      const json = (await res.json()) as ApiEnvelope<{
-        conversationId: string;
-        requestId: string;
-        traceId: string;
-        remainingCredits: number;
-        creditsCharged: number;
-        idempotentReplay: boolean;
-        userMessage: PlatformMessage;
-        assistantMessage: PlatformMessage;
-      }>;
+      let completion: TurnCompletionPayload | null = null;
+      let streamError: { code: string; message: string } | null = null;
+      let receivedLiveDeltas = false;
 
-      if (!json.ok) {
-        pushToast(`${json.error.code}: ${json.error.message}`, 'error');
+      const contentType = res.headers.get('content-type') ?? '';
+      if (contentType.includes('text/event-stream') && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        const processBlock = (rawBlock: string) => {
+          const parsed = parseSseEventBlock(rawBlock);
+          if (!parsed) return;
+          let payload: Record<string, unknown> | null = null;
+          try {
+            payload = JSON.parse(parsed.data) as Record<string, unknown>;
+          } catch {
+            return;
+          }
+          if (!payload) return;
+
+          if (parsed.event === 'stage') {
+            const nextAgent =
+              (typeof payload.agent === 'string'
+                ? (payload.agent as SpecialistAgentName)
+                : undefined) ?? initialAgent;
+            const nextStage =
+              typeof payload.stage === 'string' ? payload.stage : 'working';
+            const nextLabel =
+              typeof payload.label === 'string' && payload.label.trim()
+                ? payload.label.trim()
+                : 'Synthesizing response…';
+            setLiveStreamState((prev) => ({
+              agent: nextAgent,
+              stage: nextStage,
+              stageLabel: nextLabel,
+              partialText: prev?.partialText ?? '',
+            }));
+          } else if (parsed.event === 'delta') {
+            const deltaText =
+              typeof payload.text === 'string' ? payload.text : '';
+            if (deltaText) {
+              receivedLiveDeltas = true;
+              setLiveStreamState((prev) => ({
+                agent: prev?.agent ?? initialAgent,
+                stage: 'streaming',
+                stageLabel: 'Streaming live response…',
+                partialText: `${prev?.partialText ?? ''}${deltaText}`,
+              }));
+            }
+          } else if (parsed.event === 'complete') {
+            const envelope = payload as unknown as ApiEnvelope<TurnCompletionPayload>;
+            if (envelope.ok) {
+              completion = envelope.data;
+            } else if ('error' in envelope && envelope.error) {
+              streamError = {
+                code: envelope.error.code,
+                message: envelope.error.message,
+              };
+            }
+          } else if (parsed.event === 'error') {
+            const envelope = payload as unknown as {
+              error?: { code?: string; message?: string };
+              code?: string;
+              message?: string;
+            };
+            streamError = {
+              code: envelope.error?.code ?? envelope.code ?? 'AGENT_STREAM_ERROR',
+              message:
+                envelope.error?.message ??
+                envelope.message ??
+                'Agent execution failed.',
+            };
+          }
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split(/\r?\n\r?\n/);
+          buffer = frames.pop() ?? '';
+          for (const frame of frames) {
+            processBlock(frame);
+          }
+        }
+        if (buffer.trim()) {
+          processBlock(buffer);
+        }
+      } else {
+        const json = (await res.json()) as ApiEnvelope<TurnCompletionPayload>;
+        if (!json.ok) {
+          streamError = { code: json.error.code, message: json.error.message };
+        } else {
+          completion = json.data;
+        }
+      }
+
+      if (streamError) {
+        pushToast(`${streamError.code}: ${streamError.message}`, 'error');
         return;
       }
 
-      const resolvedConvId = json.data.conversationId || targetConvId;
-      setAvailableCredits(json.data.remainingCredits);
+      if (!completion) {
+        return;
+      }
+
+      const data = completion;
+      const resolvedConvId = data.conversationId || targetConvId;
+      setAvailableCredits(data.remainingCredits);
       setAttachedTurnFiles([]);
 
-      if (json.data.idempotentReplay) {
+      if (data.idempotentReplay) {
         pushToast(
-          `Idempotent replay verified (${json.data.requestId}) — 0 credits deducted.`,
+          `Idempotent replay verified (${data.requestId}) — 0 credits deducted.`,
           'success',
         );
       }
 
       // Auto-open Universal Split-Screen Artifact Canvas for ANY generated artifact
-      const generatedArtifacts = json.data.assistantMessage.artifacts ?? [];
+      const generatedArtifacts = data.assistantMessage.artifacts ?? [];
       const newestArtifact = generatedArtifacts[generatedArtifacts.length - 1];
       if (newestArtifact) {
         setActiveArtifact(newestArtifact);
@@ -722,23 +886,23 @@ export function App() {
       messagesLoadSeqRef.current += 1;
       setActiveConversationIdSafe(resolvedConvId);
 
-      // Stream newly generated assistant replies smoothly character-by-character
-      if (!json.data.idempotentReplay) {
+      // Only run local character-reveal animation when tokens did NOT already stream live over SSE
+      if (!data.idempotentReplay && !receivedLiveDeltas) {
         setStreamingMessageIds((prev) => {
           const next = new Set(prev);
-          next.add(json.data.assistantMessage.messageId);
+          next.add(data.assistantMessage.messageId);
           return next;
         });
       }
 
       setMessages((prev) => {
         const exists = prev.some(
-          (m) => m.messageId === json.data.assistantMessage.messageId,
+          (m) => m.messageId === data.assistantMessage.messageId,
         );
         if (exists) {
           return prev;
         }
-        return [...prev, json.data.userMessage, json.data.assistantMessage];
+        return [...prev, data.userMessage, data.assistantMessage];
       });
 
       await Promise.all([
@@ -746,11 +910,23 @@ export function App() {
         refreshBillingAndAuth(),
       ]);
     } catch (err) {
+      if (
+        (err instanceof DOMException && err.name === 'AbortError') ||
+        (err instanceof Error && err.name === 'AbortError')
+      ) {
+        pushToast('Generation stopped.', 'info');
+        void refreshBillingAndAuth();
+        return;
+      }
       pushToast(
         err instanceof Error ? err.message : 'Failed to execute agent turn.',
         'error',
       );
     } finally {
+      if (activeTurnAbortRef.current === abortController) {
+        activeTurnAbortRef.current = null;
+      }
+      setLiveStreamState(null);
       setIsTurnLoading(false);
     }
   };
@@ -1119,6 +1295,82 @@ export function App() {
   const isHeroMode =
     activeConversationId === null && messages.length === 0 && !isTurnLoading;
 
+  const handleExportThreadMarkdown = useCallback(() => {
+    if (messages.length === 0) return;
+    try {
+      const markdown = buildConversationMarkdownExport(
+        resolvedActiveTitle,
+        messages,
+      );
+      const safeSlug =
+        resolvedActiveTitle
+          .replace(/[^A-Za-z0-9._-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .toLowerCase()
+          .slice(0, 56) || 'kartik-conversation';
+      const blob = new Blob([markdown], {
+        type: 'text/markdown;charset=utf-8',
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${safeSlug}.md`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      pushToast('Exported conversation as Markdown (.md).', 'success');
+    } catch {
+      pushToast('Failed to export Markdown transcript.', 'error');
+    }
+  }, [messages, pushToast, resolvedActiveTitle]);
+
+  const handleExportThreadPdf = useCallback(async () => {
+    if (messages.length === 0 || isExportingThreadPdf) return;
+    setIsExportingThreadPdf(true);
+    try {
+      const safeSlug =
+        resolvedActiveTitle
+          .replace(/[^A-Za-z0-9._-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .toLowerCase()
+          .slice(0, 56) || 'kartik-conversation';
+      const spec = buildConversationTranscriptPdfSpec(
+        resolvedActiveTitle,
+        messages,
+      );
+      const res = await apiFetch('/api/v1/artifacts/recompile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'pdf',
+          filename: safeSlug,
+          spec,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`PDF export failed (HTTP ${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${safeSlug}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      pushToast('Exported conversation transcript as .PDF.', 'success');
+    } catch (err) {
+      pushToast(
+        err instanceof Error ? err.message : 'Failed to export PDF transcript.',
+        'error',
+      );
+    } finally {
+      setIsExportingThreadPdf(false);
+    }
+  }, [isExportingThreadPdf, messages, pushToast, resolvedActiveTitle]);
+
   const sharedComposerProps = {
     selectedAgent,
     onSelectAgent: setSelectedAgent,
@@ -1129,6 +1381,7 @@ export function App() {
     onOpenAttachment: setPreviewAttachment,
     onUploadFile: handleUploadFile,
     onSendMessage: handleSendMessage,
+    onStopGeneration: handleStopGeneration,
     isLoading: isTurnLoading,
   };
 
@@ -1165,6 +1418,8 @@ export function App() {
           <Nav
             conversationTitle={resolvedActiveTitle}
             isHeroMode={isHeroMode}
+            hasMessages={messages.length > 0}
+            isExportingPdf={isExportingThreadPdf}
             availableCredits={availableCredits}
             artifactCount={threadArtifacts.length}
             isArtifactPanelOpen={isArtifactPanelOpen && Boolean(activeArtifact)}
@@ -1189,6 +1444,8 @@ export function App() {
               }
             }}
             onOpenBillingDrawer={() => setIsBillingDrawerOpen(true)}
+            onExportMarkdown={handleExportThreadMarkdown}
+            onExportPdf={() => void handleExportThreadPdf()}
           />
 
           {/* Hero Empty State or Active Editorial Conversation Stream */}
@@ -1196,6 +1453,7 @@ export function App() {
             messages={messages}
             isLoading={isTurnLoading}
             activeAgent={selectedAgent}
+            liveStreamState={liveStreamState}
             userDisplayName={user?.displayName ?? null}
             streamingMessageIds={streamingMessageIds}
             activeCanvasArtifactId={activeArtifact?.artifactId ?? null}
@@ -1225,124 +1483,113 @@ export function App() {
           </ChatArea>
         </div>
 
-        {/* Right Pane: Auto-Opening Universal Split-Screen Artifact Canvas */}
-        <ArtifactPanel
-          artifact={activeArtifact}
-          threadArtifacts={threadArtifacts}
-          isOpen={isArtifactPanelOpen && Boolean(activeArtifact)}
-          isTurnLoading={isTurnLoading}
-          widthPct={canvasWidthPct}
-          onResizeWidthPct={handleResizeCanvasWidthPct}
-          onSelectArtifact={(art) => {
-            setActiveArtifact(art);
-            setIsArtifactPanelOpen(true);
-          }}
-          onClose={() => setIsArtifactPanelOpen(false)}
-          onAskAiToFix={(fixPrompt) =>
-            void handleQuickPromptSelect(fixPrompt, 'coding')
-          }
-          onOpenLightboxImage={setLightboxImage}
-        />
+        {/* Right Pane: Auto-Opening Universal Split-Screen Artifact Canvas (Code-Split) */}
+        {isArtifactPanelOpen && activeArtifact && (
+          <Suspense fallback={null}>
+            <LazyArtifactPanel
+              artifact={activeArtifact}
+              threadArtifacts={threadArtifacts}
+              isOpen={isArtifactPanelOpen && Boolean(activeArtifact)}
+              isTurnLoading={isTurnLoading}
+              widthPct={canvasWidthPct}
+              onResizeWidthPct={handleResizeCanvasWidthPct}
+              onSelectArtifact={(art) => {
+                setActiveArtifact(art);
+                setIsArtifactPanelOpen(true);
+              }}
+              onClose={() => setIsArtifactPanelOpen(false)}
+              onAskAiToFix={(fixPrompt) =>
+                void handleQuickPromptSelect(fixPrompt, 'coding')
+              }
+              onOpenLightboxImage={setLightboxImage}
+            />
+          </Suspense>
+        )}
       </div>
 
-      {/* Global Cmd+K / Ctrl+K Command Palette */}
-      <CommandPalette
-        isOpen={isCommandPaletteOpen}
-        onClose={() => setIsCommandPaletteOpen(false)}
-        conversations={conversations}
-        titleOverrides={titleOverrides}
-        selectedAgent={selectedAgent}
-        responseDepth={responseDepth}
-        hasArtifacts={threadArtifacts.length > 0}
-        onSelectConversation={(id) => void handleSelectConversation(id)}
-        onCreateConversation={handleCreateConversation}
-        onSelectAgent={setSelectedAgent}
-        onSelectResponseDepth={setResponseDepth}
-        onOpenBilling={() => setIsBillingDrawerOpen(true)}
-        onOpenShortcuts={() => setIsShortcutsModalOpen(true)}
-        onToggleArtifactCanvas={() => {
-          if (!activeArtifact && threadArtifacts.length > 0) {
-            setActiveArtifact(
-              threadArtifacts[threadArtifacts.length - 1] ?? null,
-            );
-            setIsArtifactPanelOpen(true);
-          } else {
-            setIsArtifactPanelOpen((prev) => !prev);
-          }
-        }}
-        onOpenFixDownloads={
-          import.meta.env.DEV ? () => setIsFixDownloadsOpen(true) : undefined
-        }
-      />
+      {/* Global Cmd+K / Ctrl+K Command Palette (Code-Split) */}
+      {isCommandPaletteOpen && (
+        <Suspense fallback={null}>
+          <LazyCommandPalette
+            isOpen={isCommandPaletteOpen}
+            onClose={() => setIsCommandPaletteOpen(false)}
+            conversations={conversations}
+            titleOverrides={titleOverrides}
+            selectedAgent={selectedAgent}
+            responseDepth={responseDepth}
+            hasArtifacts={threadArtifacts.length > 0}
+            hasMessages={messages.length > 0}
+            onSelectConversation={(id) => void handleSelectConversation(id)}
+            onCreateConversation={handleCreateConversation}
+            onSelectAgent={setSelectedAgent}
+            onSelectResponseDepth={setResponseDepth}
+            onOpenBilling={() => setIsBillingDrawerOpen(true)}
+            onOpenShortcuts={() => setIsShortcutsModalOpen(true)}
+            onToggleArtifactCanvas={() => {
+              if (!activeArtifact && threadArtifacts.length > 0) {
+                setActiveArtifact(
+                  threadArtifacts[threadArtifacts.length - 1] ?? null,
+                );
+                setIsArtifactPanelOpen(true);
+              } else {
+                setIsArtifactPanelOpen((prev) => !prev);
+              }
+            }}
+            onExportMarkdown={handleExportThreadMarkdown}
+            onExportPdf={() => void handleExportThreadPdf()}
+          />
+        </Suspense>
+      )}
 
       {/* Keyboard Shortcuts Reference Sheet (?) */}
-      <ShortcutsModal
-        isOpen={isShortcutsModalOpen}
-        onClose={() => setIsShortcutsModalOpen(false)}
-      />
+      {isShortcutsModalOpen && (
+        <Suspense fallback={null}>
+          <LazyShortcutsModal
+            isOpen={isShortcutsModalOpen}
+            onClose={() => setIsShortcutsModalOpen(false)}
+          />
+        </Suspense>
+      )}
 
       {/* Uploaded Image & PDF Attachment Lightbox */}
-      <AttachmentLightbox
-        file={previewAttachment}
-        onClose={() => setPreviewAttachment(null)}
-      />
+      {previewAttachment && (
+        <Suspense fallback={null}>
+          <LazyAttachmentLightbox
+            file={previewAttachment}
+            onClose={() => setPreviewAttachment(null)}
+          />
+        </Suspense>
+      )}
 
       {/* Billing & Credits Drawer */}
-      <BillingDrawer
-        isOpen={isBillingDrawerOpen}
-        onClose={() => setIsBillingDrawerOpen(false)}
-        availableCredits={availableCredits}
-        activePlanId={user?.planId ?? 'plan_free'}
-        plans={plans}
-        ledger={ledger}
-        onCreateOrder={handleCreateOrder}
-        onVerifyPayment={handleVerifyPayment}
-      />
+      {isBillingDrawerOpen && (
+        <Suspense fallback={null}>
+          <LazyBillingDrawer
+            isOpen={isBillingDrawerOpen}
+            onClose={() => setIsBillingDrawerOpen(false)}
+            availableCredits={availableCredits}
+            activePlanId={user?.planId ?? 'plan_free'}
+            plans={plans}
+            ledger={ledger}
+            onCreateOrder={handleCreateOrder}
+            onVerifyPayment={handleVerifyPayment}
+          />
+        </Suspense>
+      )}
 
       {/* Google OAuth & Session Cookie Modal */}
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        onGoogleSignIn={handleLoginWithGoogle}
-      />
+      {isAuthModalOpen && (
+        <Suspense fallback={null}>
+          <LazyAuthModal
+            isOpen={isAuthModalOpen}
+            onClose={() => setIsAuthModalOpen(false)}
+            onGoogleSignIn={handleLoginWithGoogle}
+          />
+        </Suspense>
+      )}
 
       {/* Global Spring Toast Notification Stack */}
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
-
-      {/* Fix & Changed Files Download Modal (Dev-only) */}
-      {import.meta.env.DEV && isFixDownloadsOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/82 backdrop-blur-md flex items-center justify-center p-4"
-          onClick={() => setIsFixDownloadsOpen(false)}
-        >
-          <div
-            className="max-w-4xl w-full max-h-[88vh] flex flex-col bg-[#111114] border border-white/[0.12] rounded-2xl shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.08] bg-[#0c0c0f]">
-              <div>
-                <h2 className="text-sm sm:text-base font-semibold text-white">
-                  Updated &amp; Changed Files + Git Commit Messages
-                </h2>
-                <p className="text-xs text-zinc-400 font-mono mt-0.5">
-                  Download full fix ZIP packages or individual changed files with repo-relative paths
-                </p>
-              </div>
-              <button
-                type="button"
-                aria-label="Close downloads modal"
-                onClick={() => setIsFixDownloadsOpen(false)}
-                className="p-1.5 rounded-lg bg-[#18181c] hover:bg-white/[0.12] text-zinc-300 hover:text-white cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-5 overflow-y-auto bg-[#09090b]">
-              <StepFileDownloads />
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

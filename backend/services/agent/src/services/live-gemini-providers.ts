@@ -62,6 +62,8 @@ import {
   buildPptSystemInstruction,
   buildPptxBinaryBuffer,
   classifyPptDeckTheme,
+  classifyPptSurfaceMode,
+  extractRequestedSlideCount,
   formatPptSummaryMarkdown,
   MockPptPresentationProvider,
   type PptPresentationGenerationResult,
@@ -100,6 +102,7 @@ const SchemaValueType = {
   OBJECT: 'OBJECT',
   STRING: 'STRING',
   ARRAY: 'ARRAY',
+  NUMBER: 'NUMBER',
 } as const;
 
 interface GeminiGroundingChunk {
@@ -150,6 +153,16 @@ interface GeminiClientAdapter {
     readonly contents: unknown;
     readonly config?: Record<string, unknown>;
     readonly timeoutMs?: number;
+    readonly signal?: AbortSignal;
+  }): Promise<GeminiGenerateContentResult>;
+  generateContentStream?(params: {
+    readonly model: string;
+    readonly fallbackModels?: readonly string[];
+    readonly contents: unknown;
+    readonly config?: Record<string, unknown>;
+    readonly timeoutMs?: number;
+    readonly signal?: AbortSignal;
+    readonly onTextDelta: (delta: string) => void;
   }): Promise<GeminiGenerateContentResult>;
   embedContent(params: {
     readonly model: string;
@@ -327,6 +340,10 @@ async function createServerGeminiClient(
           continue;
         }
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:generateContent`;
+        const timeoutSignal = AbortSignal.timeout(params.timeoutMs ?? defaultTimeout);
+        const combinedSignal = params.signal
+          ? AbortSignal.any([params.signal, timeoutSignal])
+          : timeoutSignal;
         const res = await fetch(url, {
           method: 'POST',
           headers: {
@@ -335,7 +352,7 @@ async function createServerGeminiClient(
             'User-Agent': 'aistudio-build',
           },
           body: JSON.stringify(bodyPayload),
-          signal: AbortSignal.timeout(params.timeoutMs ?? defaultTimeout),
+          signal: combinedSignal,
         });
         if (!res.ok) {
           let errSnippet = '';
@@ -387,6 +404,143 @@ async function createServerGeminiClient(
       }
 
       throw lastErr ?? new Error('Gemini generateContent failed across all model candidates');
+    },
+
+    async generateContentStream(params): Promise<GeminiGenerateContentResult> {
+      const configuredModel = stripEnvQuotes(process.env.GEMINI_MODEL);
+      const candidates = uniqueNonEmpty([
+        configuredModel && params.model === DEFAULT_TEXT_MODEL ? configuredModel : undefined,
+        params.model,
+        ...(params.fallbackModels ??
+          (params.model === DEFAULT_TEXT_MODEL ? TEXT_MODEL_FALLBACKS : [])),
+      ]);
+
+      const bodyPayload: Record<string, unknown> = {
+        contents:
+          typeof params.contents === 'string'
+            ? [{ role: 'user', parts: [{ text: params.contents }] }]
+            : params.contents,
+      };
+      if (params.config) {
+        if (params.config.systemInstruction) {
+          bodyPayload.systemInstruction = {
+            parts: [{ text: String(params.config.systemInstruction) }],
+          };
+        }
+        if (params.config.tools) {
+          bodyPayload.tools = params.config.tools;
+        }
+        const genConfig: Record<string, unknown> = {};
+        if (
+          typeof params.config.maxOutputTokens === 'number' &&
+          Number.isFinite(params.config.maxOutputTokens) &&
+          params.config.maxOutputTokens > 0
+        ) {
+          genConfig.maxOutputTokens = Math.min(65_536, Math.round(params.config.maxOutputTokens));
+        }
+        if (Object.keys(genConfig).length > 0) {
+          bodyPayload.generationConfig = genConfig;
+        }
+      }
+
+      let lastErr: Error | null = null;
+      const inTest = isRunningInTestRunner();
+      for (const targetModel of candidates) {
+        const skipUntil = unavailableModelsUntilMs.get(targetModel) ?? 0;
+        if (!inTest && Date.now() < skipUntil) {
+          continue;
+        }
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:streamGenerateContent?alt=sse`;
+        const timeoutSignal = AbortSignal.timeout(params.timeoutMs ?? defaultTimeout);
+        const combinedSignal = params.signal
+          ? AbortSignal.any([params.signal, timeoutSignal])
+          : timeoutSignal;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': key,
+            'User-Agent': 'aistudio-build',
+          },
+          body: JSON.stringify(bodyPayload),
+          signal: combinedSignal,
+        });
+        if (!res.ok || !res.body) {
+          let errSnippet = '';
+          try {
+            errSnippet = extractConciseGeminiError(await res.text());
+          } catch {
+            // ignore
+          }
+          lastErr = new Error(`Gemini Stream HTTP ${res.status} (${targetModel}): ${errSnippet}`);
+          if (res.status === 404 && !inTest) {
+            unavailableModelsUntilMs.set(targetModel, Date.now() + MODEL_404_COOLDOWN_MS);
+          }
+          if (
+            res.status === 400 ||
+            res.status === 403 ||
+            res.status === 404 ||
+            res.status === 429 ||
+            res.status >= 500
+          ) {
+            continue;
+          }
+          throw lastErr;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fullText = '';
+        const collectedParts: GeminiResponsePart[] = [];
+
+        while (true) {
+          if (params.signal?.aborted) {
+            await reader.cancel().catch(() => undefined);
+            throw params.signal.reason instanceof Error
+              ? params.signal.reason
+              : new Error('Aborted');
+          }
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split(/\r?\n\r?\n/);
+          buffer = frames.pop() ?? '';
+          for (const frame of frames) {
+            const dataLines = frame
+              .split(/\r?\n/)
+              .filter((line) => line.startsWith('data:'))
+              .map((line) => line.slice(5).trim());
+            if (dataLines.length === 0) continue;
+            const jsonStr = dataLines.join('\n');
+            if (!jsonStr || jsonStr === '[DONE]') continue;
+            try {
+              const parsed = JSON.parse(jsonStr) as {
+                candidates?: Array<{
+                  content?: { parts?: GeminiResponsePart[] };
+                }>;
+              };
+              const parts = parsed.candidates?.[0]?.content?.parts ?? [];
+              for (const part of parts) {
+                if (!part.thought && typeof part.text === 'string' && part.text.length > 0) {
+                  collectedParts.push(part);
+                  fullText += part.text;
+                  params.onTextDelta(part.text);
+                }
+              }
+            } catch {
+              // Ignore partial non-JSON keepalive frames
+            }
+          }
+        }
+
+        return {
+          text: fullText,
+          parts: collectedParts,
+        };
+      }
+
+      throw lastErr ?? new Error('Gemini streamGenerateContent failed across all model candidates');
     },
 
     async embedContent(params): Promise<GeminiEmbedContentResult> {
@@ -493,6 +647,8 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
     readonly threadContext?: ConversationThreadContext;
     readonly responseDepth?: ChatResponseDepth;
     readonly chatMode?: string;
+    readonly onDelta?: (delta: string) => void;
+    readonly signal?: AbortSignal;
   }): Promise<{ readonly content: string; readonly tokensUsed: number }> {
     const sysInstruction =
       input.systemInstruction ??
@@ -505,14 +661,27 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
           input.conversationHistory && input.conversationHistory.length > 0
             ? buildMultiTurnGeminiContents(input.prompt, input.conversationHistory)
             : input.prompt;
-        const response = await ai.generateContent({
-          model: DEFAULT_TEXT_MODEL,
-          contents,
-          config: {
-            systemInstruction: sysInstruction,
-            maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 256),
-          },
-        });
+        const response =
+          input.onDelta && ai.generateContentStream
+            ? await ai.generateContentStream({
+                model: DEFAULT_TEXT_MODEL,
+                contents,
+                config: {
+                  systemInstruction: sysInstruction,
+                  maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 256),
+                },
+                signal: input.signal,
+                onTextDelta: input.onDelta,
+              })
+            : await ai.generateContent({
+                model: DEFAULT_TEXT_MODEL,
+                contents,
+                config: {
+                  systemInstruction: sysInstruction,
+                  maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 256),
+                },
+                signal: input.signal,
+              });
         const text = (response.text ?? '').trim();
         if (text.length > 0) {
           return {
@@ -520,7 +689,10 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
             tokensUsed: Math.max(16, Math.ceil(text.length / 4)),
           };
         }
-      } catch {
+      } catch (err) {
+        if (input.signal?.aborted) {
+          throw err;
+        }
         // Fall back to deterministic offline reply when Gemini is unreachable
       }
     }
@@ -534,6 +706,9 @@ export class LiveGeminiChatModelProvider implements ChatModelProvider {
       history: input.conversationHistory,
       threadContext: input.threadContext,
     });
+    if (input.onDelta) {
+      input.onDelta(synthesized);
+    }
 
     return {
       content: synthesized,
@@ -588,6 +763,8 @@ export class LiveGeminiCodingModelProvider implements CodingModelProvider {
   public async generateCodeBundle(input: {
     readonly prompt: string;
     readonly maxOutputTokens: number;
+    readonly existingArtifactContext?: string;
+    readonly signal?: AbortSignal;
   }): Promise<{
     readonly summary: string;
     readonly rawManifestJson: string;
@@ -604,7 +781,11 @@ export class LiveGeminiCodingModelProvider implements CodingModelProvider {
       '5. Do NOT include <link rel="stylesheet" href="styles.css"> or <script src="app.js"> — styles.css and app.js are injected automatically.',
     ].join(' ');
 
-    const codingPrompt = `Build a complete, self-contained, interactive web application for: "${input.prompt}".
+    const refinementBlock = input.existingArtifactContext
+      ? `\n\nEXISTING ACTIVE SANDBOX APP IN THIS THREAD (if the user is requesting edits, additions, bug fixes, or styling updates to this app, refine and preserve its existing working features rather than starting from scratch):\n${input.existingArtifactContext.slice(0, 7000)}\n`
+      : '';
+
+    const codingPrompt = `Build or refine a complete, self-contained, interactive web application for: "${input.prompt}".${refinementBlock}
 Return ONLY a valid JSON object with exact keys:
 - title: short crisp project title (max 60 chars)
 - summary: concise 2–3 sentence Markdown overview of features and interactive controls built
@@ -618,6 +799,7 @@ Return ONLY a valid JSON object with exact keys:
         const response = await ai.generateContent({
           model: DEFAULT_TEXT_MODEL,
           contents: codingPrompt,
+          signal: input.signal,
           config: {
             systemInstruction: codingSystemInstruction,
             maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 2_048),
@@ -639,7 +821,10 @@ Return ONLY a valid JSON object with exact keys:
         if (built) {
           return built;
         }
-      } catch {
+      } catch (err) {
+        if (input.signal?.aborted) {
+          throw err;
+        }
         // Fall back to structured offline coding bundle when Gemini is unavailable
       }
     }
@@ -1079,11 +1264,16 @@ export class LiveGeminiPdfDocumentProvider implements PdfDocumentProvider {
   public async generatePdfDocument(input: {
     readonly prompt: string;
     readonly maxOutputTokens: number;
+    readonly existingArtifactContext?: string;
+    readonly signal?: AbortSignal;
   }): Promise<PdfDocumentGenerationResult> {
     const documentType = classifyPdfDocumentType(input.prompt);
     const todayIso = new Date().toISOString().slice(0, 10);
+    const refinementBlock = input.existingArtifactContext
+      ? `\n\nEXISTING PDF SPECIFICATION IN THIS THREAD (if the user asks to revise, expand, condense, or update the document, refine this existing spec directly):\n${input.existingArtifactContext.slice(0, 6000)}\n`
+      : '';
     const pdfPrompt = `Generate a publication-grade multi-section PDF document (archetype: ${documentType}) strictly about: "${input.prompt}".
-Stay 100% faithful to the topic's natural domain and tone — do NOT inject software engineering, cloud infrastructure, or corporate jargon unless the prompt is actually about technology or business.
+Stay 100% faithful to the topic's natural domain and tone — do NOT inject software engineering, cloud infrastructure, or corporate jargon unless the prompt is actually about technology or business.${refinementBlock}
 
 Return ONLY a valid JSON object with keys:
 - title (string, concise compelling title matching the subject)
@@ -1095,7 +1285,8 @@ Return ONLY a valid JSON object with keys:
     content (rich, concrete, topic-authentic paragraph string),
     bullets (array of 3 to 4 sharp, informative bullet strings),
     callout (optional concise takeaway, quote, or highlight string on key sections),
-    table (OPTIONAL structured table — e.g. comparison, timeline, itinerary, glossary, milestones, or specifications — with caption, headers (2-4 strings), and rows (3-5 string arrays matching header count) on 1-2 sections ONLY where tabular data adds clarity)
+    table (OPTIONAL structured table — e.g. comparison, timeline, itinerary, glossary, milestones, or specifications — with caption, headers (2-4 strings), and rows (3-5 string arrays matching header count) on 1-2 sections ONLY where tabular data adds clarity),
+    chart (OPTIONAL horizontal bar chart { title, unit, bars: [{ label, value (number), displayValue }] } with 3-5 bars on 1 section ONLY when quantitative visual comparison genuinely elevates the document)
   )`;
 
     const ai = await createServerGeminiClient(this.apiKey);
@@ -1104,6 +1295,7 @@ Return ONLY a valid JSON object with keys:
         const response = await ai.generateContent({
           model: DEFAULT_TEXT_MODEL,
           contents: pdfPrompt,
+          signal: input.signal,
           config: {
             systemInstruction: buildPdfSystemInstruction(documentType, todayIso),
             maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 4_096),
@@ -1156,6 +1348,26 @@ Return ONLY a valid JSON object with keys:
                         },
                         required: ['headers', 'rows'],
                       },
+                      chart: {
+                        type: SchemaValueType.OBJECT,
+                        properties: {
+                          title: { type: SchemaValueType.STRING },
+                          unit: { type: SchemaValueType.STRING },
+                          bars: {
+                            type: SchemaValueType.ARRAY,
+                            items: {
+                              type: SchemaValueType.OBJECT,
+                              properties: {
+                                label: { type: SchemaValueType.STRING },
+                                value: { type: SchemaValueType.NUMBER },
+                                displayValue: { type: SchemaValueType.STRING },
+                              },
+                              required: ['label', 'value'],
+                            },
+                          },
+                        },
+                        required: ['bars'],
+                      },
                     },
                     required: ['heading', 'content', 'bullets'],
                   },
@@ -1173,6 +1385,9 @@ Return ONLY a valid JSON object with keys:
           return compiled;
         }
       } catch (err) {
+        if (input.signal?.aborted) {
+          throw err;
+        }
         if (process.env.NODE_ENV !== 'test') {
           console.warn(
             '[kartik-pdf] Live Gemini PDF generation fell back to offline template:',
@@ -1199,6 +1414,7 @@ export class LiveGeminiPptPresentationProvider implements PptPresentationProvide
     rawJson: string,
     defaults?: {
       readonly theme: ReturnType<typeof classifyPptDeckTheme>;
+      readonly surfaceMode: ReturnType<typeof classifyPptSurfaceMode>;
       readonly generatedDate: string;
     },
   ): PptPresentationGenerationResult | null {
@@ -1210,6 +1426,7 @@ export class LiveGeminiPptPresentationProvider implements PptPresentationProvide
       const merged = {
         ...parsedObj,
         theme: parsedObj.theme ?? defaults?.theme,
+        surfaceMode: parsedObj.surfaceMode ?? defaults?.surfaceMode,
         generatedDate: parsedObj.generatedDate ?? defaults?.generatedDate,
         author: parsedObj.author ?? 'Kartik.ai Presentation Engine',
         footer: parsedObj.footer ?? 'Generated by Kartik.ai',
@@ -1231,20 +1448,28 @@ export class LiveGeminiPptPresentationProvider implements PptPresentationProvide
   public async generatePptPresentation(input: {
     readonly prompt: string;
     readonly maxOutputTokens: number;
+    readonly existingArtifactContext?: string;
+    readonly signal?: AbortSignal;
   }): Promise<PptPresentationGenerationResult> {
     const theme = classifyPptDeckTheme(input.prompt);
+    const surfaceMode = classifyPptSurfaceMode(input.prompt);
+    const targetContentSlides = extractRequestedSlideCount(input.prompt);
+    const minDistinctLayouts = Math.min(4, Math.max(2, targetContentSlides - 1));
     const todayIso = new Date().toISOString().slice(0, 10);
-    const pptPrompt = `Create a compelling 6-content-slide presentation deck (archetype: ${theme}) strictly about: "${input.prompt}".
-Stay 100% faithful to the subject's real domain, tone, and vocabulary — NEVER inject software architecture, "Legacy vs Modern", SaaS KPIs, or corporate rollout phases unless the user's prompt is actually about technology or business.
+    const refinementBlock = input.existingArtifactContext
+      ? `\n\nEXISTING SLIDE DECK IN THIS THREAD (if the user asks to revise specific slides, add/remove slides, or switch tone/theme, refine this existing deck rather than discarding it):\n${input.existingArtifactContext.slice(0, 6000)}\n`
+      : '';
+    const pptPrompt = `Create a compelling ${targetContentSlides}-content-slide presentation deck (archetype: ${theme}, surfaceMode: ${surfaceMode}) strictly about: "${input.prompt}".
+Stay 100% faithful to the subject's real domain, tone, and vocabulary — NEVER inject software architecture, "Legacy vs Modern", SaaS KPIs, or corporate rollout phases unless the user's prompt is actually about technology or business.${refinementBlock}
 
-Return ONLY a valid JSON object with keys: title, subtitle, slides (array of EXACTLY 6 content slide objects — Cover and Closing slides are added automatically).
+Return ONLY a valid JSON object with keys: title, subtitle, slides (array of EXACTLY ${targetContentSlides} content slide objects — Cover and Closing slides are added automatically).
 
-Choose the most natural sequence of layouts for this specific topic, using at least 4 distinct layouts across the 6 slides from:
+Choose the most natural sequence of layouts for this specific topic, using at least ${minDistinctLayouts} distinct layouts across the ${targetContentSlides} slides from:
 - layout="spotlight": include "callout" (a sharp 1-sentence core thesis, insight, or quote) AND "bullets" (3 supporting points).
 - layout="metrics": include "metrics" (3 to 4 authentic facts, dates, measurements, figures, or KPIs matching the topic: { "label": "...", "value": "...", "delta": "..." }) AND "bullets" (2 concise synthesis bullets).
 - layout="two_column": include "columns" (EXACTLY 2 natural contrasting columns for this topic — e.g., two eras, myths vs reality, two schools of thought, pros vs cons, or two methods: [{ "heading": "...", "points": [3 concise bullets] }, { "heading": "...", "points": [3 concise bullets] }]), optional "callout" (1 takeaway), AND "bullets" (2 summary bullets).
 - layout="process": include "steps" (3 to 4 ordered stages, chronological eras, steps, or milestones fitting the topic: { "step": "01", "title": "...", "detail": "..." }), optional "callout" (1 synthesis takeaway), AND "bullets" (2 summary bullets).
-- layout="bullets": include "bullets" (4 crisp scannable bullets, max 14 words each) AND optional "callout" (1 key takeaway).
+- layout="bullets": include "bullets" (4 crisp scannable bullets, max 14 words each), optional "chart" ({ title, unit, bars: [{ label, value (number), displayValue }] } with 3-5 bars when numeric comparison clarifies the slide), AND optional "callout" (1 key takeaway).
 
 Every slide MUST also include: kicker (2-4 words), title, subtitle, and speakerNotes (2-3 natural presenter sentences).`;
 
@@ -1254,8 +1479,9 @@ Every slide MUST also include: kicker (2-4 words), title, subtitle, and speakerN
         const response = await ai.generateContent({
           model: DEFAULT_TEXT_MODEL,
           contents: pptPrompt,
+          signal: input.signal,
           config: {
-            systemInstruction: buildPptSystemInstruction(theme, todayIso),
+            systemInstruction: buildPptSystemInstruction(theme, todayIso, targetContentSlides),
             maxOutputTokens: Math.max(input.maxOutputTokens || 8_192, 4_096),
             responseMimeType: 'application/json',
             responseSchema: {
@@ -1317,6 +1543,26 @@ Every slide MUST also include: kicker (2-4 words), title, subtitle, and speakerN
                           required: ['step', 'title', 'detail'],
                         },
                       },
+                      chart: {
+                        type: SchemaValueType.OBJECT,
+                        properties: {
+                          title: { type: SchemaValueType.STRING },
+                          unit: { type: SchemaValueType.STRING },
+                          bars: {
+                            type: SchemaValueType.ARRAY,
+                            items: {
+                              type: SchemaValueType.OBJECT,
+                              properties: {
+                                label: { type: SchemaValueType.STRING },
+                                value: { type: SchemaValueType.NUMBER },
+                                displayValue: { type: SchemaValueType.STRING },
+                              },
+                              required: ['label', 'value'],
+                            },
+                          },
+                        },
+                        required: ['bars'],
+                      },
                       callout: { type: SchemaValueType.STRING },
                       speakerNotes: { type: SchemaValueType.STRING },
                     },
@@ -1330,12 +1576,16 @@ Every slide MUST also include: kicker (2-4 words), title, subtitle, and speakerN
         });
         const compiled = this.compilePptFromJson(response.text ?? '', {
           theme,
+          surfaceMode,
           generatedDate: todayIso,
         });
         if (compiled) {
           return compiled;
         }
       } catch (err) {
+        if (input.signal?.aborted) {
+          throw err;
+        }
         if (process.env.NODE_ENV !== 'test') {
           console.warn(
             '[kartik-ppt] Live Gemini PPT generation fell back to offline template:',

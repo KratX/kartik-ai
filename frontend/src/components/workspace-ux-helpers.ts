@@ -321,9 +321,18 @@ export function formatArtifactMetaSummary(
     if (specFile?.content) {
       try {
         const parsed = JSON.parse(specFile.content) as {
+          readonly slideCount?: number;
           readonly slides?: readonly unknown[];
+          readonly spec?: { readonly slides?: readonly unknown[] };
         };
-        if (Array.isArray(parsed.slides) && parsed.slides.length > 0) {
+        if (typeof parsed.slideCount === 'number' && parsed.slideCount > 0) {
+          slideCount = parsed.slideCount;
+        } else if (
+          Array.isArray(parsed.spec?.slides) &&
+          parsed.spec.slides.length > 0
+        ) {
+          slideCount = parsed.spec.slides.length;
+        } else if (Array.isArray(parsed.slides) && parsed.slides.length > 0) {
           slideCount = parsed.slides.length;
         }
       } catch {
@@ -650,5 +659,330 @@ export function inferConversationArtifactKind(
   }
   return null;
 }
+
+export interface LiveStreamProgressState {
+  readonly agent: SpecialistAgentName;
+  readonly stage: string;
+  readonly stageLabel: string;
+  readonly partialText: string;
+}
+
+export interface ParsedSseEvent {
+  readonly event: string;
+  readonly data: string;
+}
+
+/**
+ * Parses a single Server-Sent Events (SSE) frame block (delimited by `\n\n`)
+ * into its `event` name (default `'message'`) and concatenated `data` payload.
+ */
+export function parseSseEventBlock(block: string): ParsedSseEvent | null {
+  const normalized = block.replace(/\r\n/g, '\n');
+  let eventName = 'message';
+  const dataLines: string[] = [];
+
+  for (const rawLine of normalized.split('\n')) {
+    if (!rawLine || rawLine.startsWith(':')) {
+      continue;
+    }
+    const colonIdx = rawLine.indexOf(':');
+    const field = colonIdx === -1 ? rawLine : rawLine.slice(0, colonIdx);
+    let value = colonIdx === -1 ? '' : rawLine.slice(colonIdx + 1);
+    if (value.startsWith(' ')) {
+      value = value.slice(1);
+    }
+    if (field === 'event' && value.trim()) {
+      eventName = value.trim();
+    } else if (field === 'data') {
+      dataLines.push(value);
+    }
+  }
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  return Object.freeze({
+    event: eventName,
+    data: dataLines.join('\n'),
+  });
+}
+
+let cachedCrc32Table: Uint32Array | null = null;
+
+function getCrc32Table(): Uint32Array {
+  if (cachedCrc32Table) {
+    return cachedCrc32Table;
+  }
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let c = i;
+    for (let k = 0; k < 8; k += 1) {
+      c = (c & 1) !== 0 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[i] = c >>> 0;
+  }
+  cachedCrc32Table = table;
+  return table;
+}
+
+function computeCrc32(bytes: Uint8Array): number {
+  const table = getCrc32Table();
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i += 1) {
+    crc = table[(crc ^ bytes[i]!) & 0xff]! ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function writeU16LE(view: DataView, offset: number, value: number): void {
+  view.setUint16(offset, value & 0xffff, true);
+}
+
+function writeU32LE(view: DataView, offset: number, value: number): void {
+  view.setUint32(offset, value >>> 0, true);
+}
+
+/**
+ * Pure, zero-dependency PKZIP (uncompressed STORE method 0) archive builder for browser & Node.
+ * Generates a standards-compliant `.zip` byte array suitable for one-click Code Sandbox export.
+ */
+export function buildClientZipBytes(
+  files: ReadonlyArray<{ readonly path: string; readonly content: string | Uint8Array }>,
+): Uint8Array {
+  const encoder = new TextEncoder();
+  const localParts: Uint8Array[] = [];
+  const centralParts: Uint8Array[] = [];
+  let localOffset = 0;
+
+  for (const rawFile of files) {
+    const cleanPath = rawFile.path
+      .replace(/\\/g, '/')
+      .replace(/^\/+/, '')
+      .trim();
+    if (!cleanPath) continue;
+
+    const nameBytes = encoder.encode(cleanPath);
+    const dataBytes =
+      typeof rawFile.content === 'string'
+        ? encoder.encode(rawFile.content)
+        : rawFile.content;
+    const crc = computeCrc32(dataBytes);
+
+    // Local File Header (30 bytes + filename)
+    const localHeader = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(localHeader.buffer);
+    writeU32LE(lv, 0, 0x04034b50); // Local header signature
+    writeU16LE(lv, 4, 20); // Version needed (2.0)
+    writeU16LE(lv, 6, 0x0800); // UTF-8 filename flag
+    writeU16LE(lv, 8, 0); // Method 0 (STORE)
+    writeU16LE(lv, 10, 0); // Mod time
+    writeU16LE(lv, 12, 0); // Mod date
+    writeU32LE(lv, 14, crc);
+    writeU32LE(lv, 18, dataBytes.length);
+    writeU32LE(lv, 22, dataBytes.length);
+    writeU16LE(lv, 26, nameBytes.length);
+    writeU16LE(lv, 28, 0);
+    localHeader.set(nameBytes, 30);
+
+    // Central Directory Header (46 bytes + filename)
+    const centralHeader = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(centralHeader.buffer);
+    writeU32LE(cv, 0, 0x02014b50); // Central directory signature
+    writeU16LE(cv, 4, 20); // Version made by
+    writeU16LE(cv, 6, 20); // Version needed
+    writeU16LE(cv, 8, 0x0800); // UTF-8 flag
+    writeU16LE(cv, 10, 0); // Method 0 (STORE)
+    writeU16LE(cv, 12, 0);
+    writeU16LE(cv, 14, 0);
+    writeU32LE(cv, 16, crc);
+    writeU32LE(cv, 20, dataBytes.length);
+    writeU32LE(cv, 24, dataBytes.length);
+    writeU16LE(cv, 28, nameBytes.length);
+    writeU16LE(cv, 30, 0);
+    writeU16LE(cv, 32, 0);
+    writeU16LE(cv, 34, 0);
+    writeU16LE(cv, 36, 0);
+    writeU32LE(cv, 38, 0);
+    writeU32LE(cv, 42, localOffset);
+    centralHeader.set(nameBytes, 46);
+
+    localParts.push(localHeader, dataBytes);
+    centralParts.push(centralHeader);
+    localOffset += localHeader.length + dataBytes.length;
+  }
+
+  const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+  const entryCount = centralParts.length;
+
+  // End of Central Directory Record (22 bytes)
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  writeU32LE(ev, 0, 0x06054b50);
+  writeU16LE(ev, 4, 0);
+  writeU16LE(ev, 6, 0);
+  writeU16LE(ev, 8, entryCount);
+  writeU16LE(ev, 10, entryCount);
+  writeU32LE(ev, 12, centralSize);
+  writeU32LE(ev, 16, localOffset);
+  writeU16LE(ev, 20, 0);
+
+  const totalLength = localOffset + centralSize + eocd.length;
+  const output = new Uint8Array(totalLength);
+  let cursor = 0;
+  for (const part of localParts) {
+    output.set(part, cursor);
+    cursor += part.length;
+  }
+  for (const part of centralParts) {
+    output.set(part, cursor);
+    cursor += part.length;
+  }
+  output.set(eocd, cursor);
+  return output;
+}
+
+/**
+ * Exports a full conversation thread (prompts, assistant responses, citations, and artifact summaries)
+ * as clean GitHub-Flavored Markdown (`.md`).
+ */
+export function buildConversationMarkdownExport(
+  title: string,
+  messages: readonly PlatformMessage[],
+): string {
+  const cleanTitle = title.trim() || 'Kartik.ai Conversation';
+  const exportedOn = new Date().toISOString().slice(0, 10);
+  const lines: string[] = [
+    `# ${cleanTitle}`,
+    '',
+    `> Exported from Kartik.ai on ${exportedOn} · ${messages.length} message${messages.length === 1 ? '' : 's'}`,
+    '',
+  ];
+
+  for (const msg of messages) {
+    const roleLabel =
+      msg.role === 'user'
+        ? 'You'
+        : `Kartik.ai (${msg.agentUsed ? msg.agentUsed.toUpperCase() : 'ASSISTANT'})`;
+    lines.push(`## ${roleLabel}`, '');
+    lines.push((msg.content || '').trim(), '');
+
+    if (msg.citations && msg.citations.length > 0) {
+      lines.push('**Sources:**');
+      for (const cite of msg.citations) {
+        lines.push(`- ${cite.title} (${cite.urlOrPage})`);
+      }
+      lines.push('');
+    }
+
+    if (msg.artifacts && msg.artifacts.length > 0) {
+      lines.push('**Generated Artifacts:**');
+      for (const art of msg.artifacts) {
+        lines.push(`- ${art.title} (\`${art.artifactType}\`, ${Math.max(1, Math.round(art.sizeBytes / 1024))} KB)`);
+      }
+      lines.push('');
+    }
+
+    lines.push('---', '');
+  }
+
+  return lines.join('\n').trim();
+}
+
+/**
+ * Builds a structured `PdfDocumentSpec`-compatible payload for exporting an active conversation
+ * thread as a cleanly formatted `%PDF-1.4` transcript via `POST /api/v1/artifacts/recompile`.
+ */
+export function buildConversationTranscriptPdfSpec(
+  title: string,
+  messages: readonly PlatformMessage[],
+): {
+  readonly title: string;
+  readonly subtitle: string;
+  readonly documentType: 'general_guide';
+  readonly author: string;
+  readonly generatedDate: string;
+  readonly executiveSummary: string;
+  readonly keyMetrics: ReadonlyArray<{ readonly label: string; readonly value: string }>;
+  readonly sections: ReadonlyArray<{
+    readonly heading: string;
+    readonly content: string;
+    readonly bullets: readonly string[];
+  }>;
+  readonly footer: string;
+} {
+  const cleanTitle = title.trim() || 'Kartik.ai Conversation Transcript';
+  const generatedDate = new Date().toISOString().slice(0, 10);
+  const userTurns = messages.filter((m) => m.role === 'user').length;
+  const assistantTurns = messages.filter((m) => m.role === 'assistant').length;
+  const totalArtifacts = messages.reduce(
+    (sum, m) => sum + (m.artifacts?.length ?? 0),
+    0,
+  );
+
+  const stripMd = (raw: string) =>
+    raw
+      .replace(/```[\s\S]*?```/g, '[Code Block]')
+      .replace(/[#*_`>]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const sections: Array<{
+    readonly heading: string;
+    readonly content: string;
+    readonly bullets: readonly string[];
+  }> = [];
+
+  for (let i = 0; i < messages.length && sections.length < 10; i += 1) {
+    const msg = messages[i]!;
+    const cleanBody = stripMd(msg.content || '');
+    const heading =
+      msg.role === 'user'
+        ? `Prompt ${Math.ceil((i + 1) / 2)}`
+        : `Response (${(msg.agentUsed ?? 'chat').toUpperCase()})`;
+    const bullets: string[] = [];
+    if (msg.citations && msg.citations.length > 0) {
+      for (const c of msg.citations.slice(0, 4)) {
+        bullets.push(`Source: ${c.title} (${c.urlOrPage})`);
+      }
+    }
+    if (msg.artifacts && msg.artifacts.length > 0) {
+      for (const a of msg.artifacts.slice(0, 3)) {
+        bullets.push(`Artifact: ${a.title} [${a.artifactType}]`);
+      }
+    }
+    sections.push({
+      heading,
+      content: cleanBody.slice(0, 1100) || '(No text content)',
+      bullets,
+    });
+  }
+
+  if (sections.length === 0) {
+    sections.push({
+      heading: 'Empty Session',
+      content: 'No messages recorded in this conversation yet.',
+      bullets: [],
+    });
+  }
+
+  return {
+    title: cleanTitle,
+    subtitle: `Conversation Transcript · Exported ${generatedDate}`,
+    documentType: 'general_guide',
+    author: 'Kartik.ai Workspace',
+    generatedDate,
+    executiveSummary: `Complete exported transcript for "${cleanTitle}" containing ${messages.length} total message(s) across ${userTurns} prompt(s) and ${assistantTurns} specialist response(s).`,
+    keyMetrics: [
+      { label: 'Total Messages', value: String(messages.length) },
+      { label: 'Prompts', value: String(userTurns) },
+      { label: 'Responses', value: String(assistantTurns) },
+      { label: 'Artifacts', value: String(totalArtifacts) },
+    ],
+    sections,
+    footer: 'Exported from Kartik.ai',
+  };
+}
+
 
 

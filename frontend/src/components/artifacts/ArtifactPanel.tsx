@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertCircle,
@@ -11,6 +11,7 @@ import {
   Eye,
   FileCode,
   FileText,
+  FolderArchive,
   GripVertical,
   Image as ImageIcon,
   Maximize2,
@@ -30,6 +31,7 @@ import {
 } from 'lucide-react';
 import { buildArtifactRawDownloadUrl } from '../slide-deck-and-markdown.js';
 import {
+  buildClientZipBytes,
   clampCanvasWidthPct,
   formatArtifactMetaSummary,
 } from '../workspace-ux-helpers.js';
@@ -40,9 +42,18 @@ import {
 } from '../../features/sandbox/index.js';
 import type { ArtifactRecord } from '../../types/index.js';
 import { BorderBeam } from '../motion/primitives.js';
-import { PdfDocumentPreview } from '../chat/PdfDocumentPreview.js';
-import { SlideDeckPreview } from '../chat/SlideDeckPreview.js';
 import { ImageArtifactCard } from '../chat/ImageArtifactCard.js';
+
+const LazyPdfDocumentPreview = lazy(() =>
+  import('../chat/PdfDocumentPreview.js').then((m) => ({
+    default: m.PdfDocumentPreview,
+  })),
+);
+const LazySlideDeckPreview = lazy(() =>
+  import('../chat/SlideDeckPreview.js').then((m) => ({
+    default: m.SlideDeckPreview,
+  })),
+);
 
 export interface ArtifactPanelProps {
   readonly artifact: ArtifactRecord | null;
@@ -321,6 +332,31 @@ export function ArtifactPanel({
       const anchor = document.createElement('a');
       anchor.href = url;
       anchor.download = `${toSafeSlug(artifact.title)}.html`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      // Ignore blob export errors in restricted environments
+    }
+  };
+
+  const handleDownloadProjectZip = () => {
+    if (!artifact || !isCodeBundle) return;
+    try {
+      const zipBytes = buildClientZipBytes(
+        files.map((f) => ({
+          path: f.path,
+          content: editedContents[f.path] ?? f.content ?? '',
+        })),
+      );
+      const blob = new Blob([zipBytes.buffer as ArrayBuffer], {
+        type: 'application/zip',
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${toSafeSlug(artifact.title)}.zip`;
       document.body.appendChild(anchor);
       anchor.click();
       document.body.removeChild(anchor);
@@ -708,9 +744,20 @@ export function ArtifactPanel({
 
                   <button
                     type="button"
+                    onClick={handleDownloadProjectZip}
+                    data-artifact-download-zip="true"
+                    title="Download multi-file project as .zip archive"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-white/[0.08] hover:bg-white hover:text-zinc-950 text-xs text-zinc-100 font-medium cursor-pointer transition-colors"
+                  >
+                    <FolderArchive className="w-3 h-3" />
+                    ZIP
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={handleDownloadStandaloneHtml}
                     title="Download self-contained runnable .html file"
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-white/[0.08] hover:bg-white hover:text-zinc-950 text-xs text-zinc-100 font-medium cursor-pointer transition-colors"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#18181c] hover:bg-white hover:text-zinc-950 text-xs text-zinc-200 font-medium cursor-pointer transition-colors"
                   >
                     <Download className="w-3 h-3" />
                     HTML
@@ -879,18 +926,26 @@ export function ArtifactPanel({
           ) : (
             /* Universal Studio Stage for PDF Reports, 16:9 Slide Decks, and Artwork */
             <div className="relative z-10 flex-1 min-h-0 overflow-y-auto p-4 bg-[#09090b]">
-              {artifact.artifactType === 'pdf_document' && (
-                <PdfDocumentPreview artifact={artifact} />
-              )}
-              {artifact.artifactType === 'ppt_presentation' && (
-                <SlideDeckPreview artifact={artifact} />
-              )}
-              {artifact.artifactType === 'generated_image' && (
-                <ImageArtifactCard
-                  artifact={artifact}
-                  onOpenLightboxImage={onOpenLightboxImage}
-                />
-              )}
+              <Suspense
+                fallback={
+                  <div className="rounded-xl border border-white/[0.08] bg-[#111114] p-8 text-center text-xs text-zinc-400">
+                    Loading Studio Preview…
+                  </div>
+                }
+              >
+                {artifact.artifactType === 'pdf_document' && (
+                  <LazyPdfDocumentPreview artifact={artifact} />
+                )}
+                {artifact.artifactType === 'ppt_presentation' && (
+                  <LazySlideDeckPreview artifact={artifact} />
+                )}
+                {artifact.artifactType === 'generated_image' && (
+                  <ImageArtifactCard
+                    artifact={artifact}
+                    onOpenLightboxImage={onOpenLightboxImage}
+                  />
+                )}
+              </Suspense>
             </div>
           )}
         </motion.aside>

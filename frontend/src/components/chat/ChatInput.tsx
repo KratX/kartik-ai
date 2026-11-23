@@ -16,6 +16,7 @@ import {
   Presentation,
   SlidersHorizontal,
   Sparkles,
+  Square,
   X,
 } from 'lucide-react';
 import {
@@ -76,6 +77,7 @@ export interface ChatInputProps {
     prompt: string,
     preferredAgent?: SpecialistAgentName,
   ) => Promise<void>;
+  readonly onStopGeneration?: () => void;
   readonly isLoading: boolean;
 }
 
@@ -90,6 +92,7 @@ export function ChatInput({
   onOpenAttachment,
   onUploadFile,
   onSendMessage,
+  onStopGeneration,
   isLoading,
 }: ChatInputProps) {
   const [prompt, setPrompt] = useState('');
@@ -223,7 +226,7 @@ export function ChatInput({
       setPrompt((prev) =>
         prev
           ? prev
-          : 'Create a 6-slide presentation on Zero-Trust Service Mesh Architecture',
+          : 'Create a 6-slide presentation on the Art and Storytelling of Studio Ghibli',
       );
       setIsRecordingVoice(false);
     }, 900);
@@ -648,19 +651,33 @@ export function ChatInput({
               </div>
             )}
 
-            <button
-              type="submit"
-              disabled={!prompt.trim() || isLoading}
-              aria-label="Send message"
-              data-composer-send="true"
-              className="h-8 w-8 rounded-full bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 flex items-center justify-center transition-colors cursor-pointer disabled:cursor-not-allowed shrink-0"
-            >
-              {isLoading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <ArrowUp className="w-4 h-4 stroke-[2.5]" />
-              )}
-            </button>
+            {isLoading && onStopGeneration ? (
+              <button
+                type="button"
+                onClick={onStopGeneration}
+                aria-label="Stop generating"
+                title="Stop generating"
+                data-composer-stop="true"
+                className="inline-flex items-center gap-1.5 h-8 px-3 rounded-full bg-white hover:bg-zinc-200 text-zinc-950 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+              >
+                <Square className="w-3 h-3 fill-current" />
+                <span>Stop</span>
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!prompt.trim() || isLoading}
+                aria-label="Send message"
+                data-composer-send="true"
+                className="h-8 w-8 rounded-full bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 flex items-center justify-center transition-colors cursor-pointer disabled:cursor-not-allowed shrink-0"
+              >
+                {isLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                )}
+              </button>
+            )}
           </div>
         </div>
       </form>

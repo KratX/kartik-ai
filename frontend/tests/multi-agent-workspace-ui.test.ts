@@ -88,7 +88,6 @@ describe('@kartik/frontend Multi-Agent Selector Pills & Multi-File Sandbox Assem
       'src/components/common/LoadingAnimation.tsx',
       'src/components/layout/Nav.tsx',
       'src/components/layout/Sidebar.tsx',
-      'src/dev-exports/StepFileDownloads.tsx',
     ];
 
     for (const relFile of rootComponentFiles) {
