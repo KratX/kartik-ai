@@ -21,13 +21,16 @@ import type {
   ChatModelProvider,
   CodingModelProvider,
   EmbeddingProvider,
+  EmbeddingTaskType,
   ImageGenerationProvider,
+  PdfMultimodalExtractor,
   SearchExecutionBundle,
   SearchImageGalleryItem,
   SearchProvider,
   SearchResultItem,
   VisionProvider,
 } from '../models/index.js';
+import { parseOcrPagesFromGeminiText } from '../rag/loaders/index.js';
 import {
   buildMultiTurnGeminiContents,
   buildOfflineChatReply,
@@ -167,6 +170,7 @@ interface GeminiClientAdapter {
   embedContent(params: {
     readonly model: string;
     readonly contents: readonly string[];
+    readonly taskType?: EmbeddingTaskType;
     readonly timeoutMs?: number;
   }): Promise<GeminiEmbedContentResult>;
   predictImagen?(params: {
@@ -550,41 +554,60 @@ async function createServerGeminiClient(
         'text-embedding-004',
       ]);
 
+      const BATCH_SIZE = 50;
       let lastErr: Error | null = null;
       for (const targetModel of embedCandidates) {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:batchEmbedContents`;
-        const requests = params.contents.map((t) => ({
-          model: `models/${targetModel}`,
-          content: { parts: [{ text: t }] },
-          outputDimensionality: 768,
-        }));
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': key,
-            'User-Agent': 'aistudio-build',
-          },
-          body: JSON.stringify({ requests }),
-          signal: AbortSignal.timeout(params.timeoutMs ?? defaultTimeout),
-        });
-        if (!res.ok) {
-          lastErr = new Error(`Gemini Embed HTTP ${res.status} (${targetModel})`);
-          if (
-            res.status === 400 ||
-            res.status === 403 ||
-            res.status === 404 ||
-            res.status === 429 ||
-            res.status >= 500
-          ) {
-            continue;
+        const allEmbeddings: GeminiEmbeddingItem[] = [];
+        let modelFailed = false;
+
+        for (let offset = 0; offset < params.contents.length; offset += BATCH_SIZE) {
+          const slice = params.contents.slice(offset, offset + BATCH_SIZE);
+          const requests = slice.map((t) => ({
+            model: `models/${targetModel}`,
+            content: { parts: [{ text: t }] },
+            ...(params.taskType ? { taskType: params.taskType } : {}),
+            outputDimensionality: 768,
+          }));
+
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': key,
+              'User-Agent': 'aistudio-build',
+            },
+            body: JSON.stringify({ requests }),
+            signal: AbortSignal.timeout(params.timeoutMs ?? defaultTimeout),
+          });
+          if (!res.ok) {
+            lastErr = new Error(`Gemini Embed HTTP ${res.status} (${targetModel})`);
+            if (
+              res.status === 400 ||
+              res.status === 403 ||
+              res.status === 404 ||
+              res.status === 429 ||
+              res.status >= 500
+            ) {
+              modelFailed = true;
+              break;
+            }
+            throw lastErr;
           }
-          throw lastErr;
+          const data = (await res.json()) as {
+            embeddings?: GeminiEmbeddingItem[];
+          };
+          if (!data.embeddings || data.embeddings.length !== slice.length) {
+            lastErr = new Error(`Gemini Embed returned mismatched vector count (${targetModel})`);
+            modelFailed = true;
+            break;
+          }
+          allEmbeddings.push(...data.embeddings);
         }
-        const data = (await res.json()) as {
-          embeddings?: GeminiEmbeddingItem[];
-        };
-        return { embeddings: data.embeddings ?? [] };
+
+        if (!modelFailed && allEmbeddings.length === params.contents.length) {
+          return { embeddings: allEmbeddings };
+        }
       }
 
       throw lastErr ?? new Error('Gemini embedContent failed');
@@ -1100,6 +1123,28 @@ export class LiveGeminiSearchProvider implements SearchProvider {
   }
 }
 
+function normalizeEmbeddingToDimensions(
+  values: readonly number[],
+  targetDims: number,
+): readonly number[] {
+  const sliced = new Array<number>(targetDims).fill(0);
+  const copyLen = Math.min(values.length, targetDims);
+  for (let i = 0; i < copyLen; i += 1) {
+    const v = values[i];
+    sliced[i] = typeof v === 'number' && Number.isFinite(v) ? v : 0;
+  }
+  let normSq = 0;
+  for (let i = 0; i < targetDims; i += 1) {
+    normSq += sliced[i]! * sliced[i]!;
+  }
+  const mag = Math.sqrt(normSq);
+  if (mag === 0) {
+    sliced[0] = 1;
+    return Object.freeze(sliced);
+  }
+  return Object.freeze(sliced.map((v) => Number((v / mag).toFixed(6))));
+}
+
 export class LiveGeminiEmbeddingProvider implements EmbeddingProvider {
   public readonly providerName = 'gemini-embedding-2';
   public readonly dimensions = 768;
@@ -1111,6 +1156,7 @@ export class LiveGeminiEmbeddingProvider implements EmbeddingProvider {
 
   public async embedTexts(
     texts: readonly string[],
+    options?: { readonly taskType?: EmbeddingTaskType },
   ): Promise<readonly (readonly number[])[]> {
     const ai = await createServerGeminiClient(this.apiKey);
     if (ai && texts.length > 0) {
@@ -1118,19 +1164,12 @@ export class LiveGeminiEmbeddingProvider implements EmbeddingProvider {
         const result = await ai.embedContent({
           model: 'gemini-embedding-2',
           contents: [...texts],
+          taskType: options?.taskType,
         });
         if (result.embeddings && result.embeddings.length === texts.length) {
-          return result.embeddings.map((emb: GeminiEmbeddingItem) => {
-            const vals = emb.values ?? [];
-            if (vals.length === 768) {
-              return Object.freeze(vals);
-            }
-            const padded = Array.from(
-              { length: 768 },
-              (_, i) => vals[i % Math.max(1, vals.length)] ?? 0,
-            );
-            return Object.freeze(padded);
-          });
+          return result.embeddings.map((emb: GeminiEmbeddingItem) =>
+            normalizeEmbeddingToDimensions(emb.values ?? [], this.dimensions),
+          );
         }
       } catch {
         // Fall back to deterministic 768-dim unit vectors
@@ -1138,6 +1177,67 @@ export class LiveGeminiEmbeddingProvider implements EmbeddingProvider {
     }
 
     return texts.map((t) => computeDeterministicEmbedding(t, this.dimensions));
+  }
+}
+
+/**
+ * Gemini native multimodal PDF OCR fallback (`inlineData: { mimeType: 'application/pdf' }`)
+ * invoked ONLY when local PDF text extraction detects a scanned / image-only / garbled-font PDF.
+ */
+export class LiveGeminiPdfOcrExtractor implements PdfMultimodalExtractor {
+  public readonly providerName = 'gemini-live-pdf-ocr';
+  private readonly apiKey?: string;
+
+  constructor(options?: { readonly apiKey?: string }) {
+    this.apiKey = options?.apiKey;
+  }
+
+  public async extractPagesFromPdfBytes(input: {
+    readonly pdfBytes: Uint8Array;
+    readonly filename?: string;
+    readonly maxPages: number;
+  }): Promise<readonly { readonly pageNumber: number; readonly text: string }[]> {
+    const ai = await createServerGeminiClient(this.apiKey);
+    if (!ai) {
+      return Object.freeze([]);
+    }
+
+    const base64Data = Buffer.from(input.pdfBytes).toString('base64');
+    const safeName = (input.filename ?? 'document.pdf').slice(0, 120);
+    const response = await ai.generateContent({
+      model: DEFAULT_TEXT_MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              inlineData: {
+                mimeType: 'application/pdf',
+                data: base64Data,
+              },
+            },
+            {
+              text: [
+                `Transcribe ALL readable text, headings, tables, and key chart labels from "${safeName}" accurately in reading order (up to ${input.maxPages} pages).`,
+                'Separate each page strictly with a marker line: === PAGE N === (starting at === PAGE 1 ===).',
+                'Preserve numbers, dates, section titles, and table rows faithfully. Do NOT summarize or omit content; output ONLY the transcribed pages.',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+      config: {
+        systemInstruction:
+          'You are a high-accuracy document OCR transcription engine. Extract verbatim page-by-page text from PDFs without commentary.',
+        maxOutputTokens: 8_192,
+      },
+    });
+
+    const rawText = (response.text ?? '').trim();
+    if (!rawText) {
+      return Object.freeze([]);
+    }
+    return parseOcrPagesFromGeminiText(rawText).slice(0, input.maxPages);
   }
 }
 

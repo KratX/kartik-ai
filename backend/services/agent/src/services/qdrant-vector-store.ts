@@ -244,7 +244,7 @@ export class QdrantHttpVectorStore implements VectorStore {
       });
     }
 
-    const topK = Math.max(1, Math.min(input.topK ?? 5, 20));
+    const topK = Math.max(1, Math.min(input.topK ?? 5, 100));
     const url = `${this.baseUrl}/collections/${encodeURIComponent(this.collectionName)}/points/search`;
     const response = await this.fetchImpl(url, {
       method: 'POST',
@@ -438,7 +438,7 @@ export class PersistentDiskVectorStore implements VectorStore {
 
     const allowedFiles =
       input.fileIds && input.fileIds.length > 0 ? new Set(input.fileIds) : null;
-    const topK = Math.max(1, Math.min(input.topK ?? 5, 20));
+    const topK = Math.max(1, Math.min(input.topK ?? 5, 100));
 
     const hits: VectorSearchHit[] = [];
     for (const chunk of this.chunks.values()) {

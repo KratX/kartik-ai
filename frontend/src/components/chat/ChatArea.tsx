@@ -272,16 +272,30 @@ export function ChatArea({
     const file = event.dataTransfer.files?.[0];
     if (!file) return;
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const uint8 = new Uint8Array(arrayBuffer);
-      let binary = '';
-      for (let i = 0; i < uint8.byteLength; i++) {
-        binary += String.fromCharCode(uint8[i]!);
-      }
+      const contentBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = typeof reader.result === 'string' ? reader.result : '';
+          const commaIdx = result.indexOf(',');
+          resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+        };
+        reader.onerror = () => reject(new Error('Failed to read dropped file'));
+        reader.readAsDataURL(file);
+      });
+      const lowerName = file.name.toLowerCase();
+      const declaredMimeType =
+        file.type ||
+        (lowerName.endsWith('.png')
+          ? 'image/png'
+          : lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')
+            ? 'image/jpeg'
+            : lowerName.endsWith('.webp')
+              ? 'image/webp'
+              : 'application/pdf');
       await onDropUploadFile({
         originalFilename: file.name,
-        declaredMimeType: file.type || 'application/pdf',
-        contentBase64: btoa(binary),
+        declaredMimeType,
+        contentBase64,
       });
     } catch {
       // Errors surfaced via parent handler

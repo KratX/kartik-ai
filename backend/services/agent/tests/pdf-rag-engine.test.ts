@@ -13,19 +13,28 @@ import {
   MockImageGenerationProvider,
   MockSearchProvider,
   MockVisionProvider,
+  assessPdfExtractionQuality,
+  buildPdfBinaryBuffer,
   buildRagFollowUps,
   buildRagSystemInstruction,
   buildRagUserPrompt,
   chunkPdfPages,
   classifyRagIntent,
+  expandRagFollowUpQuery,
+  extractPdfPagesAsync,
+  extractRequestedPageNumbers,
   extractTextFromStreamContent,
   extractTextPagesFromPdfBytes,
   loadAgentConfig,
+  looksLikeRawPdfSyntax,
   normalizeRagInlineCitations,
+  parseOcrPagesFromGeminiText,
   rerankRagHits,
+  validatePdfDocumentSpec,
   type AgentMetadataStore,
   type ArtifactRecord,
   type ChatModelProvider,
+  type PdfMultimodalExtractor,
   type UploadedFileRecord,
   type VectorSearchHit,
 } from '../src/index.js';
@@ -320,5 +329,174 @@ describe('@kartik/agent PDF RAG Engine, Binary Loader & Hybrid Reranker (Fix #18
     assert.ok((result.citations?.[0]?.snippet?.length ?? 0) > 20);
     assert.ok(typeof result.citations?.[0]?.score === 'number' && result.citations[0].score > 0);
     assert.equal(result.followUpQueries?.length, 3);
+  });
+
+  it('extracts multi-page real compiled %PDF-1.4 documents accurately via pdfjs-dist (Tier 1)', async () => {
+    const spec = validatePdfDocumentSpec({
+      title: 'Aurora Cloud Financial Audit 2026',
+      subtitle: 'Quarterly Performance & Risk Register',
+      executiveSummary:
+        'Annual recurring revenue reached $48.6M in Q4 2026 with net dollar retention of 128%.',
+      sections: [
+        {
+          heading: 'Revenue Breakdown',
+          content:
+            'Enterprise tier contributed $31.2M while self-serve developer subscriptions grew 44% year over year.',
+          bullets: [
+            'Gross margin held steady at 81.4% across all regions.',
+            'Customer acquisition payback period improved to 9.2 months.',
+          ],
+        },
+        {
+          heading: 'Security & Compliance Controls',
+          content:
+            'SOC 2 Type II audit completed with zero critical findings and automated key rotation every 30 days.',
+          bullets: [
+            'Per-tenant vector isolation enforced on every Qdrant lookup.',
+            'End-to-end TLS 1.3 and AES-256-GCM encryption at rest.',
+          ],
+        },
+        {
+          heading: '2027 Capital Allocation',
+          content:
+            'R&D investment expands to $11.5M focused on low-latency inference and multi-region failover.',
+          bullets: [
+            'Target p99 gateway latency under 35ms globally.',
+            'Expand Mumbai and Tokyo edge clusters in Q2 2027.',
+          ],
+        },
+      ],
+    });
+    const compiled = buildPdfBinaryBuffer(spec);
+    const extracted = await extractPdfPagesAsync(compiled.pdfBytes, {
+      maxPdfPages: 25,
+      filename: 'aurora-audit-2026.pdf',
+    });
+
+    assert.equal(extracted.method, 'pdfjs');
+    assert.ok(extracted.pages.length >= 1);
+    const fullText = extracted.pages.map((p) => p.text).join('\n');
+    assert.ok(fullText.includes('Aurora Cloud Financial Audit 2026'));
+    assert.ok(fullText.includes('$48.6M'));
+    assert.ok(fullText.includes('SOC 2 Type II'));
+    assert.ok(!looksLikeRawPdfSyntax(fullText));
+  });
+
+  it('rejects raw PDF object syntax and invokes Gemini OCR fallback for scanned/image-only PDFs', async () => {
+    // Structural PDF with zero text operators (simulates an image-only scanned PDF)
+    const scannedPdfBytes = Buffer.from(
+      '%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n%%EOF',
+      'latin1',
+    );
+
+    // Synchronous fallback must NOT return raw PDF syntax as fake document text
+    const syncPages = extractTextPagesFromPdfBytes(scannedPdfBytes);
+    assert.equal(syncPages.length, 0);
+    assert.equal(assessPdfExtractionQuality(syncPages).needsMultimodalOcr, true);
+
+    // With OCR extractor wired, Tier 3 recovers clean multi-page text
+    const mockOcrExtractor: PdfMultimodalExtractor = {
+      providerName: 'test-gemini-ocr',
+      async extractPagesFromPdfBytes() {
+        return parseOcrPagesFromGeminiText(
+          '=== PAGE 1 ===\nInvoice #INV-2026-8841\nTotal Amount Due: $12,450.00\n=== PAGE 2 ===\nPayment Terms: Net 30 days via wire transfer.',
+        );
+      },
+    };
+
+    const result = await extractPdfPagesAsync(scannedPdfBytes, {
+      maxPdfPages: 10,
+      ocrExtractor: mockOcrExtractor,
+      filename: 'scanned-invoice.pdf',
+    });
+    assert.equal(result.method, 'gemini_ocr');
+    assert.equal(result.pages.length, 2);
+    assert.equal(result.pages[0]?.pageNumber, 1);
+    assert.ok(result.pages[0]?.text.includes('INV-2026-8841'));
+    assert.equal(result.pages[1]?.pageNumber, 2);
+    assert.ok(result.pages[1]?.text.includes('Net 30 days'));
+  });
+
+  it('prioritizes explicitly requested page numbers, spreads summary hits across pages, and expands multi-turn follow-ups', () => {
+    assert.deepEqual(extractRequestedPageNumbers('What is on page 3?'), [3]);
+    assert.deepEqual(extractRequestedPageNumbers('Compare pages 2-4 and p. 7'), [2, 3, 4, 7]);
+    assert.deepEqual(extractRequestedPageNumbers('Summarize the last page', 9), [9]);
+
+    const hits: VectorSearchHit[] = [
+      {
+        chunkId: 'chk_p1',
+        fileId: 'file_multi',
+        userId: 'usr_1',
+        documentTitle: 'handbook.pdf',
+        pageNumber: 1,
+        textContent: 'Introduction and company mission overview for all employees.',
+        score: 0.82,
+      },
+      {
+        chunkId: 'chk_p1_b',
+        fileId: 'file_multi',
+        userId: 'usr_1',
+        documentTitle: 'handbook.pdf',
+        pageNumber: 1,
+        textContent: 'Leadership principles and quarterly planning cadence for product teams.',
+        score: 0.8,
+      },
+      {
+        chunkId: 'chk_p2',
+        fileId: 'file_multi',
+        userId: 'usr_1',
+        documentTitle: 'handbook.pdf',
+        pageNumber: 2,
+        textContent: 'Remote work stipend covers $1,200 annually for ergonomic home office equipment.',
+        score: 0.45,
+      },
+      {
+        chunkId: 'chk_p3',
+        fileId: 'file_multi',
+        userId: 'usr_1',
+        documentTitle: 'handbook.pdf',
+        pageNumber: 3,
+        textContent: 'Parental leave policy provides 16 weeks of fully paid leave for all new parents.',
+        score: 0.31,
+      },
+      {
+        chunkId: 'chk_p4',
+        fileId: 'file_multi',
+        userId: 'usr_1',
+        documentTitle: 'handbook.pdf',
+        pageNumber: 4,
+        textContent: 'Incident response escalation matrix requires acknowledging P0 alerts within 10 minutes.',
+        score: 0.28,
+      },
+    ];
+
+    // 1. Explicit page targeting ("What is on page 3?") must rank page 3 #1
+    const page3Ranked = rerankRagHits('What is on page 3?', hits, { topK: 3 });
+    assert.equal(page3Ranked[0]?.pageNumber, 3);
+    assert.ok(page3Ranked[0]?.textContent.includes('16 weeks'));
+
+    // 2. Summary intent spreads coverage across distinct pages (1, 2, 3, 4) instead of stacking page 1
+    const summaryRanked = rerankRagHits('Give me an executive summary of this PDF', hits, {
+      topK: 4,
+      intent: 'summary',
+    });
+    const coveredPages = Array.from(new Set(summaryRanked.map((h) => h.pageNumber))).sort();
+    assert.deepEqual(coveredPages, [1, 2, 3, 4]);
+
+    // 3. Follow-up query expansion enriches short pronoun follow-ups with anchor terms from history
+    const expanded = expandRagFollowUpQuery('Explain that in more detail', [
+      { role: 'user', content: 'What is the parental leave policy?' },
+      { role: 'assistant', content: 'Parental leave provides 16 weeks of paid leave.' },
+    ]);
+    assert.ok(expanded.toLowerCase().includes('parental'));
+    assert.ok(expanded.toLowerCase().includes('leave'));
+
+    // 4. Multi-turn user prompt includes bounded conversation context
+    const promptWithHistory = buildRagUserPrompt('Explain that in more detail', page3Ranked, [
+      { role: 'user', content: 'What is on page 3?' },
+      { role: 'assistant', content: 'Page 3 covers the 16-week parental leave policy [1].' },
+    ]);
+    assert.ok(promptWithHistory.includes('Recent Conversation Context'));
+    assert.ok(promptWithHistory.includes('parental leave policy'));
   });
 });

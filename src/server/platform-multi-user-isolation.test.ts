@@ -16,6 +16,10 @@ import {
 } from '../db/platform-repository.ts';
 import { pool } from '../db/index.ts';
 import { setFirebaseTokenVerifierForTests } from '../middleware/auth.ts';
+import {
+  buildPdfBinaryBuffer,
+  validatePdfDocumentSpec,
+} from '../../backend/services/agent/src/index.js';
 
 function buildDecodedFirebaseToken(input: {
   uid: string;
@@ -1669,6 +1673,219 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
       assert.equal(recompilePptRes.status, 200);
       const pptxBuf = Buffer.from(await recompilePptRes.arrayBuffer());
       assert.ok(pptxBuf.toString('utf8').includes('ppt/media/cover.png'));
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('keeps multi-turn PDF RAG follow-ups strictly scoped to the active conversation PDF and isolated across users (Fix #30)', async () => {
+    const validTokens: Record<string, DecodedIdToken> = {
+      'verified-jwt-alice-rag': buildDecodedFirebaseToken({
+        uid: 'fb_alice_rag_30',
+        email: 'alice.rag30@example.com',
+        name: 'Alice RAG',
+      }),
+      'verified-jwt-bob-rag': buildDecodedFirebaseToken({
+        uid: 'fb_bob_rag_30',
+        email: 'bob.rag30@example.com',
+        name: 'Bob RAG',
+      }),
+    };
+
+    setFirebaseTokenVerifierForTests(async (token: string) => {
+      const match = validTokens[token];
+      if (!match) {
+        throw new Error('Invalid token');
+      }
+      return match;
+    });
+
+    const runtime = new KartikPlatformRuntime({
+      persistence: new InMemoryPlatformPersistenceAdapter(),
+    });
+    const app = createKartikExpressApp(runtime);
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const aliceHeaders = {
+      Authorization: 'Bearer verified-jwt-alice-rag',
+      'content-type': 'application/json',
+    };
+    const bobHeaders = {
+      Authorization: 'Bearer verified-jwt-bob-rag',
+      'content-type': 'application/json',
+    };
+
+    const makePdfBase64 = (title: string, summary: string, sectionText: string) => {
+      const spec = validatePdfDocumentSpec({
+        title,
+        subtitle: 'Integration Test Document',
+        executiveSummary: summary,
+        sections: [
+          {
+            heading: 'Core Terms',
+            content: sectionText,
+            bullets: [summary],
+          },
+        ],
+      });
+      return Buffer.from(buildPdfBinaryBuffer(spec).pdfBytes).toString('base64');
+    };
+
+    try {
+      // Alice creates Conversation A and Conversation B
+      const convARes = await fetch(`${baseUrl}/api/v1/conversations`, {
+        method: 'POST',
+        headers: aliceHeaders,
+        body: JSON.stringify({ title: 'Thread A — Solar Policy' }),
+      });
+      assert.equal(convARes.status, 201);
+      const convAId = (
+        (await convARes.json()) as { data: { conversationId: string } }
+      ).data.conversationId;
+
+      const convBRes = await fetch(`${baseUrl}/api/v1/conversations`, {
+        method: 'POST',
+        headers: aliceHeaders,
+        body: JSON.stringify({ title: 'Thread B — Maritime Contract' }),
+      });
+      assert.equal(convBRes.status, 201);
+      const convBId = (
+        (await convBRes.json()) as { data: { conversationId: string } }
+      ).data.conversationId;
+
+      const bobConvRes = await fetch(`${baseUrl}/api/v1/conversations`, {
+        method: 'POST',
+        headers: bobHeaders,
+        body: JSON.stringify({ title: 'Bob Confidential PDF' }),
+      });
+      assert.equal(bobConvRes.status, 201);
+      const bobConvId = (
+        (await bobConvRes.json()) as { data: { conversationId: string } }
+      ).data.conversationId;
+
+      // Upload Solar PDF into Thread A
+      const upARes = await fetch(`${baseUrl}/api/v1/files/upload`, {
+        method: 'POST',
+        headers: aliceHeaders,
+        body: JSON.stringify({
+          conversationId: convAId,
+          originalFilename: 'solar-grid-policy.pdf',
+          declaredMimeType: 'application/pdf',
+          contentBase64: makePdfBase64(
+            'Solar Grid Policy 2026',
+            'Photovoltaic net-metering rebate is fixed at $0.14 per kWh through December 2029.',
+            'Residential inverters must support IEEE 1547 frequency ride-through and battery export.',
+          ),
+        }),
+      });
+      assert.equal(upARes.status, 201);
+      const upAJson = (await upARes.json()) as {
+        data: { file: { fileId: string; chunkCount: number } };
+      };
+      assert.ok(upAJson.data.file.chunkCount >= 1);
+
+      // Upload Maritime PDF into Thread B (different conversation for same user Alice)
+      const upBRes = await fetch(`${baseUrl}/api/v1/files/upload`, {
+        method: 'POST',
+        headers: aliceHeaders,
+        body: JSON.stringify({
+          conversationId: convBId,
+          originalFilename: 'maritime-freight.pdf',
+          declaredMimeType: 'application/pdf',
+          contentBase64: makePdfBase64(
+            'Maritime Freight Charter',
+            'Container demurrage penalties accrue at $480 per day after 72 hours at port.',
+            'Cargo insurance covers hull damage up to $25M per vessel.',
+          ),
+        }),
+      });
+      assert.equal(upBRes.status, 201);
+
+      // Upload Confidential PDF for Bob
+      const upBobRes = await fetch(`${baseUrl}/api/v1/files/upload`, {
+        method: 'POST',
+        headers: bobHeaders,
+        body: JSON.stringify({
+          conversationId: bobConvId,
+          originalFilename: 'bob-secret-merger.pdf',
+          declaredMimeType: 'application/pdf',
+          contentBase64: makePdfBase64(
+            'Project Obsidian Merger',
+            'Secret acquisition valuation is $990M exclusively for Bob.',
+            'Confidential earnout milestones remain private.',
+          ),
+        }),
+      });
+      assert.equal(upBobRes.status, 201);
+
+      // Turn 1 in Thread A with Solar PDF explicitly attached
+      const turn1Res = await fetch(`${baseUrl}/api/v1/conversations/${convAId}/messages`, {
+        method: 'POST',
+        headers: { ...aliceHeaders, 'Idempotency-Key': 'req_rag30_turn1' },
+        body: JSON.stringify({
+          prompt: 'What is the photovoltaic net-metering rebate rate?',
+          preferredAgent: 'rag',
+          attachmentFileIds: [upAJson.data.file.fileId],
+        }),
+      });
+      assert.equal(turn1Res.status, 201);
+      const turn1Json = (await turn1Res.json()) as {
+        data: {
+          assistantMessage: {
+            agentUsed: string;
+            content: string;
+            citations?: Array<{ title: string; snippet?: string }>;
+          };
+        };
+      };
+      assert.equal(turn1Json.data.assistantMessage.agentUsed, 'rag');
+      assert.ok((turn1Json.data.assistantMessage.citations?.length ?? 0) >= 1);
+      assert.ok(
+        turn1Json.data.assistantMessage.citations!.every(
+          (c) => c.title === 'solar-grid-policy.pdf',
+        ),
+      );
+
+      // Turn 2 in Thread A: NO attachmentFileIds AND NO preferredAgent (Auto/Chat mode)!
+      // Must auto-route to RAG, stay scoped ONLY to solar-grid-policy.pdf (zero bleed from Thread B or Bob!)
+      const turn2Res = await fetch(`${baseUrl}/api/v1/conversations/${convAId}/messages`, {
+        method: 'POST',
+        headers: { ...aliceHeaders, 'Idempotency-Key': 'req_rag30_turn2' },
+        body: JSON.stringify({
+          prompt: 'What inverter compliance standard is required in this document?',
+          attachmentFileIds: [],
+        }),
+      });
+      assert.equal(turn2Res.status, 201);
+      const turn2Json = (await turn2Res.json()) as {
+        data: {
+          assistantMessage: {
+            agentUsed: string;
+            content: string;
+            citations?: Array<{ title: string; snippet?: string }>;
+          };
+        };
+      };
+      assert.equal(turn2Json.data.assistantMessage.agentUsed, 'rag');
+      assert.ok((turn2Json.data.assistantMessage.citations?.length ?? 0) >= 1);
+      assert.ok(
+        turn2Json.data.assistantMessage.citations!.every(
+          (c) => c.title === 'solar-grid-policy.pdf',
+        ),
+        'Follow-up turn must never leak citations from Thread B or Bob',
+      );
+      assert.ok(
+        turn2Json.data.assistantMessage.content.includes('IEEE 1547') ||
+          turn2Json.data.assistantMessage.citations!.some((c) =>
+            (c.snippet ?? '').includes('IEEE 1547'),
+          ),
+      );
+      assert.ok(!turn2Json.data.assistantMessage.content.includes('demurrage'));
+      assert.ok(!turn2Json.data.assistantMessage.content.includes('Obsidian'));
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

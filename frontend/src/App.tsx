@@ -1268,12 +1268,26 @@ export function App() {
       ) {
         setSelectedAgent('rag');
       }
-      pushToast(
-        uploadedFile.mimeType.startsWith('image/')
-          ? `Attached "${uploadedFile.originalFilename}" — ready for Vision inspection.`
-          : `Indexed "${uploadedFile.originalFilename}" (${json.data.chunkCount} vector chunks).`,
-        'success',
-      );
+      const isImage = uploadedFile.mimeType.startsWith('image/');
+      if (isImage) {
+        pushToast(
+          `Attached "${uploadedFile.originalFilename}" — ready for Vision inspection.`,
+          'success',
+        );
+      } else if (json.data.chunkCount === 0) {
+        pushToast(
+          `Uploaded "${uploadedFile.originalFilename}", but 0 text chunks were extracted (scanned/image-only or protected PDF).`,
+          'error',
+        );
+      } else {
+        const pageLabel = uploadedFile.pageCount
+          ? `${uploadedFile.pageCount} ${uploadedFile.pageCount === 1 ? 'page' : 'pages'} · `
+          : '';
+        pushToast(
+          `Indexed "${uploadedFile.originalFilename}" (${pageLabel}${json.data.chunkCount} vector chunks) — ready for PDF RAG.`,
+          'success',
+        );
+      }
       await refreshBillingAndAuth();
     } catch (err) {
       pushToast(
@@ -1575,12 +1589,36 @@ export function App() {
     }
   }, [isExportingThreadPdf, messages, pushToast, resolvedActiveTitle]);
 
+  const activeThreadPdfFiles = useMemo(() => {
+    const byId = new Map<string, UploadedFileRecord>();
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      for (const f of messages[i]?.attachedFiles ?? []) {
+        if (f.mimeType === 'application/pdf' && !byId.has(f.fileId)) {
+          byId.set(f.fileId, f);
+        }
+      }
+    }
+    if (activeConversationId) {
+      for (const f of uploadedFiles) {
+        if (
+          f.mimeType === 'application/pdf' &&
+          f.storageKey.includes(`/${activeConversationId}/`) &&
+          !byId.has(f.fileId)
+        ) {
+          byId.set(f.fileId, f);
+        }
+      }
+    }
+    return Array.from(byId.values());
+  }, [activeConversationId, messages, uploadedFiles]);
+
   const sharedComposerProps = {
     selectedAgent,
     onSelectAgent: setSelectedAgent,
     responseDepth,
     onSelectResponseDepth: handleSelectResponseDepth,
     attachedFiles: attachedTurnFiles,
+    threadPdfFiles: activeThreadPdfFiles,
     onRemoveAttachedFile: handleRemoveAttachedFile,
     onOpenAttachment: setPreviewAttachment,
     onUploadFile: handleUploadFile,

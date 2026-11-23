@@ -11,15 +11,22 @@ import type {
   ArtifactRecord,
   DocumentChunkRecord,
   EmbeddingProvider,
+  PdfMultimodalExtractor,
   UploadedFileRecord,
   VectorStore,
 } from '../models/index.js';
 import type { AgentRepository } from '../repositories/index.js';
-import { extractTextPagesFromPdfBytes } from './loaders/index.js';
+import { extractPdfPagesAsync } from './loaders/index.js';
 
 export {
+  assessPdfExtractionQuality,
+  extractPdfPagesAsync,
   extractTextFromStreamContent,
   extractTextPagesFromPdfBytes,
+  looksLikeRawPdfSyntax,
+  parseOcrPagesFromGeminiText,
+  type PdfExtractionQualityReport,
+  type PdfExtractionResult,
 } from './loaders/index.js';
 
 export interface PdfPageText {
@@ -205,6 +212,7 @@ export class FileIngestionAndArtifactService {
   private readonly objectStorage: ObjectStorage;
   private readonly vectorStore: VectorStore;
   private readonly embeddingProvider: EmbeddingProvider;
+  private readonly pdfOcrExtractor?: PdfMultimodalExtractor;
 
   constructor(deps: {
     readonly config: AgentConfig;
@@ -212,12 +220,14 @@ export class FileIngestionAndArtifactService {
     readonly objectStorage: ObjectStorage;
     readonly vectorStore: VectorStore;
     readonly embeddingProvider: EmbeddingProvider;
+    readonly pdfOcrExtractor?: PdfMultimodalExtractor;
   }) {
     this.config = deps.config;
     this.repository = deps.repository;
     this.objectStorage = deps.objectStorage;
     this.vectorStore = deps.vectorStore;
     this.embeddingProvider = deps.embeddingProvider;
+    this.pdfOcrExtractor = deps.pdfOcrExtractor;
   }
 
   /**
@@ -260,33 +270,48 @@ export class FileIngestionAndArtifactService {
     let chunkRecords: DocumentChunkRecord[] = [];
 
     if (validated.mimeType === 'application/pdf') {
-      const pages =
-        input.extractedPdfPages ?? extractTextPagesFromPdfBytes(input.contentBytes);
-      pageCount = pages.length;
+      let pages: readonly PdfPageText[];
+      if (input.extractedPdfPages) {
+        pages = input.extractedPdfPages;
+        pageCount = pages.length;
+      } else {
+        const extracted = await extractPdfPagesAsync(input.contentBytes, {
+          maxPdfPages: this.config.maxPdfPages,
+          ocrExtractor: this.pdfOcrExtractor,
+          filename: input.originalFilename,
+        });
+        pages = extracted.pages;
+        pageCount = extracted.totalPageCount;
+      }
 
-      const rawChunks = chunkPdfPages({
-        pages,
-        maxPdfPages: this.config.maxPdfPages,
-      });
+      if (pages.length > 0) {
+        const rawChunks = chunkPdfPages({
+          pages,
+          maxPdfPages: this.config.maxPdfPages,
+        });
 
-      if (rawChunks.length > 0) {
-        const vectors = await this.embeddingProvider.embedTexts(
-          rawChunks.map((c) => c.textContent),
-        );
-        const nowIso = new Date().toISOString();
-        const safeTitle = input.originalFilename.replace(/[^A-Za-z0-9._ -]/g, '_').slice(0, 120);
+        if (rawChunks.length > 0) {
+          const vectors = await this.embeddingProvider.embedTexts(
+            rawChunks.map((c) => c.textContent),
+            { taskType: 'RETRIEVAL_DOCUMENT' },
+          );
+          const nowIso = new Date().toISOString();
+          const safeTitle = input.originalFilename
+            .replace(/[^A-Za-z0-9._ -]/g, '_')
+            .slice(0, 120);
 
-        chunkRecords = rawChunks.map((c, idx) => ({
-          chunkId: `chk_${fileId}_${c.chunkIndex}`,
-          fileId,
-          userId: input.userId,
-          documentTitle: safeTitle,
-          pageNumber: c.pageNumber,
-          chunkIndex: c.chunkIndex,
-          textContent: c.textContent,
-          embeddingVector: vectors[idx] ?? [],
-          createdAt: nowIso,
-        }));
+          chunkRecords = rawChunks.map((c, idx) => ({
+            chunkId: `chk_${fileId}_${c.chunkIndex}`,
+            fileId,
+            userId: input.userId,
+            documentTitle: safeTitle,
+            pageNumber: c.pageNumber,
+            chunkIndex: c.chunkIndex,
+            textContent: c.textContent,
+            embeddingVector: vectors[idx] ?? [],
+            createdAt: nowIso,
+          }));
+        }
       }
     }
 

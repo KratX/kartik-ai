@@ -46,6 +46,7 @@ import {
   buildRagSystemInstruction,
   buildRagUserPrompt,
   classifyRagIntent,
+  expandRagFollowUpQuery,
   formatOfflineRagReply,
   normalizeRagInlineCitations,
   rerankRagHits,
@@ -450,23 +451,33 @@ export class AgentGraphExecutor {
 
     if (specialist === 'rag') {
       emitProgress('retrieving', 'Searching indexed document passages…', 'rag');
-      const [queryVector] = await this.deps.embeddingProvider.embedTexts([trimmedPrompt]);
-      const pdfFileIds = attachedFiles
-        .filter((f) => f.mimeType === 'application/pdf')
-        .map((f) => f.fileId);
+      const boundedRagHistory = sanitizeConversationHistory(request.conversationHistory);
+      const expandedQuery = expandRagFollowUpQuery(trimmedPrompt, boundedRagHistory);
 
-      // Fetch wider userId-scoped candidate pool (Invariant #9) for hybrid semantic + BM25 reranking
+      const [queryVector] = await this.deps.embeddingProvider.embedTexts([expandedQuery], {
+        taskType: 'RETRIEVAL_QUERY',
+      });
+      const attachedPdfFiles = attachedFiles.filter((f) => f.mimeType === 'application/pdf');
+      const pdfFileIds = attachedPdfFiles.map((f) => f.fileId);
+
+      // Fetch wide userId-scoped candidate pool (Invariant #9) so hybrid semantic + BM25 + page-target
+      // reranking evaluates the full document instead of a narrow dense-only top-16 slice.
       const rawHits = await this.deps.vectorStore.searchChunks({
         userId: request.userId,
         queryVector: queryVector ?? [],
         fileIds: pdfFileIds.length > 0 ? pdfFileIds : undefined,
-        topK: 16,
+        topK: 64,
       });
 
       // §10: "RAG answers must be grounded in retrieved chunks and cite document and page.
       // If retrieval finds nothing useful, say so."
       if (rawHits.length === 0) {
-        const emptyReply = `${fallbackNotice}No relevant sections were found in your uploaded documents for this query. Attach a \`.pdf\` file using the paperclip button below to index and query its pages.`;
+        const zeroChunkPdf = attachedPdfFiles.find((f) => f.chunkCount === 0);
+        const emptyReply = zeroChunkPdf
+          ? `${fallbackNotice}No readable text passages could be indexed from **"${zeroChunkPdf.originalFilename}"**. It appears to be a scanned/image-only or password-protected PDF. If you have a live \`GEMINI_API_KEY\` configured, re-upload the file for automatic Gemini multimodal PDF OCR, or upload a text-selectable PDF / screenshot of the page in **Vision**.`
+          : attachedPdfFiles.length > 0
+            ? `${fallbackNotice}No relevant sections were found in **"${attachedPdfFiles.map((f) => f.originalFilename).join('", "')}"** for this query. Try asking about a specific heading, topic, or page number from the document.`
+            : `${fallbackNotice}No relevant sections were found in your uploaded documents for this query. Attach a \`.pdf\` file using the paperclip button below to index and query its pages.`;
         return {
           executionId,
           requestId: request.requestId,
@@ -476,8 +487,8 @@ export class AgentGraphExecutor {
           ...routingAttribution,
           usage: {
             promptTokens,
-            completionTokens: 28,
-            totalTokens: promptTokens + 28,
+            completionTokens: Math.max(28, Math.ceil(emptyReply.length / 4)),
+            totalTokens: promptTokens + Math.max(28, Math.ceil(emptyReply.length / 4)),
             provider: this.deps.embeddingProvider.providerName,
             model: this.deps.config.chatModelId,
             durationMs: Math.max(1, Date.now() - startMs),
@@ -487,7 +498,10 @@ export class AgentGraphExecutor {
       }
 
       const ragIntent = classifyRagIntent(trimmedPrompt);
-      const rankedHits = rerankRagHits(trimmedPrompt, rawHits, { topK: 6 });
+      const rankedHits = rerankRagHits(expandedQuery, rawHits, {
+        topK: ragIntent === 'summary' ? 8 : 6,
+        intent: ragIntent,
+      });
 
       const citations: AgentCitation[] = rankedHits.map((hit) => ({
         sourceId: hit.chunkId,
@@ -500,17 +514,23 @@ export class AgentGraphExecutor {
 
       let groundedAnswer = '';
       if (budgetDecision.allowLive && !this.deps.config.mockAi) {
+        emitProgress('synthesizing', 'Synthesizing grounded answer with page citations…', 'rag');
         try {
           const ragReply = await this.deps.chatProvider.generateReply({
-            prompt: buildRagUserPrompt(trimmedPrompt, rankedHits),
+            prompt: buildRagUserPrompt(trimmedPrompt, rankedHits, boundedRagHistory),
             systemInstruction: buildRagSystemInstruction(ragIntent),
             maxOutputTokens: this.deps.config.maxOutputTokens,
+            onDelta: options?.onTextDelta,
+            signal: options?.signal,
           });
           groundedAnswer = normalizeRagInlineCitations(
             ragReply.content.trim(),
             rankedHits,
           );
-        } catch {
+        } catch (err) {
+          if (options?.signal?.aborted) {
+            throw err;
+          }
           // Fall back to deterministic grounded findings below
         }
       }

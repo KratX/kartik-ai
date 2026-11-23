@@ -38,6 +38,7 @@ import {
   LiveGeminiEmbeddingProvider,
   LiveGeminiImageGenerationProvider,
   LiveGeminiPdfDocumentProvider,
+  LiveGeminiPdfOcrExtractor,
   LiveGeminiPptPresentationProvider,
   LiveGeminiSearchProvider,
   LiveGeminiVisionProvider,
@@ -377,12 +378,14 @@ export class KartikPlatformRuntime {
     });
 
     const embeddingProvider = new LiveGeminiEmbeddingProvider();
+    const pdfOcrExtractor = hasLiveAiKey ? new LiveGeminiPdfOcrExtractor() : undefined;
     this.ingestionService = new FileIngestionAndArtifactService({
       config,
       repository: this.repository,
       objectStorage: this.objectStorage,
       vectorStore: this.vectorStore,
       embeddingProvider,
+      pdfOcrExtractor,
     });
 
     const budgetGuard = new DailyLiveBudgetGuard({
@@ -1180,7 +1183,7 @@ export class KartikPlatformRuntime {
       attachedFiles.push(f);
     }
 
-    const targetAgent = resolveTargetSpecialist({
+    let targetAgent = resolveTargetSpecialist({
       prompt: trimmedPrompt,
       requestedAgent: input.preferredAgent,
       attachmentFileIds,
@@ -1188,15 +1191,92 @@ export class KartikPlatformRuntime {
       hasImageBytes: attachedFiles.some((f) => f.mimeType.startsWith('image/')),
     });
 
+    const convMessages = this.messagesByConversation.get(resolvedConvId) ?? [];
+    const effectiveAttachmentFileIds = [...attachmentFileIds];
+
+    // Fix #30: Resolve this authenticated user's uploaded PDF(s) in this same conversation
+    // so multi-turn PDF RAG follow-ups (and follow-up chips) stay strictly scoped to THIS
+    // conversation's PDF(s) without leaking chunks from unrelated threads.
+    const hasExplicitPdf = attachedFiles.some((f) => f.mimeType === 'application/pdf');
+    if (!hasExplicitPdf) {
+      const convPdfIds: string[] = [];
+      const seenPdfIds = new Set<string>();
+
+      for (let i = convMessages.length - 1; i >= 0; i -= 1) {
+        const msgFiles = convMessages[i]?.attachedFiles ?? [];
+        for (let j = msgFiles.length - 1; j >= 0; j -= 1) {
+          const candidate = msgFiles[j];
+          if (
+            candidate &&
+            candidate.mimeType === 'application/pdf' &&
+            !seenPdfIds.has(candidate.fileId)
+          ) {
+            const verified = await this.repository.getFileById(
+              user.userId,
+              candidate.fileId,
+            );
+            if (verified && verified.mimeType === 'application/pdf') {
+              seenPdfIds.add(verified.fileId);
+              convPdfIds.push(verified.fileId);
+            }
+          }
+        }
+      }
+
+      const userFiles = await this.repository.listFilesByUser(user.userId);
+      const convStoredPdfs = userFiles
+        .filter(
+          (f) =>
+            f.mimeType === 'application/pdf' &&
+            f.storageKey.includes(`/${resolvedConvId}/`) &&
+            !seenPdfIds.has(f.fileId),
+        )
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      for (const pdfFile of convStoredPdfs) {
+        seenPdfIds.add(pdfFile.fileId);
+        convPdfIds.push(pdfFile.fileId);
+      }
+
+      if (convPdfIds.length > 0) {
+        const lastRealAssistant = [...convMessages]
+          .reverse()
+          .find(
+            (m) =>
+              m.role === 'assistant' &&
+              !m.messageId.startsWith('msg_welcome_assistant_'),
+          );
+        const promptReferencesDoc =
+          /\b(this pdf|the pdf|this doc|the doc|document|report|uploaded|page\s*#?\s*\d+|p\.\s*\d+|pg\.?\s*\d+|summarize|summary|key takeaways|extract|according to|what does it say|explain that|more details|section\s*\d+|clause|clauses|table|metrics|figures)\b/i.test(
+            trimmedPrompt,
+          );
+
+        if (
+          targetAgent === 'chat' &&
+          input.preferredAgent === undefined &&
+          attachedFiles.length === 0 &&
+          (lastRealAssistant?.agentUsed === 'rag' || promptReferencesDoc)
+        ) {
+          targetAgent = 'rag';
+        }
+
+        if (targetAgent === 'rag') {
+          const remainingSlots = Math.max(0, 4 - effectiveAttachmentFileIds.length);
+          for (const pdfId of convPdfIds.slice(0, remainingSlots)) {
+            if (!effectiveAttachmentFileIds.includes(pdfId)) {
+              effectiveAttachmentFileIds.push(pdfId);
+            }
+          }
+        }
+      }
+    }
+
     // Fix #19: For multi-turn Vision follow-ups (e.g. clicking a Vision follow-up chip) where no new image
     // was explicitly attached on this turn, resolve the authenticated user's most recent uploaded image
     // in this same conversation (strictly scoped to user.userId).
-    const effectiveAttachmentFileIds = [...attachmentFileIds];
     if (
       targetAgent === 'vision' &&
       !attachedFiles.some((f) => f.mimeType.startsWith('image/'))
     ) {
-      const convMessages = this.messagesByConversation.get(resolvedConvId) ?? [];
       let fallbackImageId: string | undefined;
       for (let i = convMessages.length - 1; i >= 0 && !fallbackImageId; i -= 1) {
         const msgFiles = convMessages[i]?.attachedFiles ?? [];

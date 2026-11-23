@@ -142,10 +142,24 @@ export interface SearchProvider {
   }): Promise<readonly SearchResultItem[]>;
 }
 
+export type EmbeddingTaskType = 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY';
+
 export interface EmbeddingProvider {
   readonly providerName: string;
   readonly dimensions: number;
-  embedTexts(texts: readonly string[]): Promise<readonly (readonly number[])[]>;
+  embedTexts(
+    texts: readonly string[],
+    options?: { readonly taskType?: EmbeddingTaskType },
+  ): Promise<readonly (readonly number[])[]>;
+}
+
+export interface PdfMultimodalExtractor {
+  readonly providerName: string;
+  extractPagesFromPdfBytes(input: {
+    readonly pdfBytes: Uint8Array;
+    readonly filename?: string;
+    readonly maxPages: number;
+  }): Promise<readonly { readonly pageNumber: number; readonly text: string }[]>;
 }
 
 export interface ImageGenerationProvider {

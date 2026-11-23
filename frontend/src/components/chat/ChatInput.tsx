@@ -66,6 +66,7 @@ export interface ChatInputProps {
   readonly responseDepth: ChatResponseDepth;
   readonly onSelectResponseDepth: (depth: ChatResponseDepth) => void;
   readonly attachedFiles: readonly UploadedFileRecord[];
+  readonly threadPdfFiles?: readonly UploadedFileRecord[];
   readonly onRemoveAttachedFile: (fileId: string) => void;
   readonly onOpenAttachment?: (file: UploadedFileRecord) => void;
   readonly onUploadFile: (file: {
@@ -84,6 +85,28 @@ export interface ChatInputProps {
 const IMAGE_ASPECT_OPTIONS = ['16:9', '1:1', '4:3', '9:16'] as const;
 const IMAGE_STYLE_OPTIONS = ['Auto', 'Editorial', 'Photoreal', 'Minimal', '3D'] as const;
 
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const commaIdx = result.indexOf(',');
+      resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+    };
+    reader.onerror = () => reject(new Error('Failed to read file bytes'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function inferUploadMimeType(file: File): string {
+  if (file.type) return file.type;
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  return 'application/pdf';
+}
+
 export function ChatInput({
   variant = 'dock',
   selectedAgent,
@@ -91,6 +114,7 @@ export function ChatInput({
   responseDepth,
   onSelectResponseDepth,
   attachedFiles,
+  threadPdfFiles = [],
   onRemoveAttachedFile,
   onOpenAttachment,
   onUploadFile,
@@ -152,23 +176,18 @@ export function ChatInput({
     setIsUploading(true);
 
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const uint8 = new Uint8Array(arrayBuffer);
-      let binary = '';
-      for (let i = 0; i < uint8.byteLength; i++) {
-        binary += String.fromCharCode(uint8[i]!);
-      }
-      const contentBase64 = btoa(binary);
+      const contentBase64 = await readFileAsBase64(file);
+      const declaredMimeType = inferUploadMimeType(file);
 
       await onUploadFile({
         originalFilename: file.name,
-        declaredMimeType: file.type || 'application/pdf',
+        declaredMimeType,
         contentBase64,
       });
 
-      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+      if (declaredMimeType === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
         onSelectAgent('rag');
-      } else if (file.type.startsWith('image/')) {
+      } else if (declaredMimeType.startsWith('image/')) {
         onSelectAgent('vision');
       }
     } catch (err) {
@@ -242,7 +261,7 @@ export function ChatInput({
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const trimmed = prompt.trim();
-    if (!trimmed || isLoading) return;
+    if (!trimmed || isLoading || isUploading) return;
 
     const preferred: SpecialistAgentName | undefined =
       selectedAgent === 'chat' ? undefined : selectedAgent;
@@ -418,6 +437,7 @@ export function ChatInput({
               return (
                 <div
                   key={file.fileId}
+                  data-attached-pdf-chip="true"
                   className="inline-flex items-center gap-1.5 pl-2.5 pr-2 py-1.5 rounded-xl bg-[#18181c] border border-white/[0.1] hover:border-white/[0.22] text-xs text-zinc-200 transition-colors"
                 >
                   <button
@@ -450,6 +470,40 @@ export function ChatInput({
             })}
           </div>
         )}
+
+        {/* Active Thread PDF Grounding Indicator for Multi-Turn Follow-Ups */}
+        {attachedFiles.every((f) => f.mimeType !== 'application/pdf') &&
+          threadPdfFiles.length > 0 &&
+          (selectedAgent === 'rag' || selectedAgent === 'chat') && (
+            <div
+              data-thread-pdf-context="true"
+              className="relative z-10 px-3.5 pt-2.5 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400"
+            >
+              <FileSearch className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>Grounded on thread PDF:</span>
+              {threadPdfFiles.slice(0, 2).map((pdf) => (
+                <button
+                  key={pdf.fileId}
+                  type="button"
+                  onClick={() => onOpenAttachment?.(pdf)}
+                  title={`Inspect ${pdf.originalFilename}`}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-zinc-200 font-medium transition-colors cursor-pointer"
+                >
+                  <span className="max-w-[160px] truncate">{pdf.originalFilename}</span>
+                  {pdf.pageCount ? (
+                    <span className="text-[10px] font-mono tabular-nums text-zinc-400">
+                      {pdf.pageCount}p
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+              {threadPdfFiles.length > 2 && (
+                <span className="text-zinc-500 font-mono">
+                  +{threadPdfFiles.length - 2} more
+                </span>
+              )}
+            </div>
+          )}
 
         {/* Auto-Expanding Prompt Textarea */}
         <div className="relative z-10 px-4 pt-3.5 pb-2">
@@ -748,12 +802,13 @@ export function ChatInput({
             ) : (
               <button
                 type="submit"
-                disabled={!prompt.trim() || isLoading}
+                disabled={!prompt.trim() || isLoading || isUploading}
                 aria-label="Send message"
+                title={isUploading ? 'Indexing attachment…' : 'Send message'}
                 data-composer-send="true"
                 className="h-8 w-8 rounded-full bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 flex items-center justify-center transition-colors cursor-pointer disabled:cursor-not-allowed shrink-0"
               >
-                {isLoading ? (
+                {isLoading || isUploading ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <ArrowUp className="w-4 h-4 stroke-[2.5]" />

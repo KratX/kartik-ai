@@ -72,6 +72,7 @@ import {
   LiveGeminiEmbeddingProvider,
   LiveGeminiImageGenerationProvider,
   LiveGeminiPdfDocumentProvider,
+  LiveGeminiPdfOcrExtractor,
   LiveGeminiPptPresentationProvider,
   LiveGeminiSearchProvider,
   LiveGeminiVisionProvider,
@@ -365,12 +366,17 @@ export function bootstrapAgentService(
       ? new LiveGeminiPptPresentationProvider({ apiKey: geminiKey })
       : new MockPptPresentationProvider());
 
+  const pdfOcrExtractor = useLiveProviders
+    ? new LiveGeminiPdfOcrExtractor({ apiKey: geminiKey })
+    : undefined;
+
   const ingestionService = new FileIngestionAndArtifactService({
     config,
     repository,
     objectStorage,
     vectorStore,
     embeddingProvider,
+    pdfOcrExtractor,
   });
 
   const graphExecutor = new AgentGraphExecutor({

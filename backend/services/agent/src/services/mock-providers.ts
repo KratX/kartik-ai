@@ -129,9 +129,19 @@ export class MockSearchProvider implements SearchProvider {
   }
 }
 
+const DETERMINISTIC_EMBEDDING_STOPWORDS: ReadonlySet<string> = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'been', 'being', 'by', 'can', 'could',
+  'did', 'do', 'does', 'for', 'from', 'had', 'has', 'have', 'how', 'i', 'if', 'in',
+  'into', 'is', 'it', 'its', 'me', 'my', 'of', 'on', 'or', 'our', 'please', 'should',
+  'show', 'tell', 'that', 'the', 'their', 'them', 'there', 'these', 'they', 'this',
+  'to', 'us', 'was', 'we', 'were', 'what', 'when', 'where', 'which', 'who', 'why',
+  'will', 'with', 'would', 'you', 'your', 'about', 'document', 'pdf', 'file',
+]);
+
 /**
- * Deterministic normalized 16-dimensional embedding vector generator from text content.
- * Ensures repeatable cosine similarity in mock RAG tests without external API calls.
+ * Deterministic normalized embedding vector generator from text content.
+ * Strips stop-word noise and blends unigrams + bigrams so cosine similarity
+ * remains accurate in offline/mock RAG retrieval without external API calls.
  */
 export function computeDeterministicEmbedding(
   text: string,
@@ -140,17 +150,32 @@ export function computeDeterministicEmbedding(
   const normalized = text.toLowerCase().trim();
   const vector = new Array<number>(dimensions).fill(0);
 
-  const tokens = normalized.split(/[^a-z0-9]+/).filter(Boolean);
-  if (tokens.length === 0) {
+  const rawTokens = normalized.split(/[^a-z0-9]+/).filter((t) => t.length >= 2);
+  if (rawTokens.length === 0) {
     vector[0] = 1;
     return Object.freeze(vector);
   }
 
+  const filtered = rawTokens.filter((t) => !DETERMINISTIC_EMBEDDING_STOPWORDS.has(t));
+  const tokens = filtered.length > 0 ? filtered : rawTokens;
+
+  // Count term frequencies with sublinear TF dampening (1 + log(tf)) so repeated words don't dominate
+  const termCounts = new Map<string, number>();
   for (const token of tokens) {
-    const digest = crypto.createHash('sha256').update(token).digest();
+    termCounts.set(token, (termCounts.get(token) ?? 0) + 1);
+  }
+  for (let i = 0; i + 1 < tokens.length; i += 1) {
+    const bigram = `${tokens[i]}_${tokens[i + 1]}`;
+    termCounts.set(bigram, (termCounts.get(bigram) ?? 0) + 0.65);
+  }
+
+  for (const [feature, count] of termCounts.entries()) {
+    const weight = 1 + Math.log(Math.max(1, count));
+    const digest = crypto.createHash('sha256').update(feature).digest();
     for (let i = 0; i < dimensions; i += 1) {
       const byteVal = digest[i % digest.length] ?? 0;
-      vector[i] = (vector[i] ?? 0) + (byteVal / 255 - 0.5);
+      const sign = ((digest[(i * 7 + 3) % digest.length] ?? 0) & 1) === 0 ? 1 : -1;
+      vector[i] = (vector[i] ?? 0) + sign * ((byteVal / 255) * 0.8 + 0.2) * weight;
     }
   }
 
@@ -262,7 +287,7 @@ export class InMemoryVectorStore implements VectorStore {
 
     const allowedFiles =
       input.fileIds && input.fileIds.length > 0 ? new Set(input.fileIds) : null;
-    const topK = Math.max(1, Math.min(input.topK ?? 5, 20));
+    const topK = Math.max(1, Math.min(input.topK ?? 5, 100));
 
     const hits: VectorSearchHit[] = [];
     for (const chunk of this.chunks.values()) {
