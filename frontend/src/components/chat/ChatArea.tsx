@@ -111,6 +111,7 @@ export interface ChatAreaProps {
     agent: SpecialistAgentName,
   ) => void;
   readonly onRegenerate?: (message: PlatformMessage) => void;
+  readonly onForkConversation?: (message: PlatformMessage) => void;
   readonly onEditPrompt?: (prompt: string) => void;
   readonly onHandoffToSpecialist?: (
     target: 'pdf' | 'ppt' | 'search',
@@ -151,6 +152,7 @@ export function ChatArea({
   onStreamComplete,
   onQuickPromptSelect,
   onRegenerate,
+  onForkConversation,
   onEditPrompt,
   onHandoffToSpecialist,
   onOpenArtifact,
@@ -424,6 +426,7 @@ export function ChatArea({
                 onQuickPromptSelect?.(query, agent ?? 'chat')
               }
               onRegenerate={onRegenerate}
+              onForkConversation={onForkConversation}
               onEditPrompt={onEditPrompt}
               onHandoffToSpecialist={onHandoffToSpecialist}
               onOpenArtifact={onOpenArtifact}

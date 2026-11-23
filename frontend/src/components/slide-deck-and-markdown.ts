@@ -589,6 +589,7 @@ export function pptViewModelToCompileSpec(deck: ParsedSlideDeckViewModel) {
 export type MarkdownBlock =
   | { readonly type: 'heading'; readonly level: 1 | 2 | 3 | 4; readonly text: string }
   | { readonly type: 'code'; readonly language: string; readonly code: string }
+  | { readonly type: 'math'; readonly expression: string }
   | {
       readonly type: 'table';
       readonly headers: readonly string[];
@@ -637,6 +638,36 @@ export function tokenizeMarkdownBlocks(markdown: string): readonly MarkdownBlock
         type: 'code',
         language,
         code: codeLines.join('\n'),
+      });
+      continue;
+    }
+
+    // 1b. Display math block ($$ ... $$)
+    if (trimmed.startsWith('$$')) {
+      if (trimmed.endsWith('$$') && trimmed.length > 4) {
+        blocks.push({
+          type: 'math',
+          expression: trimmed.slice(2, -2).trim(),
+        });
+        i += 1;
+        continue;
+      }
+      const mathLines: string[] = [];
+      const afterOpen = trimmed.slice(2).trim();
+      if (afterOpen) mathLines.push(afterOpen);
+      i += 1;
+      while (i < lines.length && !(lines[i] ?? '').trim().endsWith('$$')) {
+        mathLines.push((lines[i] ?? '').trim());
+        i += 1;
+      }
+      if (i < lines.length) {
+        const closingLine = (lines[i] ?? '').trim().replace(/\$\$$/, '').trim();
+        if (closingLine) mathLines.push(closingLine);
+        i += 1;
+      }
+      blocks.push({
+        type: 'math',
+        expression: mathLines.join(' ').trim(),
       });
       continue;
     }
@@ -729,6 +760,7 @@ export function tokenizeMarkdownBlocks(markdown: string): readonly MarkdownBlock
       if (
         !cur ||
         cur.startsWith('```') ||
+        cur.startsWith('$$') ||
         /^#{1,4}\s+/.test(cur) ||
         cur.startsWith('|') ||
         cur.startsWith('>') ||
@@ -752,17 +784,18 @@ export function tokenizeMarkdownBlocks(markdown: string): readonly MarkdownBlock
 export type MarkdownInlineToken =
   | { readonly type: 'text'; readonly text: string }
   | { readonly type: 'code'; readonly text: string }
+  | { readonly type: 'math'; readonly expression: string }
   | { readonly type: 'bold'; readonly text: string }
   | { readonly type: 'italic'; readonly text: string }
   | { readonly type: 'link'; readonly label: string; readonly url: string }
   | { readonly type: 'citation'; readonly index: number; readonly raw: string };
 
 const INLINE_TOKEN_PATTERN =
-  /(`[^`]+`|\*\*[^*]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|\[(?:src_)?\d+(?:\s*,\s*(?:src_)?\d+)*\])/g;
+  /(`[^`]+`|\$(?!\s)(?:[^$\n]*[\\^_=+\-*/A-Za-z][^$\n]*)(?<!\s)\$|\*\*[^*]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|\[(?:src_)?\d+(?:\s*,\s*(?:src_)?\d+)*\])/g;
 
 /**
- * Pure, XSS-safe inline Markdown tokenizer supporting inline code, bold, italic,
- * `http(s)` links, and numeric citation markers (`[1]`, `[src_1]`, `[1, 2]`).
+ * Pure, XSS-safe inline Markdown tokenizer supporting inline code, inline LaTeX math,
+ * bold, italic, `http(s)` links, and numeric citation markers (`[1]`, `[src_1]`, `[1, 2]`).
  */
 export function tokenizeInlineMarkdown(text: string): readonly MarkdownInlineToken[] {
   if (!text) {
@@ -778,6 +811,19 @@ export function tokenizeInlineMarkdown(text: string): readonly MarkdownInlineTok
     if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
       tokens.push({ type: 'code', text: part.slice(1, -1) });
       continue;
+    }
+
+    if (
+      part.startsWith('$') &&
+      part.endsWith('$') &&
+      part.length >= 3 &&
+      !part.startsWith('$$')
+    ) {
+      const expr = part.slice(1, -1);
+      if (!/^\d[\d,.\s]*$/.test(expr)) {
+        tokens.push({ type: 'math', expression: expr });
+        continue;
+      }
     }
 
     if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {

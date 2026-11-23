@@ -26,6 +26,7 @@ export interface MessageListProps {
     agent?: SpecialistAgentName,
   ) => void;
   readonly onRegenerate?: (message: PlatformMessage) => void;
+  readonly onForkConversation?: (message: PlatformMessage) => void;
   readonly onEditPrompt?: (prompt: string) => void;
   readonly onHandoffToSpecialist?: (
     target: 'pdf' | 'ppt' | 'search',
@@ -53,6 +54,7 @@ export function MessageList({
   onStreamTick,
   onFollowUpSearch,
   onRegenerate,
+  onForkConversation,
   onEditPrompt,
   onHandoffToSpecialist,
   onOpenArtifact,
@@ -94,6 +96,7 @@ export function MessageList({
             onStreamTick={onStreamTick}
             onFollowUpSearch={onFollowUpSearch}
             onRegenerate={onRegenerate}
+            onForkConversation={onForkConversation}
             onEditPrompt={onEditPrompt}
             onHandoffToSpecialist={onHandoffToSpecialist}
             onOpenArtifact={onOpenArtifact}

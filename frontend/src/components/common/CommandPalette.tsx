@@ -35,6 +35,17 @@ import {
 } from '../workspace-ux-helpers.js';
 import { BorderBeam } from '../motion/primitives.js';
 
+export interface CommandPaletteSearchHit {
+  readonly conversationId: string;
+  readonly conversationTitle: string;
+  readonly messageId: string;
+  readonly role: 'user' | 'assistant';
+  readonly agentUsed?: SpecialistAgentName;
+  readonly snippet: string;
+  readonly matchedArtifactTitle?: string;
+  readonly createdAt: string;
+}
+
 export interface CommandPaletteProps {
   readonly isOpen: boolean;
   readonly onClose: () => void;
@@ -44,6 +55,9 @@ export interface CommandPaletteProps {
   readonly responseDepth: ChatResponseDepth;
   readonly hasArtifacts: boolean;
   readonly hasMessages?: boolean;
+  readonly onSearchMessages?: (
+    query: string,
+  ) => Promise<readonly CommandPaletteSearchHit[]>;
   readonly onSelectConversation: (conversationId: string) => void;
   readonly onCreateConversation: () => void;
   readonly onSelectAgent: (agent: SpecialistAgentName) => void;
@@ -56,11 +70,17 @@ export interface CommandPaletteProps {
 }
 
 interface PaletteEntry extends CommandPaletteSearchable {
-  readonly section: 'Quick Actions' | 'Switch Specialist' | 'Chat Depth' | 'Conversations';
+  readonly section:
+    | 'Quick Actions'
+    | 'Switch Specialist'
+    | 'Chat Depth'
+    | 'Conversations'
+    | 'Messages & Artifacts';
   readonly icon: React.ReactNode;
   readonly shortcut?: string;
   readonly badge?: string;
   readonly isActive?: boolean;
+  readonly isSearchHit?: boolean;
   readonly onSelect: () => void;
 }
 
@@ -94,6 +114,7 @@ export function CommandPalette({
   responseDepth,
   hasArtifacts,
   hasMessages = false,
+  onSearchMessages,
   onSelectConversation,
   onCreateConversation,
   onSelectAgent,
@@ -106,15 +127,54 @@ export function CommandPalette({
 }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
+  const [searchHits, setSearchHits] = useState<readonly CommandPaletteSearchHit[]>([]);
+  const [isSearchingMessages, setIsSearchingMessages] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setQuery('');
       setActiveIndex(0);
+      setSearchHits([]);
+      setIsSearchingMessages(false);
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !onSearchMessages) return;
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
+      setSearchHits([]);
+      setIsSearchingMessages(false);
+      return;
+    }
+    let cancelled = false;
+    setIsSearchingMessages(true);
+    const timer = window.setTimeout(() => {
+      void onSearchMessages(trimmed)
+        .then((hits) => {
+          if (!cancelled) {
+            setSearchHits(hits);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setSearchHits([]);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setIsSearchingMessages(false);
+          }
+        });
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [isOpen, onSearchMessages, query]);
 
   const allEntries = useMemo<readonly PaletteEntry[]>(() => {
     const entries: PaletteEntry[] = [
@@ -279,10 +339,33 @@ export function CommandPalette({
     titleOverrides,
   ]);
 
-  const filtered = useMemo(
-    () => filterCommandPaletteItems(allEntries, query),
-    [allEntries, query],
-  );
+  const filtered = useMemo(() => {
+    const baseFiltered = filterCommandPaletteItems(allEntries, query);
+    if (query.trim().length < 2 || searchHits.length === 0) {
+      return baseFiltered;
+    }
+    const hitEntries: PaletteEntry[] = searchHits.map((hit) => {
+      const displayTitle =
+        titleOverrides[hit.conversationId]?.trim() || hit.conversationTitle;
+      return {
+        id: `search:${hit.messageId}`,
+        section: 'Messages & Artifacts',
+        label: hit.matchedArtifactTitle
+          ? `${displayTitle} · ${hit.matchedArtifactTitle}`
+          : displayTitle,
+        subtitle: hit.snippet,
+        keywords: [],
+        icon: hit.agentUsed ? getAgentIcon(hit.agentUsed) : <Search className="w-4 h-4" />,
+        badge: hit.role === 'assistant' ? (hit.agentUsed ?? 'reply') : 'prompt',
+        isSearchHit: true,
+        onSelect: () => {
+          onSelectConversation(hit.conversationId);
+          onClose();
+        },
+      };
+    });
+    return [...hitEntries, ...baseFiltered];
+  }, [allEntries, onClose, onSelectConversation, query, searchHits, titleOverrides]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -373,13 +456,20 @@ export function CommandPalette({
             <div className="relative z-10 max-h-[54vh] overflow-y-auto p-2 space-y-3">
               {sections.length === 0 ? (
                 <div className="py-10 text-center text-xs text-zinc-500">
-                  No matching commands or threads for &ldquo;{query}&rdquo;
+                  {isSearchingMessages
+                    ? `Searching messages and artifacts for "${query}"…`
+                    : `No matching commands, messages, or threads for "${query}"`}
                 </div>
               ) : (
                 sections.map(([sectionTitle, rows]) => (
                   <div key={sectionTitle}>
-                    <div className="px-2.5 py-1 text-[11px] font-medium text-zinc-500">
-                      {sectionTitle}
+                    <div className="px-2.5 py-1 flex items-center justify-between text-[11px] font-medium text-zinc-500">
+                      <span>{sectionTitle}</span>
+                      {sectionTitle === 'Messages & Artifacts' && isSearchingMessages && (
+                        <span className="text-[10px] font-mono text-zinc-500">
+                          Searching…
+                        </span>
+                      )}
                     </div>
                     <div className="space-y-0.5">
                       {rows.map(({ entry, flatIdx }) => {
@@ -389,6 +479,7 @@ export function CommandPalette({
                             key={entry.id}
                             type="button"
                             data-command-item={entry.id}
+                            data-search-hit={entry.isSearchHit ? 'true' : undefined}
                             onMouseEnter={() => setActiveIndex(flatIdx)}
                             onClick={entry.onSelect}
                             className={`relative w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl text-left transition-colors cursor-pointer ${

@@ -1459,6 +1459,220 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it('Fix #29: isolates per-user Preferences sync, Full-Text Search, Conversation Forking, and PPTX Cover Visual recompile across tenants', async () => {
+    const validTokens: Record<string, DecodedIdToken> = {
+      'fix29-jwt-alice': buildDecodedFirebaseToken({
+        uid: 'fb_fix29_alice',
+        email: 'alice.fix29@example.com',
+        name: 'Alice Studio',
+      }),
+      'fix29-jwt-bob': buildDecodedFirebaseToken({
+        uid: 'fb_fix29_bob',
+        email: 'bob.fix29@example.com',
+        name: 'Bob Studio',
+      }),
+    };
+
+    setFirebaseTokenVerifierForTests(async (token: string) => {
+      const match = validTokens[token];
+      if (!match) throw new Error('FirebaseAuthError: Invalid ID token');
+      return match;
+    });
+
+    const runtime = new KartikPlatformRuntime({
+      persistence: new InMemoryPlatformPersistenceAdapter(),
+    });
+    const app = createKartikExpressApp(runtime);
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const aliceHeaders = {
+      Authorization: 'Bearer fix29-jwt-alice',
+      'content-type': 'application/json',
+    };
+    const bobHeaders = {
+      Authorization: 'Bearer fix29-jwt-bob',
+      'content-type': 'application/json',
+    };
+
+    try {
+      // 1. Preferences Sync (GET / PATCH) — isolated between Alice and Bob
+      const alicePatchPrefRes = await fetch(`${baseUrl}/api/v1/preferences`, {
+        method: 'PATCH',
+        headers: aliceHeaders,
+        body: JSON.stringify({
+          defaultResponseDepth: 'deep',
+          defaultPptSurfaceMode: 'light',
+          pinnedConversationIds: ['conv_pin_1'],
+        }),
+      });
+      assert.equal(alicePatchPrefRes.status, 200);
+      const alicePrefJson = (await alicePatchPrefRes.json()) as {
+        data: {
+          preferences: {
+            defaultResponseDepth: string;
+            defaultPptSurfaceMode: string;
+            pinnedConversationIds: string[];
+          };
+        };
+      };
+      assert.equal(alicePrefJson.data.preferences.defaultResponseDepth, 'deep');
+      assert.equal(alicePrefJson.data.preferences.defaultPptSurfaceMode, 'light');
+      assert.deepEqual(alicePrefJson.data.preferences.pinnedConversationIds, ['conv_pin_1']);
+
+      const aliceGetPrefRes = await fetch(`${baseUrl}/api/v1/preferences`, {
+        headers: aliceHeaders,
+      });
+      assert.equal(aliceGetPrefRes.status, 200);
+      const aliceGetPrefJson = (await aliceGetPrefRes.json()) as {
+        data: {
+          preferences: { defaultResponseDepth: string; defaultPptSurfaceMode: string };
+        };
+      };
+      assert.equal(aliceGetPrefJson.data.preferences.defaultResponseDepth, 'deep');
+      assert.equal(aliceGetPrefJson.data.preferences.defaultPptSurfaceMode, 'light');
+
+      // Bob still sees default preferences, never Alice's
+      const bobGetPrefRes = await fetch(`${baseUrl}/api/v1/preferences`, {
+        headers: bobHeaders,
+      });
+      assert.equal(bobGetPrefRes.status, 200);
+      const bobPrefJson = (await bobGetPrefRes.json()) as {
+        data: {
+          preferences: { defaultResponseDepth: string; defaultPptSurfaceMode: string };
+        };
+      };
+      assert.equal(bobPrefJson.data.preferences.defaultResponseDepth, 'balanced');
+      assert.equal(bobPrefJson.data.preferences.defaultPptSurfaceMode, 'dark');
+
+      // 2. Alice creates a conversation with a distinct keyword and runs a turn
+      const convRes = await fetch(`${baseUrl}/api/v1/conversations`, {
+        method: 'POST',
+        headers: aliceHeaders,
+        body: JSON.stringify({ title: 'Quantum Photonics Research' }),
+      });
+      assert.equal(convRes.status, 201);
+      const convJson = (await convRes.json()) as {
+        data: { conversationId: string };
+      };
+      const aliceConvId = convJson.data.conversationId;
+
+      const turnRes = await fetch(
+        `${baseUrl}/api/v1/conversations/${encodeURIComponent(aliceConvId)}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            ...aliceHeaders,
+            'Idempotency-Key': 'req_fix29_alice_turn_1',
+          },
+          body: JSON.stringify({
+            prompt: 'Summarize chrysalis_photonics_benchmark_991 in two bullet points',
+            preferredAgent: 'chat',
+          }),
+        },
+      );
+      assert.equal(turnRes.status, 201);
+      const turnJson = (await turnRes.json()) as {
+        data: { assistantMessage: { messageId: string } };
+      };
+      const assistantMsgId = turnJson.data.assistantMessage.messageId;
+
+      // 3. Full-text Search: Alice finds her message; Bob sees 0 hits
+      const aliceSearchRes = await fetch(
+        `${baseUrl}/api/v1/search?q=${encodeURIComponent('chrysalis_photonics_benchmark_991')}`,
+        { headers: aliceHeaders },
+      );
+      assert.equal(aliceSearchRes.status, 200);
+      const aliceSearchJson = (await aliceSearchRes.json()) as {
+        data: { hits: Array<{ conversationId: string; snippet: string }> };
+      };
+      assert.ok(aliceSearchJson.data.hits.length >= 1);
+      assert.equal(aliceSearchJson.data.hits[0]?.conversationId, aliceConvId);
+
+      const bobSearchRes = await fetch(
+        `${baseUrl}/api/v1/search?q=${encodeURIComponent('chrysalis_photonics_benchmark_991')}`,
+        { headers: bobHeaders },
+      );
+      assert.equal(bobSearchRes.status, 200);
+      const bobSearchJson = (await bobSearchRes.json()) as {
+        data: { hits: unknown[] };
+      };
+      assert.equal(bobSearchJson.data.hits.length, 0);
+
+      // 4. Fork Thread from Message: Alice succeeds and clones messages up to assistantMsgId; Bob gets 404
+      const aliceForkRes = await fetch(
+        `${baseUrl}/api/v1/conversations/${encodeURIComponent(aliceConvId)}/fork`,
+        {
+          method: 'POST',
+          headers: aliceHeaders,
+          body: JSON.stringify({ upToMessageId: assistantMsgId }),
+        },
+      );
+      assert.equal(aliceForkRes.status, 201);
+      const aliceForkJson = (await aliceForkRes.json()) as {
+        data: {
+          conversation: { conversationId: string; title: string };
+          messages: Array<{ role: string }>;
+        };
+      };
+      assert.notEqual(aliceForkJson.data.conversation.conversationId, aliceConvId);
+      assert.ok(aliceForkJson.data.conversation.title.includes('(Branch)'));
+      assert.equal(aliceForkJson.data.messages.length, 2);
+
+      const bobForkAliceRes = await fetch(
+        `${baseUrl}/api/v1/conversations/${encodeURIComponent(aliceConvId)}/fork`,
+        {
+          method: 'POST',
+          headers: bobHeaders,
+          body: JSON.stringify({ upToMessageId: assistantMsgId }),
+        },
+      );
+      assert.equal(bobForkAliceRes.status, 404);
+
+      // 5. Recompile PPTX with optional coverImageBase64 embeds ppt/media/cover.png
+      const tinyPngBase64 = Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+        0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
+        0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+        0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+        0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+        0x42, 0x60, 0x82,
+      ]).toString('base64');
+
+      const recompilePptRes = await fetch(`${baseUrl}/api/v1/artifacts/recompile`, {
+        method: 'POST',
+        headers: aliceHeaders,
+        body: JSON.stringify({
+          kind: 'ppt',
+          coverImageBase64: tinyPngBase64,
+          spec: {
+            title: 'Photonics Deck',
+            subtitle: 'Cover Embed Check',
+            theme: 'editorial_story',
+            slides: [
+              {
+                layout: 'bullets',
+                title: 'Core Results',
+                bullets: ['Low-loss waveguide'],
+              },
+            ],
+          },
+        }),
+      });
+      assert.equal(recompilePptRes.status, 200);
+      const pptxBuf = Buffer.from(await recompilePptRes.arrayBuffer());
+      assert.ok(pptxBuf.toString('utf8').includes('ppt/media/cover.png'));
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
 
 

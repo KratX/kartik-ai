@@ -474,7 +474,18 @@ export function createKartikExpressApp(
 
       if (body.kind === 'ppt') {
         const validatedSpec = validatePptPresentationSpec(body.spec);
-        const compiled = buildPptxBinaryBuffer(validatedSpec);
+        let coverImagePngBytes: Buffer | undefined;
+        const rawCover = (body as { coverImageBase64?: unknown }).coverImageBase64;
+        if (typeof rawCover === 'string' && rawCover.trim().length > 0) {
+          const cleaned = rawCover.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, '').trim();
+          const decoded = Buffer.from(cleaned, 'base64');
+          if (decoded.byteLength > 8 && decoded.byteLength <= 6 * 1024 * 1024) {
+            coverImagePngBytes = decoded;
+          }
+        }
+        const compiled = buildPptxBinaryBuffer(validatedSpec, {
+          coverImagePngBytes,
+        });
         res.setHeader(
           'Content-Type',
           'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -492,6 +503,59 @@ export function createKartikExpressApp(
         'VALIDATION_FAILED',
         'kind must be either "pdf" or "ppt"',
       );
+    } catch (err) {
+      sendError(req, res, err);
+    }
+  });
+
+  app.get('/api/v1/preferences', async (req, res) => {
+    try {
+      const actor = resolveWorkspaceIdentity(req);
+      const preferences = await runtime.getUserPreferences(actor);
+      sendEnvelope(req, res, 200, { preferences });
+    } catch (err) {
+      sendError(req, res, err);
+    }
+  });
+
+  app.patch('/api/v1/preferences', async (req, res) => {
+    try {
+      const actor = resolveWorkspaceIdentity(req);
+      const body = (req.body ?? {}) as {
+        pinnedConversationIds?: string[];
+        titleOverrides?: Record<string, string>;
+        defaultResponseDepth?: ChatResponseDepth;
+        defaultPptSurfaceMode?: 'dark' | 'light';
+      };
+      const preferences = await runtime.updateUserPreferences(actor, body);
+      sendEnvelope(req, res, 200, { preferences });
+    } catch (err) {
+      sendError(req, res, err);
+    }
+  });
+
+  app.get('/api/v1/search', async (req, res) => {
+    try {
+      const actor = resolveWorkspaceIdentity(req);
+      const q = typeof req.query.q === 'string' ? req.query.q : '';
+      const limitRaw = typeof req.query.limit === 'string' ? Number(req.query.limit) : 20;
+      const result = await runtime.searchUserMessages(actor, q, limitRaw);
+      sendEnvelope(req, res, 200, result);
+    } catch (err) {
+      sendError(req, res, err);
+    }
+  });
+
+  app.post('/api/v1/conversations/:conversationId/fork', async (req, res) => {
+    try {
+      const actor = resolveWorkspaceIdentity(req);
+      const body = (req.body ?? {}) as { upToMessageId?: string };
+      const forked = await runtime.forkConversationAtMessage(
+        actor,
+        req.params.conversationId ?? '',
+        typeof body.upToMessageId === 'string' ? body.upToMessageId : undefined,
+      );
+      sendEnvelope(req, res, 201, forked);
     } catch (err) {
       sendError(req, res, err);
     }

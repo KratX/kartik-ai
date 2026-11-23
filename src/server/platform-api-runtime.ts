@@ -16,6 +16,7 @@
 
 import 'dotenv/config';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createObjectStorageFromEnv } from '../../backend/shared/storage/index.js';
@@ -177,6 +178,24 @@ export interface PlatformCreditReservation {
   updatedAt: string;
 }
 
+export interface PlatformUserPreferences {
+  readonly pinnedConversationIds: readonly string[];
+  readonly titleOverrides: Readonly<Record<string, string>>;
+  readonly defaultResponseDepth: ChatResponseDepth;
+  readonly defaultPptSurfaceMode: 'dark' | 'light';
+  readonly updatedAt: string;
+}
+
+export interface PlatformSearchHit {
+  readonly conversationId: string;
+  readonly conversationTitle: string;
+  readonly messageId: string | null;
+  readonly role: 'user' | 'assistant' | 'title';
+  readonly snippet: string;
+  readonly matchedIn: 'title' | 'message' | 'artifact';
+  readonly createdAt: string;
+}
+
 const INITIAL_FREE_CREDITS = 250;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -257,6 +276,12 @@ export class KartikPlatformRuntime {
   private readonly seededWelcomeUsers = new Set<string>();
   private readonly conversations = new Map<string, PlatformConversation>();
   private readonly messagesByConversation = new Map<string, PlatformMessage[]>();
+  private readonly preferencesByUserId = new Map<string, PlatformUserPreferences>();
+  private readonly prefsStoragePath =
+    process.env.NODE_ENV === 'test'
+      ? path.join(os.tmpdir(), `kartik-prefs-${process.pid}-${Date.now()}.json`)
+      : path.join(process.cwd(), '.kartik-user-preferences.json');
+  private prefsLoadedFromDisk = false;
   private readonly reservationsByUserAndRequestId = new Map<
     string,
     PlatformCreditReservation
@@ -2054,6 +2079,301 @@ export class KartikPlatformRuntime {
       creditsAdded: order.plan.creditsGranted,
       availableCredits: updatedBalance,
       idempotentReplay: false,
+    };
+  }
+
+  private ensurePreferencesLoaded(): void {
+    if (this.prefsLoadedFromDisk) return;
+    this.prefsLoadedFromDisk = true;
+    try {
+      if (!fs.existsSync(this.prefsStoragePath)) return;
+      const raw = fs.readFileSync(this.prefsStoragePath, 'utf8');
+      const parsed = JSON.parse(raw) as Record<string, PlatformUserPreferences>;
+      if (parsed && typeof parsed === 'object') {
+        for (const [uid, pref] of Object.entries(parsed)) {
+          if (uid && pref && typeof pref === 'object') {
+            this.preferencesByUserId.set(uid, pref);
+          }
+        }
+      }
+    } catch {
+      // Non-fatal: start with clean default preferences
+    }
+  }
+
+  private persistPreferencesToDisk(): void {
+    try {
+      const obj: Record<string, PlatformUserPreferences> = {};
+      for (const [uid, pref] of this.preferencesByUserId.entries()) {
+        obj[uid] = pref;
+      }
+      fs.writeFileSync(this.prefsStoragePath, JSON.stringify(obj, null, 2), 'utf8');
+    } catch {
+      // Non-fatal disk sync fallback
+    }
+  }
+
+  public async getUserPreferences(
+    identity: VerifiedRequestIdentity,
+  ): Promise<PlatformUserPreferences> {
+    const user = await this.hydrateUserFromPersistence(identity);
+    this.ensurePreferencesLoaded();
+    const existing = this.preferencesByUserId.get(user.userId);
+    if (existing) {
+      return existing;
+    }
+    return {
+      pinnedConversationIds: [],
+      titleOverrides: {},
+      defaultResponseDepth: 'balanced',
+      defaultPptSurfaceMode: 'dark',
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  public async updateUserPreferences(
+    identity: VerifiedRequestIdentity,
+    patch: {
+      readonly pinnedConversationIds?: readonly string[];
+      readonly titleOverrides?: Readonly<Record<string, string>>;
+      readonly defaultResponseDepth?: ChatResponseDepth;
+      readonly defaultPptSurfaceMode?: 'dark' | 'light';
+    },
+  ): Promise<PlatformUserPreferences> {
+    const user = await this.hydrateUserFromPersistence(identity);
+    const current = await this.getUserPreferences(identity);
+
+    const pinnedConversationIds = Array.isArray(patch.pinnedConversationIds)
+      ? Array.from(
+          new Set(
+            patch.pinnedConversationIds
+              .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+              .map((id) => id.trim().slice(0, 80)),
+          ),
+        ).slice(0, 100)
+      : current.pinnedConversationIds;
+
+    let titleOverrides: Record<string, string> = { ...current.titleOverrides };
+    if (patch.titleOverrides && typeof patch.titleOverrides === 'object' && !Array.isArray(patch.titleOverrides)) {
+      const next: Record<string, string> = {};
+      for (const [convId, title] of Object.entries(patch.titleOverrides).slice(0, 200)) {
+        if (typeof convId === 'string' && typeof title === 'string') {
+          const cleanId = convId.trim().slice(0, 80);
+          const cleanTitle = title.trim().slice(0, 120);
+          if (cleanId && cleanTitle) {
+            next[cleanId] = cleanTitle;
+          }
+        }
+      }
+      titleOverrides = next;
+    }
+
+    const defaultResponseDepth: ChatResponseDepth =
+      patch.defaultResponseDepth === 'concise' ||
+      patch.defaultResponseDepth === 'balanced' ||
+      patch.defaultResponseDepth === 'deep'
+        ? patch.defaultResponseDepth
+        : current.defaultResponseDepth;
+
+    const defaultPptSurfaceMode: 'dark' | 'light' =
+      patch.defaultPptSurfaceMode === 'light' || patch.defaultPptSurfaceMode === 'dark'
+        ? patch.defaultPptSurfaceMode
+        : current.defaultPptSurfaceMode;
+
+    const updated: PlatformUserPreferences = {
+      pinnedConversationIds,
+      titleOverrides,
+      defaultResponseDepth,
+      defaultPptSurfaceMode,
+      updatedAt: new Date().toISOString(),
+    };
+    this.preferencesByUserId.set(user.userId, updated);
+    this.persistPreferencesToDisk();
+    return updated;
+  }
+
+  public async searchUserMessages(
+    identity: VerifiedRequestIdentity,
+    rawQuery: string,
+    limit = 20,
+  ): Promise<{ readonly query: string; readonly hits: readonly PlatformSearchHit[] }> {
+    const user = await this.hydrateUserFromPersistence(identity);
+    const query = rawQuery.trim();
+    if (!query) {
+      return { query: '', hits: [] };
+    }
+    const lowerQuery = query.toLowerCase();
+    const prefs = await this.getUserPreferences(identity);
+    const maxHits = Math.max(1, Math.min(50, Math.floor(limit || 20)));
+    const hits: PlatformSearchHit[] = [];
+
+    const userConvs = Array.from(this.conversations.values())
+      .filter((c) => c.userId === user.userId && c.deletionState === 'active')
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+    const buildSnippet = (text: string, qLower: string): string => {
+      const compact = text.replace(/\s+/g, ' ').trim();
+      const idx = compact.toLowerCase().indexOf(qLower);
+      if (idx === -1) return compact.slice(0, 160);
+      const start = Math.max(0, idx - 48);
+      const end = Math.min(compact.length, idx + qLower.length + 92);
+      const prefix = start > 0 ? '…' : '';
+      const suffix = end < compact.length ? '…' : '';
+      return `${prefix}${compact.slice(start, end)}${suffix}`;
+    };
+
+    for (const conv of userConvs) {
+      if (hits.length >= maxHits) break;
+      const displayTitle = prefs.titleOverrides[conv.conversationId] || conv.title;
+      const msgs = this.messagesByConversation.get(conv.conversationId) ?? [];
+      let matchedInConv = false;
+
+      // Search messages newest-first so most relevant turns surface cleanly
+      for (let mIdx = msgs.length - 1; mIdx >= 0; mIdx -= 1) {
+        if (hits.length >= maxHits) break;
+        const msg = msgs[mIdx]!;
+        if (msg.content.toLowerCase().includes(lowerQuery)) {
+          hits.push({
+            conversationId: conv.conversationId,
+            conversationTitle: displayTitle,
+            messageId: msg.messageId,
+            role: msg.role,
+            snippet: buildSnippet(msg.content, lowerQuery),
+            matchedIn: 'message',
+            createdAt: msg.createdAt,
+          });
+          matchedInConv = true;
+          continue;
+        }
+        const matchedArtifact = (msg.artifacts ?? []).find((a) =>
+          a.title.toLowerCase().includes(lowerQuery),
+        );
+        if (matchedArtifact) {
+          hits.push({
+            conversationId: conv.conversationId,
+            conversationTitle: displayTitle,
+            messageId: msg.messageId,
+            role: msg.role,
+            snippet: `Artifact: ${matchedArtifact.title}`,
+            matchedIn: 'artifact',
+            createdAt: msg.createdAt,
+          });
+          matchedInConv = true;
+        }
+      }
+
+      if (!matchedInConv && displayTitle.toLowerCase().includes(lowerQuery)) {
+        hits.push({
+          conversationId: conv.conversationId,
+          conversationTitle: displayTitle,
+          messageId: null,
+          role: 'title',
+          snippet: displayTitle,
+          matchedIn: 'title',
+          createdAt: conv.updatedAt,
+        });
+      }
+    }
+
+    return { query, hits };
+  }
+
+  public async forkConversationAtMessage(
+    identity: VerifiedRequestIdentity,
+    sourceConversationId: string,
+    upToMessageId?: string,
+  ): Promise<{
+    readonly conversation: PlatformConversation;
+    readonly messages: readonly PlatformMessage[];
+    readonly copiedCount: number;
+  }> {
+    const user = await this.hydrateUserFromPersistence(identity);
+    const sourceConv = this.conversations.get(sourceConversationId);
+    if (
+      !sourceConv ||
+      sourceConv.userId !== user.userId ||
+      sourceConv.deletionState !== 'active'
+    ) {
+      throw new AppError(
+        'NOT_FOUND',
+        `Conversation "${sourceConversationId}" was not found`,
+      );
+    }
+
+    const sourceMessages = this.messagesByConversation.get(sourceConversationId) ?? [];
+    let sliceEnd = sourceMessages.length;
+    if (upToMessageId && upToMessageId.trim()) {
+      const targetIdx = sourceMessages.findIndex(
+        (m) => m.messageId === upToMessageId.trim(),
+      );
+      if (targetIdx === -1) {
+        throw new AppError(
+          'NOT_FOUND',
+          `Message "${upToMessageId}" was not found in conversation`,
+        );
+      }
+      sliceEnd = targetIdx + 1;
+    }
+
+    const now = new Date().toISOString();
+    const newConversationId = `conv_${crypto.randomBytes(6).toString('hex')}`;
+    const baseTitle = sourceConv.title.replace(/\s*\(Branch(?:\s*\d+)?\)$/i, '').trim();
+    const forkedTitle = `${baseTitle.slice(0, 72)} (Branch)`;
+
+    const newConversation: PlatformConversation = {
+      conversationId: newConversationId,
+      userId: user.userId,
+      title: forkedTitle,
+      deletionState: 'active',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const clonedMessages: PlatformMessage[] = sourceMessages
+      .slice(0, sliceEnd)
+      .map((orig) => ({
+        ...orig,
+        messageId: `msg_${crypto.randomBytes(6).toString('hex')}`,
+        conversationId: newConversationId,
+      }));
+
+    this.conversations.set(newConversationId, newConversation);
+    this.messagesByConversation.set(newConversationId, clonedMessages);
+
+    this.trackPersistence(async () => {
+      await this.persistence.syncConversation({
+        conversationId: newConversation.conversationId,
+        userId: user.userId,
+        email: user.email,
+        displayName: user.displayName,
+        title: newConversation.title,
+        deletionState: 'active',
+        messageCount: clonedMessages.length,
+        createdAt: newConversation.createdAt,
+        updatedAt: newConversation.updatedAt,
+      });
+      for (const msg of clonedMessages) {
+        await this.persistence.syncMessage({
+          messageId: msg.messageId,
+          conversationId: newConversationId,
+          userId: user.userId,
+          role: msg.role,
+          content: msg.content,
+          agentUsed: msg.agentUsed,
+          creditsCharged: msg.creditsCharged,
+          citationsJson: msg.citations ?? [],
+          searchImagesJson: msg.searchImages ?? [],
+          artifactIdsJson: msg.artifactIds ?? [],
+          attachedFileIdsJson: msg.attachedFiles?.map((f) => f.fileId) ?? [],
+          createdAt: msg.createdAt,
+        });
+      }
+    });
+
+    return {
+      conversation: newConversation,
+      messages: clonedMessages,
+      copiedCount: clonedMessages.length,
     };
   }
 }

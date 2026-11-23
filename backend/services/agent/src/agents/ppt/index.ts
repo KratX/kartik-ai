@@ -586,6 +586,7 @@ function buildSlideXml(
   spec: PptPresentationSpec,
   totalSlides: number,
   palette: PptThemePalette,
+  coverImageRelId?: string,
 ): string {
   let nextShapeId = 2;
   const shapes: string[] = [];
@@ -606,12 +607,17 @@ function buildSlideXml(
   });
 
   if (slide.kind === 'cover') {
+    const hasCoverVisual = Boolean(coverImageRelId);
+    const coverTextW = hasCoverVisual
+      ? Math.floor(CONTENT_W * 0.56)
+      : CONTENT_W;
+
     // Editorial cover layout
     pushShape({
       name: 'CoverKicker',
       x: MARGIN_X,
       y: 1_050_000,
-      cx: CONTENT_W,
+      cx: coverTextW,
       cy: 340_000,
       padX: 0,
       padY: 0,
@@ -629,14 +635,14 @@ function buildSlideXml(
       name: 'CoverTitle',
       x: MARGIN_X,
       y: 1_450_000,
-      cx: CONTENT_W,
+      cx: coverTextW,
       cy: 1_900_000,
       padX: 0,
       padY: 0,
       paragraphs: [
         {
           text: slide.title,
-          sizePt: 40,
+          sizePt: hasCoverVisual ? 34 : 40,
           colorHex: palette.textPrimaryHex,
           bold: true,
           spaceAfterPt: 14,
@@ -645,7 +651,7 @@ function buildSlideXml(
           ? [
               {
                 text: slide.subtitle,
-                sizePt: 20,
+                sizePt: hasCoverVisual ? 17 : 20,
                 colorHex: palette.textSecondaryHex,
                 italic: false,
               },
@@ -673,7 +679,7 @@ function buildSlideXml(
       name: 'CoverMeta',
       x: MARGIN_X,
       y: 4_250_000,
-      cx: CONTENT_W,
+      cx: coverTextW,
       cy: 900_000,
       padX: 0,
       padY: 0,
@@ -684,6 +690,24 @@ function buildSlideXml(
         spaceAfterPt: 6,
       })),
     });
+
+    // Optional DrawingML embedded cover visual on right 40% of Slide 1
+    if (coverImageRelId) {
+      const picId = nextShapeId++;
+      const picX = MARGIN_X + coverTextW + 340_000;
+      const picW = CONTENT_W - coverTextW - 340_000;
+      const picY = 980_000;
+      const picH = 4_820_000;
+      shapes.push(
+        [
+          '<p:pic>',
+          `  <p:nvPicPr><p:cNvPr id="${picId}" name="CoverVisual"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>`,
+          `  <p:blipFill><a:blip r:embed="${escapeXml(coverImageRelId)}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>`,
+          `  <p:spPr><a:xfrm><a:off x="${Math.round(picX)}" y="${Math.round(picY)}"/><a:ext cx="${Math.round(picW)}" cy="${Math.round(picH)}"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom><a:ln w="12700"><a:solidFill><a:srgbClr val="${palette.borderHex}"/></a:solidFill></a:ln></p:spPr>`,
+          '</p:pic>',
+        ].join(''),
+      );
+    }
   } else if (slide.kind === 'thank_you') {
     pushShape({
       name: 'ClosingCard',
@@ -1398,12 +1422,20 @@ function buildAppPropsXml(slideCount: number): string {
   ].join('\n');
 }
 
+export interface BuildPptxBinaryOptions {
+  /** Optional PNG cover visual bytes embedded into Slide 1 (Cover) as ppt/media/cover.png */
+  readonly coverImagePngBytes?: Uint8Array | Buffer;
+}
+
 /**
  * Compiles a validated `PptPresentationSpec` into a standards-compliant OpenXML `.pptx`
  * binary buffer (`PK\x03\x04`) with SlideMaster, SlideLayout, Theme, multi-shape DrawingML
- * layouts, and PowerPoint Speaker Notes.
+ * layouts, optional Cover visual (`ppt/media/cover.png`), and PowerPoint Speaker Notes.
  */
-export function buildPptxBinaryBuffer(rawSpec: PptPresentationSpec): {
+export function buildPptxBinaryBuffer(
+  rawSpec: PptPresentationSpec,
+  options?: BuildPptxBinaryOptions,
+): {
   readonly pptxBytes: Buffer;
   readonly slideCount: number;
   readonly spec: PptPresentationSpec;
@@ -1414,6 +1446,16 @@ export function buildPptxBinaryBuffer(rawSpec: PptPresentationSpec): {
     spec.theme ?? 'editorial_story',
     spec.surfaceMode ?? 'dark',
   );
+  const rawCover = options?.coverImagePngBytes;
+  const coverImageBuf =
+    rawCover &&
+    rawCover.length >= 8 &&
+    rawCover[0] === 0x89 &&
+    rawCover[1] === 0x50 &&
+    rawCover[2] === 0x4e &&
+    rawCover[3] === 0x47
+      ? Buffer.from(rawCover)
+      : undefined;
 
   const slideOverrides = slides
     .map(
@@ -1434,6 +1476,9 @@ export function buildPptxBinaryBuffer(rawSpec: PptPresentationSpec): {
     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
     '  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
     '  <Default Extension="xml" ContentType="application/xml"/>',
+    ...(coverImageBuf
+      ? ['  <Default Extension="png" ContentType="image/png"/>']
+      : []),
     '  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>',
     '  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>',
     '  <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>',
@@ -1526,11 +1571,29 @@ export function buildPptxBinaryBuffer(rawSpec: PptPresentationSpec): {
     },
   ];
 
+  if (coverImageBuf) {
+    zipEntries.push({
+      path: 'ppt/media/cover.png',
+      content: coverImageBuf,
+    });
+  }
+
   slides.forEach((slide, idx) => {
     const slideNum = idx + 1;
+    const attachCoverVisual =
+      idx === 0 && slide.kind === 'cover' && Boolean(coverImageBuf);
     zipEntries.push({
       path: `ppt/slides/slide${slideNum}.xml`,
-      content: Buffer.from(buildSlideXml(slide, spec, slides.length, palette), 'utf8'),
+      content: Buffer.from(
+        buildSlideXml(
+          slide,
+          spec,
+          slides.length,
+          palette,
+          attachCoverVisual ? 'rId3' : undefined,
+        ),
+        'utf8',
+      ),
     });
 
     const slideRelsXml = [
@@ -1538,6 +1601,11 @@ export function buildPptxBinaryBuffer(rawSpec: PptPresentationSpec): {
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
       '  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>',
       `  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide${slideNum}.xml"/>`,
+      ...(attachCoverVisual
+        ? [
+            '  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/cover.png"/>',
+          ]
+        : []),
       '</Relationships>',
     ].join('\n');
     zipEntries.push({

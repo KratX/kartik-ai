@@ -33,9 +33,13 @@ import type {
   UploadedFileRecord,
 } from './types/index.js';
 import {
+  buildArtifactRawDownloadUrl,
   buildChatHandoffPrompt,
+  parseImageArtifactSpec,
   type AgentSelectorPillSpec,
+  type ParsedPptSurfaceMode,
 } from './components/slide-deck-and-markdown.js';
+import type { CommandPaletteSearchHit } from './components/common/CommandPalette.js';
 import {
   buildConversationMarkdownExport,
   buildConversationTranscriptPdfSpec,
@@ -285,6 +289,8 @@ export function App() {
     useState<AgentSelectorPillSpec['id']>('chat');
   const [responseDepth, setResponseDepth] =
     useState<ChatResponseDepth>('balanced');
+  const [defaultPptSurfaceMode, setDefaultPptSurfaceMode] =
+    useState<ParsedPptSurfaceMode>('dark');
   const [attachedTurnFiles, setAttachedTurnFiles] = useState<
     readonly UploadedFileRecord[]
   >([]);
@@ -345,11 +351,64 @@ export function App() {
     });
   }, []);
 
-  // Re-sync persisted pins & renames when auth user switches
+  const syncPreferencesPatch = useCallback(
+    (patch: {
+      readonly pinnedConversationIds?: readonly string[];
+      readonly titleOverrides?: Readonly<Record<string, string>>;
+      readonly defaultResponseDepth?: ChatResponseDepth;
+      readonly defaultPptSurfaceMode?: ParsedPptSurfaceMode;
+    }) => {
+      void apiFetch('/api/v1/preferences', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      }).catch(() => {
+        // Local storage already persisted; ignore offline/transient sync errors
+      });
+    },
+    [],
+  );
+
+  // Re-sync persisted pins, renames, depth & PPT surface mode from server across devices
   useEffect(() => {
-    const prefs = readWorkspacePrefs(prefsScopeKey);
-    setPinnedIds(new Set(prefs.pinnedIds));
-    setTitleOverrides(prefs.titleOverrides);
+    const localPrefs = readWorkspacePrefs(prefsScopeKey);
+    setPinnedIds(new Set(localPrefs.pinnedIds));
+    setTitleOverrides(localPrefs.titleOverrides);
+
+    let cancelled = false;
+    void apiFetch('/api/v1/preferences')
+      .then((res) => res.json())
+      .then(
+        (
+          json: ApiEnvelope<{
+            readonly pinnedConversationIds?: readonly string[];
+            readonly titleOverrides?: Readonly<Record<string, string>>;
+            readonly defaultResponseDepth?: ChatResponseDepth;
+            readonly defaultPptSurfaceMode?: ParsedPptSurfaceMode;
+          }>,
+        ) => {
+          if (cancelled || !json.ok) return;
+          const serverPins = json.data.pinnedConversationIds ?? [];
+          const serverTitles = json.data.titleOverrides ?? {};
+          const mergedPins = new Set([...localPrefs.pinnedIds, ...serverPins]);
+          const mergedTitles = { ...localPrefs.titleOverrides, ...serverTitles };
+          setPinnedIds(mergedPins);
+          setTitleOverrides(mergedTitles);
+          writeWorkspacePrefs(prefsScopeKey, mergedPins, mergedTitles);
+          if (json.data.defaultResponseDepth) {
+            setResponseDepth(json.data.defaultResponseDepth);
+          }
+          if (json.data.defaultPptSurfaceMode) {
+            setDefaultPptSurfaceMode(json.data.defaultPptSurfaceMode);
+          }
+        },
+      )
+      .catch(() => {
+        // Non-fatal fallback to localStorage
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [prefsScopeKey]);
 
   const threadArtifacts = useMemo(
@@ -440,11 +499,12 @@ export function App() {
           next.add(conversationId);
         }
         writeWorkspacePrefs(prefsScopeKey, next, titleOverrides);
+        syncPreferencesPatch({ pinnedConversationIds: Array.from(next) });
         pushToast(wasPinned ? 'Thread unpinned' : 'Thread pinned to top', 'info');
         return next;
       });
     },
-    [prefsScopeKey, pushToast, titleOverrides],
+    [prefsScopeKey, pushToast, syncPreferencesPatch, titleOverrides],
   );
 
   const handleRenameConversation = useCallback(
@@ -454,11 +514,43 @@ export function App() {
       setTitleOverrides((prev) => {
         const next = { ...prev, [conversationId]: trimmed };
         writeWorkspacePrefs(prefsScopeKey, pinnedIds, next);
+        syncPreferencesPatch({ titleOverrides: next });
         return next;
       });
       pushToast(`Renamed thread to "${trimmed}"`, 'success');
     },
-    [prefsScopeKey, pinnedIds, pushToast],
+    [prefsScopeKey, pinnedIds, pushToast, syncPreferencesPatch],
+  );
+
+  const handleSelectResponseDepth = useCallback(
+    (nextDepth: ChatResponseDepth) => {
+      setResponseDepth(nextDepth);
+      syncPreferencesPatch({ defaultResponseDepth: nextDepth });
+    },
+    [syncPreferencesPatch],
+  );
+
+  const handlePptSurfaceModeChange = useCallback(
+    (nextMode: ParsedPptSurfaceMode) => {
+      setDefaultPptSurfaceMode(nextMode);
+      syncPreferencesPatch({ defaultPptSurfaceMode: nextMode });
+    },
+    [syncPreferencesPatch],
+  );
+
+  const handleSearchMessages = useCallback(
+    async (query: string): Promise<readonly CommandPaletteSearchHit[]> => {
+      const trimmed = query.trim();
+      if (trimmed.length < 2) return [];
+      const res = await apiFetch(
+        `/api/v1/search?q=${encodeURIComponent(trimmed)}&limit=10`,
+      );
+      const json = (await res.json()) as ApiEnvelope<{
+        readonly hits?: readonly CommandPaletteSearchHit[];
+      }>;
+      return json.ok ? (json.data.hits ?? []) : [];
+    },
+    [],
   );
 
   const refreshBillingAndAuth = useCallback(async () => {
@@ -1021,6 +1113,118 @@ export function App() {
     });
   };
 
+  const handleForkConversation = async (assistantMessage: PlatformMessage) => {
+    const sourceConvId = activeConversationIdRef.current;
+    if (!sourceConvId || isTurnLoading) return;
+    try {
+      const res = await apiFetch(
+        `/api/v1/conversations/${encodeURIComponent(sourceConvId)}/fork`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ upToMessageId: assistantMessage.messageId }),
+        },
+      );
+      const json = (await res.json()) as ApiEnvelope<{
+        readonly conversation: PlatformConversation;
+        readonly messages: readonly PlatformMessage[];
+        readonly copiedCount?: number;
+      }>;
+      if (!json.ok) {
+        pushToast(`${json.error.code}: ${json.error.message}`, 'error');
+        return;
+      }
+      const forkedConv = json.data.conversation;
+      const forkedMsgs = json.data.messages;
+      const copiedCount =
+        typeof json.data.copiedCount === 'number'
+          ? json.data.copiedCount
+          : forkedMsgs.length;
+      setConversations((prev) => [
+        forkedConv,
+        ...prev.filter((c) => c.conversationId !== forkedConv.conversationId),
+      ]);
+      setActiveConversationIdSafe(forkedConv.conversationId);
+      setStreamingMessageIds(new Set());
+      setMessages(forkedMsgs);
+      const extracted = extractThreadArtifacts(forkedMsgs);
+      setActiveArtifact(extracted[extracted.length - 1] ?? null);
+      pushToast(
+        `Forked conversation "${forkedConv.title}" (${copiedCount} ${copiedCount === 1 ? 'message' : 'messages'} copied).`,
+        'success',
+      );
+    } catch (err) {
+      pushToast(
+        err instanceof Error ? err.message : 'Failed to fork conversation.',
+        'error',
+      );
+    }
+  };
+
+  const handleRemixImage = async (artifact: ArtifactRecord) => {
+    if (isTurnLoading) return;
+    try {
+      const res = await apiFetch(
+        `${buildArtifactRawDownloadUrl(artifact.artifactId)}?inline=1`,
+      );
+      if (!res.ok) {
+        throw new Error(`Could not fetch artwork bytes (HTTP ${res.status})`);
+      }
+      const buffer = await res.arrayBuffer();
+      const uint8 = new Uint8Array(buffer);
+      let binary = '';
+      for (let i = 0; i < uint8.byteLength; i += 1) {
+        binary += String.fromCharCode(uint8[i]!);
+      }
+      const ext =
+        artifact.mimeType === 'image/jpeg'
+          ? 'jpg'
+          : artifact.mimeType === 'image/webp'
+            ? 'webp'
+            : 'png';
+      const safeName =
+        artifact.title
+          .replace(/[^A-Za-z0-9._-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .toLowerCase()
+          .slice(0, 42) || 'remix-reference';
+      await handleUploadFile({
+        originalFilename: `${safeName}.${ext}`,
+        declaredMimeType: artifact.mimeType || 'image/png',
+        contentBase64: btoa(binary),
+      });
+      setSelectedAgent('image');
+      pushToast(
+        `Attached "${artifact.title}" as remix reference — describe your edit in Image Gen.`,
+        'success',
+      );
+    } catch (err) {
+      pushToast(
+        err instanceof Error ? err.message : 'Failed to prepare image remix.',
+        'error',
+      );
+    }
+  };
+
+  const handleVariationImage = async (artifact: ArtifactRecord) => {
+    if (isTurnLoading) return;
+    const specFile = artifact.filesManifest?.find(
+      (f) => f.path === 'image-spec.json',
+    );
+    const parsedSpec = parseImageArtifactSpec(specFile?.content, artifact.title);
+    const basePrompt = parsedSpec?.enhancedPrompt || artifact.title;
+    const ratioHint = parsedSpec?.aspectRatio ? ` (${parsedSpec.aspectRatio})` : '';
+    setSelectedAgent('image');
+    await executeTurnRequest({
+      conversationId: activeConversationIdRef.current,
+      requestId: createClientIdempotencyKey(),
+      prompt: `Create a fresh artistic variation inspired by: ${basePrompt}${ratioHint}`,
+      preferredAgent: 'image',
+      responseDepth,
+      attachmentFileIds: [],
+    });
+  };
+
   // Upload PDF or Image for RAG / Multimodal Vision (works from Hero, Dock, or Drag-and-Drop)
   const handleUploadFile = async (file: {
     readonly originalFilename: string;
@@ -1375,7 +1579,7 @@ export function App() {
     selectedAgent,
     onSelectAgent: setSelectedAgent,
     responseDepth,
-    onSelectResponseDepth: setResponseDepth,
+    onSelectResponseDepth: handleSelectResponseDepth,
     attachedFiles: attachedTurnFiles,
     onRemoveAttachedFile: handleRemoveAttachedFile,
     onOpenAttachment: setPreviewAttachment,
@@ -1464,6 +1668,7 @@ export function App() {
               void handleQuickPromptSelect(prompt, agent)
             }
             onRegenerate={(msg) => void handleRegenerateMessage(msg)}
+            onForkConversation={(msg) => void handleForkConversation(msg)}
             onEditPrompt={(edited) => void handleEditPrompt(edited)}
             onHandoffToSpecialist={(target, msg) =>
               void handleHandoffToSpecialist(target, msg)
@@ -1492,6 +1697,8 @@ export function App() {
               isOpen={isArtifactPanelOpen && Boolean(activeArtifact)}
               isTurnLoading={isTurnLoading}
               widthPct={canvasWidthPct}
+              defaultPptSurfaceMode={defaultPptSurfaceMode}
+              onPptSurfaceModeChange={handlePptSurfaceModeChange}
               onResizeWidthPct={handleResizeCanvasWidthPct}
               onSelectArtifact={(art) => {
                 setActiveArtifact(art);
@@ -1501,6 +1708,8 @@ export function App() {
               onAskAiToFix={(fixPrompt) =>
                 void handleQuickPromptSelect(fixPrompt, 'coding')
               }
+              onRemixImage={(art) => void handleRemixImage(art)}
+              onVariationImage={(art) => void handleVariationImage(art)}
               onOpenLightboxImage={setLightboxImage}
             />
           </Suspense>
@@ -1519,10 +1728,11 @@ export function App() {
             responseDepth={responseDepth}
             hasArtifacts={threadArtifacts.length > 0}
             hasMessages={messages.length > 0}
+            onSearchMessages={handleSearchMessages}
             onSelectConversation={(id) => void handleSelectConversation(id)}
             onCreateConversation={handleCreateConversation}
             onSelectAgent={setSelectedAgent}
-            onSelectResponseDepth={setResponseDepth}
+            onSelectResponseDepth={handleSelectResponseDepth}
             onOpenBilling={() => setIsBillingDrawerOpen(true)}
             onOpenShortcuts={() => setIsShortcutsModalOpen(true)}
             onToggleArtifactCanvas={() => {

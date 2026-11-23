@@ -1,11 +1,32 @@
-import React, { useState } from 'react';
-import { Check, Copy, ExternalLink, FileText, Globe, Terminal, WrapText } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Check,
+  Copy,
+  Download,
+  ExternalLink,
+  FileText,
+  GitFork,
+  Globe,
+  Terminal,
+  WrapText,
+} from 'lucide-react';
 import {
   formatCitationRelevancePercent,
   tokenizeInlineMarkdown,
   tokenizeMarkdownBlocks,
   type MarkdownBlock,
 } from '../slide-deck-and-markdown.js';
+import {
+  formatLatexMathToUnicode,
+  parseMermaidDiagram,
+  sortTableRows,
+  tableToCsvString,
+  tokenizeCodeSyntax,
+  type CodeTokenKind,
+} from '../studio-power-helpers.js';
 import type { MessageCitation } from '../../types/index.js';
 
 function resolveCitationHost(citation: MessageCitation): string {
@@ -130,6 +151,19 @@ function renderInlineFormattedText(
       );
     }
 
+    if (token.type === 'math') {
+      return (
+        <span
+          key={idx}
+          data-inline-math="true"
+          title={token.expression}
+          className="inline-block px-1.5 py-0.5 mx-0.5 rounded bg-white/[0.05] border border-white/[0.1] font-serif italic text-[14px] text-zinc-100 tracking-wide"
+        >
+          {formatLatexMathToUnicode(token.expression)}
+        </span>
+      );
+    }
+
     if (token.type === 'bold') {
       return (
         <strong key={idx} className="font-semibold text-white">
@@ -192,6 +226,252 @@ function renderInlineFormattedText(
   });
 }
 
+const CODE_TOKEN_CLASSES: Readonly<Record<CodeTokenKind, string>> = {
+  plain: 'text-zinc-200',
+  keyword: 'text-sky-300 font-medium',
+  string: 'text-emerald-300',
+  comment: 'text-zinc-500 italic',
+  number: 'text-amber-300',
+  type: 'text-violet-300',
+  property: 'text-cyan-200',
+  operator: 'text-zinc-400',
+  tag: 'text-rose-300',
+};
+
+function MermaidDiagramCard({ source }: { readonly source: string }) {
+  const [viewMode, setViewMode] = useState<'diagram' | 'source'>('diagram');
+  const [copied, setCopied] = useState(false);
+  const parsed = useMemo(() => parseMermaidDiagram(source), [source]);
+
+  const handleCopy = () => {
+    const clip = navigator.clipboard?.writeText(source);
+    if (clip && typeof clip.catch === 'function') {
+      clip.catch(() => {});
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  };
+
+  if (!parsed) {
+    return <CodeBlockCard language="mermaid" code={source} />;
+  }
+
+  const nodeW = 152;
+  const nodeH = 44;
+  const gapX = 56;
+  const gapY = 48;
+  const pad = 28;
+
+  const maxCol = Math.max(0, ...parsed.nodes.map((n) => n.col));
+  const maxRow = Math.max(0, ...parsed.nodes.map((n) => n.row));
+  const svgW = Math.max(420, pad * 2 + (maxCol + 1) * nodeW + maxCol * gapX);
+  const svgH = Math.max(150, pad * 2 + (maxRow + 1) * nodeH + maxRow * gapY);
+
+  const posById = new Map<string, { x: number; y: number }>();
+  for (const node of parsed.nodes) {
+    posById.set(node.id, {
+      x: pad + node.col * (nodeW + gapX),
+      y: pad + node.row * (nodeH + gapY),
+    });
+  }
+
+  return (
+    <div
+      data-mermaid-diagram="true"
+      className="my-4 rounded-xl overflow-hidden border border-white/[0.09] bg-[#0d0d10]"
+    >
+      <div className="flex items-center justify-between gap-2 px-3.5 py-2 bg-[#131317] border-b border-white/[0.07] text-xs text-zinc-400 font-mono">
+        <div className="flex items-center gap-2">
+          <GitFork className="w-3.5 h-3.5 text-zinc-300" />
+          <span className="uppercase tracking-wider font-semibold text-zinc-200">
+            Mermaid {parsed.kind}
+          </span>
+          <span className="text-zinc-600">·</span>
+          <span className="text-[11px] text-zinc-500 tabular-nums">
+            {parsed.nodes.length} nodes · {parsed.edges.length} edges
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="inline-flex rounded-md bg-white/[0.05] p-0.5 font-sans">
+            <button
+              type="button"
+              onClick={() => setViewMode('diagram')}
+              className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors cursor-pointer ${
+                viewMode === 'diagram'
+                  ? 'bg-white text-zinc-950'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Diagram
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('source')}
+              className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors cursor-pointer ${
+                viewMode === 'source'
+                  ? 'bg-white text-zinc-950'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Source
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white/[0.06] hover:bg-white/[0.12] text-zinc-200 font-sans text-[11px] font-medium transition-colors cursor-pointer"
+          >
+            {copied ? (
+              <>
+                <Check className="w-3 h-3 text-emerald-400" />
+                <span className="text-emerald-400">Copied</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3 h-3" />
+                <span>Copy</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {viewMode === 'source' ? (
+        <pre className="p-4 text-[12px] font-mono text-zinc-300 overflow-x-auto leading-relaxed">
+          <code>{source}</code>
+        </pre>
+      ) : (
+        <div className="p-4 overflow-x-auto bg-[#09090b]">
+          <svg
+            viewBox={`0 0 ${svgW} ${svgH}`}
+            width={svgW}
+            height={svgH}
+            role="img"
+            aria-label={`Mermaid ${parsed.kind} diagram`}
+            className="mx-auto max-w-full h-auto"
+          >
+            <defs>
+              <marker
+                id="kartik-mermaid-arrow"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="6"
+                markerHeight="6"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="#71717a" />
+              </marker>
+            </defs>
+
+            {parsed.edges.map((edge, idx) => {
+              const fromPos = posById.get(edge.from);
+              const toPos = posById.get(edge.to);
+              if (!fromPos || !toPos) return null;
+              const isHorizontal = parsed.direction === 'LR';
+              const x1 = isHorizontal ? fromPos.x + nodeW : fromPos.x + nodeW / 2;
+              const y1 = isHorizontal ? fromPos.y + nodeH / 2 : fromPos.y + nodeH;
+              const x2 = isHorizontal ? toPos.x : toPos.x + nodeW / 2;
+              const y2 = isHorizontal ? toPos.y + nodeH / 2 : toPos.y;
+              const midX = (x1 + x2) / 2;
+              const midY = (y1 + y2) / 2;
+              return (
+                <g key={`${edge.from}-${edge.to}-${idx}`}>
+                  <line
+                    x1={x1}
+                    y1={y1}
+                    x2={x2}
+                    y2={y2}
+                    stroke="#52525b"
+                    strokeWidth="1.5"
+                    markerEnd="url(#kartik-mermaid-arrow)"
+                  />
+                  {edge.label && (
+                    <g>
+                      <rect
+                        x={midX - Math.min(64, edge.label.length * 3.5 + 8)}
+                        y={midY - 9}
+                        width={Math.min(128, edge.label.length * 7 + 16)}
+                        height={18}
+                        rx={4}
+                        fill="#111114"
+                        stroke="#27272a"
+                      />
+                      <text
+                        x={midX}
+                        y={midY + 3.5}
+                        textAnchor="middle"
+                        fill="#a1a1aa"
+                        fontSize="10"
+                        fontFamily="ui-monospace, SFMono-Regular, monospace"
+                      >
+                        {edge.label.slice(0, 22)}
+                      </text>
+                    </g>
+                  )}
+                </g>
+              );
+            })}
+
+            {parsed.nodes.map((node) => {
+              const pos = posById.get(node.id)!;
+              const cx = pos.x + nodeW / 2;
+              const cy = pos.y + nodeH / 2;
+              const displayLabel =
+                node.label.length > 20 ? `${node.label.slice(0, 18)}…` : node.label;
+              return (
+                <g key={node.id}>
+                  {node.shape === 'diamond' ? (
+                    <polygon
+                      points={`${cx},${pos.y - 4} ${pos.x + nodeW + 4},${cy} ${cx},${pos.y + nodeH + 4} ${pos.x - 4},${cy}`}
+                      fill="#18181b"
+                      stroke="#e4e4e7"
+                      strokeWidth="1.2"
+                    />
+                  ) : node.shape === 'circle' ? (
+                    <rect
+                      x={pos.x}
+                      y={pos.y}
+                      width={nodeW}
+                      height={nodeH}
+                      rx={nodeH / 2}
+                      fill="#141418"
+                      stroke="#a1a1aa"
+                      strokeWidth="1.2"
+                    />
+                  ) : (
+                    <rect
+                      x={pos.x}
+                      y={pos.y}
+                      width={nodeW}
+                      height={nodeH}
+                      rx={node.shape === 'round' ? 14 : 8}
+                      fill="#141418"
+                      stroke="#3f3f46"
+                      strokeWidth="1.2"
+                    />
+                  )}
+                  <text
+                    x={cx}
+                    y={cy + 4}
+                    textAnchor="middle"
+                    fill="#f4f4f5"
+                    fontSize="11.5"
+                    fontWeight="500"
+                    fontFamily="Inter, system-ui, sans-serif"
+                  >
+                    {displayLabel}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CodeBlockCard({
   language,
   code,
@@ -201,7 +481,11 @@ function CodeBlockCard({
 }) {
   const [copied, setCopied] = useState(false);
   const [wrapLines, setWrapLines] = useState(false);
-  const lineCount = code ? code.split('\n').length : 0;
+  const tokenizedLines = useMemo(
+    () => tokenizeCodeSyntax(code, language),
+    [code, language],
+  );
+  const lineCount = code ? tokenizedLines.length : 0;
 
   const handleCopy = () => {
     const clip = navigator.clipboard?.writeText(code);
@@ -215,6 +499,7 @@ function CodeBlockCard({
   return (
     <div
       data-code-block="true"
+      data-code-highlighted="true"
       className="my-4 rounded-xl overflow-hidden border border-white/[0.09] bg-[#0d0d10]"
     >
       <div className="flex items-center justify-between gap-2 px-3.5 py-2 bg-[#131317] border-b border-white/[0.07] text-xs text-zinc-400 font-mono">
@@ -264,14 +549,173 @@ function CodeBlockCard({
         </div>
       </div>
       <pre
-        className={`p-4 text-[12.5px] font-mono text-zinc-200 leading-relaxed ${
+        className={`p-4 text-[12.5px] font-mono leading-relaxed ${
           wrapLines
             ? 'whitespace-pre-wrap break-words'
             : 'whitespace-pre overflow-x-auto'
         }`}
       >
-        <code>{code}</code>
+        <code>
+          {tokenizedLines.map((lineTokens, lineIdx) => (
+            <span key={lineIdx} className="block min-h-[1.3em]">
+              {lineTokens.length === 0
+                ? ' '
+                : lineTokens.map((tok, tIdx) => (
+                    <span
+                      key={tIdx}
+                      className={CODE_TOKEN_CLASSES[tok.kind]}
+                    >
+                      {tok.text}
+                    </span>
+                  ))}
+            </span>
+          ))}
+        </code>
       </pre>
+    </div>
+  );
+}
+
+function InteractiveTableCard({
+  headers,
+  rows,
+  flowClass,
+  renderCell,
+}: {
+  readonly headers: readonly string[];
+  readonly rows: readonly (readonly string[])[];
+  readonly flowClass: string;
+  readonly renderCell: (text: string) => React.ReactNode;
+}) {
+  const [sortCol, setSortCol] = useState<number | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [copiedCsv, setCopiedCsv] = useState(false);
+
+  const displayedRows = useMemo(() => {
+    if (sortCol === null) return rows;
+    return sortTableRows(rows, sortCol, sortDir);
+  }, [rows, sortCol, sortDir]);
+
+  const handleSort = (colIdx: number) => {
+    if (sortCol === colIdx) {
+      if (sortDir === 'asc') {
+        setSortDir('desc');
+      } else {
+        setSortCol(null);
+        setSortDir('asc');
+      }
+    } else {
+      setSortCol(colIdx);
+      setSortDir('asc');
+    }
+  };
+
+  const handleCopyCsv = () => {
+    const csv = tableToCsvString(headers, displayedRows);
+    const clip = navigator.clipboard?.writeText(csv);
+    if (clip && typeof clip.catch === 'function') {
+      clip.catch(() => {});
+    }
+    setCopiedCsv(true);
+    setTimeout(() => setCopiedCsv(false), 1800);
+  };
+
+  const handleDownloadCsv = () => {
+    const csv = tableToCsvString(headers, displayedRows);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'kartik-table.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  return (
+    <div
+      data-interactive-table="true"
+      className={`my-4 rounded-xl border border-white/[0.08] bg-[#0e0e11] overflow-hidden ${flowClass}`}
+    >
+      <div className="flex items-center justify-between gap-2 px-3.5 py-2 bg-[#131317] border-b border-white/[0.07] text-[11px] text-zinc-400">
+        <span className="font-mono tabular-nums">
+          {rows.length} {rows.length === 1 ? 'row' : 'rows'} · {headers.length}{' '}
+          cols{sortCol !== null ? ` · sorted ${sortDir}` : ''}
+        </span>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={handleCopyCsv}
+            data-table-copy-csv="true"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.06] hover:bg-white/[0.12] text-zinc-200 font-medium transition-colors cursor-pointer"
+          >
+            {copiedCsv ? (
+              <>
+                <Check className="w-3 h-3 text-emerald-400" />
+                <span className="text-emerald-400">Copied CSV</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3 h-3" />
+                <span>Copy CSV</span>
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={handleDownloadCsv}
+            data-table-download-csv="true"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.06] hover:bg-white/[0.12] text-zinc-200 font-medium transition-colors cursor-pointer"
+          >
+            <Download className="w-3 h-3" />
+            <span>.CSV</span>
+          </button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse text-xs">
+          <thead>
+            <tr className="bg-[#141418] border-b border-white/[0.08] text-zinc-200">
+              {headers.map((header, hIdx) => {
+                const isSorted = sortCol === hIdx;
+                return (
+                  <th key={hIdx} className="py-2 px-3.5 font-semibold">
+                    <button
+                      type="button"
+                      onClick={() => handleSort(hIdx)}
+                      aria-label={`Sort by ${header}`}
+                      className="inline-flex items-center gap-1.5 text-left hover:text-white transition-colors cursor-pointer"
+                    >
+                      <span>{renderCell(header)}</span>
+                      {isSorted ? (
+                        sortDir === 'asc' ? (
+                          <ArrowUp className="w-3 h-3 text-white shrink-0" />
+                        ) : (
+                          <ArrowDown className="w-3 h-3 text-white shrink-0" />
+                        )
+                      ) : (
+                        <ArrowUpDown className="w-3 h-3 text-zinc-600 shrink-0" />
+                      )}
+                    </button>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/[0.06]">
+            {displayedRows.map((row, rIdx) => (
+              <tr key={rIdx} className="hover:bg-white/[0.025]">
+                {row.map((cell, cIdx) => (
+                  <td key={cIdx} className="py-2.5 px-3.5 text-zinc-300">
+                    {renderCell(cell)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -323,6 +767,13 @@ export function MarkdownRenderer({
         }
 
         if (block.type === 'code') {
+          if (block.language.trim().toLowerCase() === 'mermaid') {
+            return (
+              <div key={index} className={flowClass}>
+                <MermaidDiagramCard source={block.code} />
+              </div>
+            );
+          }
           return (
             <div key={index} className={flowClass}>
               <CodeBlockCard language={block.language} code={block.code} />
@@ -330,35 +781,30 @@ export function MarkdownRenderer({
           );
         }
 
-        if (block.type === 'table') {
+        if (block.type === 'math') {
           return (
             <div
               key={index}
-              className={`my-4 overflow-x-auto rounded-xl border border-white/[0.08] bg-[#0e0e11] ${flowClass}`}
+              data-math-block="true"
+              title={block.expression}
+              className={`my-4 px-5 py-3.5 rounded-xl border border-white/[0.09] bg-[#0e0e12] text-center overflow-x-auto ${flowClass}`}
             >
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-[#141418] border-b border-white/[0.08] text-zinc-200">
-                    {block.headers.map((header, hIdx) => (
-                      <th key={hIdx} className="py-2.5 px-3.5 font-semibold">
-                        {inline(header)}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/[0.06]">
-                  {block.rows.map((row, rIdx) => (
-                    <tr key={rIdx} className="hover:bg-white/[0.025]">
-                      {row.map((cell, cIdx) => (
-                        <td key={cIdx} className="py-2.5 px-3.5 text-zinc-300">
-                          {inline(cell)}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="font-serif italic text-[17px] text-white tracking-wide leading-relaxed">
+                {formatLatexMathToUnicode(block.expression)}
+              </div>
             </div>
+          );
+        }
+
+        if (block.type === 'table') {
+          return (
+            <InteractiveTableCard
+              key={index}
+              headers={block.headers}
+              rows={block.rows}
+              flowClass={flowClass}
+              renderCell={inline}
+            />
           );
         }
 

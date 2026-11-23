@@ -610,5 +610,53 @@ describe('@kartik/agent — Phase 10 PDF & PPTX Generators & Schemas (Micro-step
     assert.ok(chartPptXml.includes('Net Additions (GW)'));
     assert.ok(chartPptXml.includes('420 GW'));
   });
+
+  it('Fix #29: embeds optional PNG Cover Visual into OpenXML .pptx Slide 1 (ppt/media/cover.png + rId3 + <p:pic>) and ignores invalid non-PNG bytes', () => {
+    const minimalPng = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+      0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+      0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
+      0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+      0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+      0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+      0x42, 0x60, 0x82,
+    ]);
+
+    const deckSpec = validatePptPresentationSpec({
+      title: 'Botanical Architecture',
+      subtitle: 'Living Facades & Urban Microclimates',
+      theme: 'editorial_story',
+      slides: [
+        {
+          layout: 'bullets',
+          title: 'Biophilic Principles',
+          bullets: ['Natural ventilation', 'Passive shade canopies'],
+        },
+      ],
+    });
+
+    const withCover = buildPptxBinaryBuffer(deckSpec, {
+      coverImagePngBytes: minimalPng,
+    });
+    const zipStr = withCover.pptxBytes.toString('utf8');
+    assert.ok(zipStr.includes('ppt/media/cover.png'), 'Must package ppt/media/cover.png');
+    assert.ok(
+      zipStr.includes('Extension="png" ContentType="image/png"'),
+      'Must declare image/png content type',
+    );
+    assert.ok(
+      zipStr.includes('Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/cover.png"'),
+      'Slide 1 rels must map rId3 to ../media/cover.png',
+    );
+    assert.ok(zipStr.includes('<p:pic>') && zipStr.includes('r:embed="rId3"'), 'Slide 1 XML must embed DrawingML <p:pic> using rId3');
+
+    // Non-PNG bytes are safely ignored without corrupting the deck
+    const badBytes = buildPptxBinaryBuffer(deckSpec, {
+      coverImagePngBytes: Buffer.from('not-a-png-file'),
+    });
+    assert.equal(badBytes.pptxBytes.toString('utf8').includes('ppt/media/cover.png'), false);
+  });
 });
 

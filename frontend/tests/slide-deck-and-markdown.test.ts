@@ -476,4 +476,35 @@ describe('@kartik/frontend SlideDeckPreview & MarkdownRenderer Tokenizers (9.4.a
     );
     assert.equal(scienceDeck.theme, 'educational_explainer');
   });
+
+  it('Fix #29: tokenizes $$...$$ block math and currency-safe $...$ inline math without mangling dollar amounts', () => {
+    const md = [
+      'A ticket costs $50 and VIP is $100, while energy follows $E = mc^2$.',
+      '',
+      '$$',
+      '\\int_0^\\infty e^{-x} dx = 1',
+      '$$',
+    ].join('\n');
+
+    const blocks = tokenizeMarkdownBlocks(md);
+    assert.equal(blocks.length, 2);
+    assert.equal(blocks[0]?.type, 'paragraph');
+    assert.equal(blocks[1]?.type, 'math');
+    if (blocks[1]?.type === 'math') {
+      assert.equal(blocks[1].expression, '\\int_0^\\infty e^{-x} dx = 1');
+    }
+
+    const inline = tokenizeInlineMarkdown(
+      'Price is $50 and $100, whereas mass-energy is $E = mc^2$ and ratio is $\\frac{a}{b}$.',
+    );
+    const mathTokens = inline.filter((t) => t.type === 'math');
+    assert.equal(mathTokens.length, 2);
+    assert.equal(mathTokens[0]?.expression, 'E = mc^2');
+    assert.equal(mathTokens[1]?.expression, '\\frac{a}{b}');
+    const plainJoined = inline
+      .filter((t) => t.type === 'text')
+      .map((t) => t.text)
+      .join('');
+    assert.ok(plainJoined.includes('$50 and $100'));
+  });
 });

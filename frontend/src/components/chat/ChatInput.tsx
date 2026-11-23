@@ -81,6 +81,9 @@ export interface ChatInputProps {
   readonly isLoading: boolean;
 }
 
+const IMAGE_ASPECT_OPTIONS = ['16:9', '1:1', '4:3', '9:16'] as const;
+const IMAGE_STYLE_OPTIONS = ['Auto', 'Editorial', 'Photoreal', 'Minimal', '3D'] as const;
+
 export function ChatInput({
   variant = 'dock',
   selectedAgent,
@@ -98,6 +101,10 @@ export function ChatInput({
   const [prompt, setPrompt] = useState('');
   const [isFocused, setIsFocused] = useState(false);
   const [isSpecialistOpen, setIsSpecialistOpen] = useState(false);
+  const [imageAspectRatio, setImageAspectRatio] =
+    useState<(typeof IMAGE_ASPECT_OPTIONS)[number]>('16:9');
+  const [imageStyle, setImageStyle] =
+    useState<(typeof IMAGE_STYLE_OPTIONS)[number]>('Auto');
   const [slashIndex, setSlashIndex] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
@@ -239,8 +246,24 @@ export function ChatInput({
 
     const preferred: SpecialistAgentName | undefined =
       selectedAgent === 'chat' ? undefined : selectedAgent;
+    let finalPrompt = trimmed;
+    if (selectedAgent === 'image') {
+      const additions: string[] = [];
+      if (!/\b(16:9|1:1|4:3|9:16|3:2|2:3)\b/.test(finalPrompt)) {
+        additions.push(`${imageAspectRatio} aspect ratio`);
+      }
+      if (
+        imageStyle !== 'Auto' &&
+        !new RegExp(`\\b${imageStyle}\\b`, 'i').test(finalPrompt)
+      ) {
+        additions.push(`${imageStyle} style`);
+      }
+      if (additions.length > 0) {
+        finalPrompt = `${finalPrompt} (${additions.join(', ')})`;
+      }
+    }
     setPrompt('');
-    await onSendMessage(trimmed, preferred);
+    await onSendMessage(finalPrompt, preferred);
   };
 
   const beamIntensity = isLoading ? 'thinking' : isFocused ? 'focus' : 'idle';
@@ -606,6 +629,65 @@ export function ChatInput({
 
           {/* Right Controls: Spring Depth Switcher + Pure White Circular Send */}
           <div className="flex items-center gap-2">
+            {selectedAgent === 'image' && (
+              <div
+                data-image-aspect-picker="true"
+                className="flex flex-wrap items-center gap-1.5"
+              >
+                <div
+                  role="group"
+                  aria-label="Image aspect ratio"
+                  className="inline-flex items-center p-0.5 rounded-lg bg-[#18181c] border border-white/[0.07]"
+                >
+                  {IMAGE_ASPECT_OPTIONS.map((ratio) => {
+                    const active = imageAspectRatio === ratio;
+                    return (
+                      <button
+                        key={ratio}
+                        type="button"
+                        data-image-aspect-option={ratio}
+                        aria-pressed={active}
+                        onClick={() => setImageAspectRatio(ratio)}
+                        className={`px-2 py-1 rounded-md text-[10px] font-mono tabular-nums transition-colors cursor-pointer ${
+                          active
+                            ? 'bg-white text-zinc-950 font-semibold'
+                            : 'text-zinc-400 hover:text-zinc-100'
+                        }`}
+                      >
+                        {ratio}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div
+                  role="group"
+                  aria-label="Image art style"
+                  className="hidden sm:inline-flex items-center p-0.5 rounded-lg bg-[#18181c] border border-white/[0.07]"
+                >
+                  {IMAGE_STYLE_OPTIONS.map((styleOpt) => {
+                    const active = imageStyle === styleOpt;
+                    return (
+                      <button
+                        key={styleOpt}
+                        type="button"
+                        data-image-style-option={styleOpt.toLowerCase()}
+                        aria-pressed={active}
+                        onClick={() => setImageStyle(styleOpt)}
+                        className={`px-2 py-1 rounded-md text-[10px] font-medium transition-colors cursor-pointer ${
+                          active
+                            ? 'bg-white text-zinc-950 font-semibold'
+                            : 'text-zinc-400 hover:text-zinc-100'
+                        }`}
+                      >
+                        {styleOpt}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {selectedAgent === 'chat' && (
               <div
                 role="group"

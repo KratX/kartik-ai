@@ -9,6 +9,7 @@ import {
   Copy,
   ExternalLink,
   FileText,
+  GitBranch,
   Globe,
   Image as ImageIcon,
   Maximize2,
@@ -103,6 +104,7 @@ export interface MessageBubbleProps {
     agent?: PlatformMessage['agentUsed'],
   ) => void;
   readonly onRegenerate?: (message: PlatformMessage) => void;
+  readonly onForkConversation?: (message: PlatformMessage) => void;
   readonly onEditPrompt?: (prompt: string) => void;
   readonly onHandoffToSpecialist?: (
     target: 'pdf' | 'ppt' | 'search',
@@ -128,6 +130,7 @@ export function MessageBubble({
   onStreamTick,
   onFollowUpSearch,
   onRegenerate,
+  onForkConversation,
   onEditPrompt,
   onHandoffToSpecialist,
   onOpenArtifact,
@@ -962,6 +965,21 @@ export function MessageBubble({
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
                     <span>Regenerate</span>
+                  </button>
+                )}
+
+                {!isWelcomeGreeting && onForkConversation && (
+                  <button
+                    type="button"
+                    data-message-fork-btn="true"
+                    disabled={isLoading}
+                    onClick={() => onForkConversation(message)}
+                    title="Fork a new branched conversation from this message"
+                    aria-label="Fork thread from this message"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-white hover:bg-white/[0.06] transition-colors whitespace-nowrap cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <GitBranch className="w-3.5 h-3.5" />
+                    <span>Fork</span>
                   </button>
                 )}
               </div>

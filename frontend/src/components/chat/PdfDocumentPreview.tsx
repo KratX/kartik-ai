@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import {
+  ArrowDown,
+  ArrowUp,
+  BarChart3,
   BookOpen,
   Check,
   ChevronLeft,
@@ -12,8 +15,11 @@ import {
   Layers,
   Loader2,
   Pencil,
+  Plus,
   RotateCcw,
   Sparkles,
+  Trash2,
+  X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -706,13 +712,37 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
               data-pdf-inline-editor="true"
               className="rounded-xl bg-[#111114] border border-white/[0.1] p-4 space-y-4 max-h-[560px] overflow-y-auto"
             >
-              <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/[0.08]">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-white/[0.08]">
                 <span className="text-xs font-semibold text-white">
                   Inline Document Editor · Click Re-compile .PDF to export changes
                 </span>
-                <span className="text-[10px] font-mono text-zinc-400">
-                  {doc.sections.length} Sections
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono text-zinc-400 tabular-nums">
+                    {doc.sections.length} Sections
+                  </span>
+                  <button
+                    type="button"
+                    data-pdf-add-section-btn="true"
+                    onClick={() =>
+                      updateDoc((prev) => {
+                        const nextSections = [
+                          ...prev.sections,
+                          {
+                            sectionNumber: prev.sections.length + 1,
+                            heading: `Section ${prev.sections.length + 1}`,
+                            content: 'Add structured analysis or supporting narrative here.',
+                            bullets: ['Key takeaway or concrete detail'],
+                          },
+                        ];
+                        return { ...prev, sections: nextSections };
+                      })
+                    }
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white/[0.08] hover:bg-white/[0.15] text-[11px] font-medium text-white cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Add Section</span>
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 gap-2.5">
@@ -762,11 +792,81 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
               <div className="space-y-3">
                 {doc.sections.map((sec, sIdx) => (
                   <div
-                    key={sec.sectionNumber}
+                    key={`${sec.sectionNumber}-${sIdx}`}
                     className="rounded-lg border border-white/[0.08] bg-[#0b0b0e] p-3 space-y-2"
                   >
-                    <div className="text-[10px] font-mono text-zinc-500">
-                      Section {sec.sectionNumber}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-mono text-zinc-500">
+                        Section {sec.sectionNumber}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          disabled={sIdx === 0}
+                          onClick={() =>
+                            updateDoc((prev) => {
+                              const next = [...prev.sections];
+                              const [moved] = next.splice(sIdx, 1);
+                              if (!moved) return prev;
+                              next.splice(sIdx - 1, 0, moved);
+                              return {
+                                ...prev,
+                                sections: next.map((item, idx) => ({
+                                  ...item,
+                                  sectionNumber: idx + 1,
+                                })),
+                              };
+                            })
+                          }
+                          title="Move section up"
+                          className="p-1 rounded bg-[#16161b] hover:bg-white/[0.1] text-zinc-300 disabled:opacity-30 cursor-pointer"
+                        >
+                          <ArrowUp className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={sIdx === doc.sections.length - 1}
+                          onClick={() =>
+                            updateDoc((prev) => {
+                              const next = [...prev.sections];
+                              const [moved] = next.splice(sIdx, 1);
+                              if (!moved) return prev;
+                              next.splice(sIdx + 1, 0, moved);
+                              return {
+                                ...prev,
+                                sections: next.map((item, idx) => ({
+                                  ...item,
+                                  sectionNumber: idx + 1,
+                                })),
+                              };
+                            })
+                          }
+                          title="Move section down"
+                          className="p-1 rounded bg-[#16161b] hover:bg-white/[0.1] text-zinc-300 disabled:opacity-30 cursor-pointer"
+                        >
+                          <ArrowDown className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={doc.sections.length <= 1}
+                          onClick={() =>
+                            updateDoc((prev) => {
+                              if (prev.sections.length <= 1) return prev;
+                              const next = prev.sections
+                                .filter((_, idx) => idx !== sIdx)
+                                .map((item, idx) => ({
+                                  ...item,
+                                  sectionNumber: idx + 1,
+                                }));
+                              return { ...prev, sections: next };
+                            })
+                          }
+                          title="Delete section"
+                          className="p-1 rounded bg-[#16161b] hover:bg-rose-500/20 text-zinc-300 hover:text-rose-300 disabled:opacity-30 cursor-pointer"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
                     <input
                       type="text"
@@ -816,6 +916,228 @@ export function PdfDocumentPreview({ artifact }: PdfDocumentPreviewProps) {
                         className="w-full px-2.5 py-1.5 rounded-md bg-[#111114] border border-white/[0.1] text-xs text-zinc-300 font-mono focus:outline-none focus:border-white/30"
                       />
                     </label>
+
+                    {/* Per-Section Inline Chart Bar Editor */}
+                    <div className="rounded-md border border-white/[0.07] bg-[#111114] p-2.5 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1 text-[10px] font-medium text-zinc-300">
+                          <BarChart3 className="w-3 h-3 text-zinc-400" />
+                          <span>Section Bar Chart</span>
+                        </span>
+                        {sec.chart ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateDoc((prev) => ({
+                                  ...prev,
+                                  sections: prev.sections.map((item, idx) =>
+                                    idx === sIdx && item.chart
+                                      ? {
+                                          ...item,
+                                          chart: {
+                                            ...item.chart,
+                                            bars: [
+                                              ...item.chart.bars,
+                                              {
+                                                label: `Series ${item.chart.bars.length + 1}`,
+                                                value: 40,
+                                              },
+                                            ],
+                                          },
+                                        }
+                                      : item,
+                                  ),
+                                }))
+                              }
+                              className="px-1.5 py-0.5 rounded bg-white/[0.08] hover:bg-white/[0.15] text-[10px] text-white cursor-pointer"
+                            >
+                              + Bar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateDoc((prev) => ({
+                                  ...prev,
+                                  sections: prev.sections.map((item, idx) =>
+                                    idx === sIdx
+                                      ? { ...item, chart: undefined }
+                                      : item,
+                                  ),
+                                }))
+                              }
+                              className="px-1.5 py-0.5 rounded bg-rose-500/15 hover:bg-rose-500/25 text-[10px] text-rose-300 cursor-pointer"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateDoc((prev) => ({
+                                ...prev,
+                                sections: prev.sections.map((item, idx) =>
+                                  idx === sIdx
+                                    ? {
+                                        ...item,
+                                        chart: {
+                                          title: `${item.heading} Comparison`,
+                                          unit: '%',
+                                          bars: [
+                                            { label: 'Option A', value: 72 },
+                                            { label: 'Option B', value: 58 },
+                                            { label: 'Option C', value: 89 },
+                                          ],
+                                        },
+                                      }
+                                    : item,
+                                ),
+                              }))
+                            }
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/[0.08] hover:bg-white/[0.15] text-[10px] text-white cursor-pointer"
+                          >
+                            <Plus className="w-2.5 h-2.5" />
+                            <span>Add Chart</span>
+                          </button>
+                        )}
+                      </div>
+                      {sec.chart && (
+                        <div className="space-y-1.5">
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <input
+                              type="text"
+                              value={sec.chart.title ?? ''}
+                              placeholder="Chart title"
+                              onChange={(e) =>
+                                updateDoc((prev) => ({
+                                  ...prev,
+                                  sections: prev.sections.map((item, idx) =>
+                                    idx === sIdx && item.chart
+                                      ? {
+                                          ...item,
+                                          chart: {
+                                            ...item.chart,
+                                            title: e.target.value,
+                                          },
+                                        }
+                                      : item,
+                                  ),
+                                }))
+                              }
+                              className="col-span-2 px-2 py-1 rounded bg-[#09090b] border border-white/[0.09] text-[11px] text-zinc-200 focus:outline-none"
+                            />
+                            <input
+                              type="text"
+                              value={sec.chart.unit ?? ''}
+                              placeholder="Unit"
+                              onChange={(e) =>
+                                updateDoc((prev) => ({
+                                  ...prev,
+                                  sections: prev.sections.map((item, idx) =>
+                                    idx === sIdx && item.chart
+                                      ? {
+                                          ...item,
+                                          chart: {
+                                            ...item.chart,
+                                            unit: e.target.value || undefined,
+                                          },
+                                        }
+                                      : item,
+                                  ),
+                                }))
+                              }
+                              className="px-2 py-1 rounded bg-[#09090b] border border-white/[0.09] text-[11px] font-mono text-zinc-200 focus:outline-none"
+                            />
+                          </div>
+                          {sec.chart.bars.map((bar, bIdx) => (
+                            <div key={bIdx} className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={bar.label}
+                                onChange={(e) =>
+                                  updateDoc((prev) => ({
+                                    ...prev,
+                                    sections: prev.sections.map((item, idx) =>
+                                      idx === sIdx && item.chart
+                                        ? {
+                                            ...item,
+                                            chart: {
+                                              ...item.chart,
+                                              bars: item.chart.bars.map((b, bi) =>
+                                                bi === bIdx
+                                                  ? { ...b, label: e.target.value }
+                                                  : b,
+                                              ),
+                                            },
+                                          }
+                                        : item,
+                                    ),
+                                  }))
+                                }
+                                className="flex-1 px-2 py-1 rounded bg-[#09090b] border border-white/[0.09] text-[11px] text-zinc-200 focus:outline-none"
+                              />
+                              <input
+                                type="number"
+                                value={bar.value}
+                                onChange={(e) => {
+                                  const num = Number(e.target.value);
+                                  updateDoc((prev) => ({
+                                    ...prev,
+                                    sections: prev.sections.map((item, idx) =>
+                                      idx === sIdx && item.chart
+                                        ? {
+                                            ...item,
+                                            chart: {
+                                              ...item.chart,
+                                              bars: item.chart.bars.map((b, bi) =>
+                                                bi === bIdx
+                                                  ? {
+                                                      ...b,
+                                                      value: Number.isFinite(num)
+                                                        ? num
+                                                        : 0,
+                                                    }
+                                                  : b,
+                                              ),
+                                            },
+                                          }
+                                        : item,
+                                    ),
+                                  }));
+                                }}
+                                className="w-20 px-2 py-1 rounded bg-[#09090b] border border-white/[0.09] text-[11px] font-mono tabular-nums text-white focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                disabled={sec.chart!.bars.length <= 2}
+                                onClick={() =>
+                                  updateDoc((prev) => ({
+                                    ...prev,
+                                    sections: prev.sections.map((item, idx) =>
+                                      idx === sIdx && item.chart
+                                        ? {
+                                            ...item,
+                                            chart: {
+                                              ...item.chart,
+                                              bars: item.chart.bars.filter(
+                                                (_, bi) => bi !== bIdx,
+                                              ),
+                                            },
+                                          }
+                                        : item,
+                                    ),
+                                  }))
+                                }
+                                className="p-1 text-zinc-500 hover:text-rose-300 disabled:opacity-30 cursor-pointer"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

@@ -8,7 +8,9 @@ import {
   Download,
   Image as ImageIcon,
   Maximize2,
+  RefreshCw,
   SlidersHorizontal,
+  Wand2,
 } from 'lucide-react';
 import {
   buildArtifactRawDownloadUrl,
@@ -24,11 +26,15 @@ export interface ImageArtifactCardProps {
     readonly imageUrl: string;
     readonly sourceUrl?: string;
   }) => void;
+  readonly onRemixImage?: (artifact: ArtifactRecord) => void;
+  readonly onVariationImage?: (artifact: ArtifactRecord) => void;
 }
 
 export function ImageArtifactCard({
   artifact,
   onOpenLightboxImage,
+  onRemixImage,
+  onVariationImage,
 }: ImageArtifactCardProps) {
   const [showPromptDetails, setShowPromptDetails] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
@@ -205,6 +211,32 @@ export function ImageArtifactCard({
               <Maximize2 className="w-3.5 h-3.5 text-zinc-400" />
               <span>Fullscreen</span>
             </button>
+
+            {onRemixImage && (
+              <button
+                type="button"
+                data-image-remix-btn="true"
+                onClick={() => onRemixImage(artifact)}
+                title="Attach this image as a reference to remix or restyle"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-[#16161b] hover:bg-white/[0.08] border border-white/[0.08] text-zinc-200 hover:text-white transition-colors cursor-pointer"
+              >
+                <Wand2 className="w-3.5 h-3.5 text-zinc-300" />
+                <span>Remix / Edit</span>
+              </button>
+            )}
+
+            {onVariationImage && (
+              <button
+                type="button"
+                data-image-variation-btn="true"
+                onClick={() => onVariationImage(artifact)}
+                title="Generate a fresh artistic variation from this prompt"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-[#16161b] hover:bg-white/[0.08] border border-white/[0.08] text-zinc-200 hover:text-white transition-colors cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-zinc-300" />
+                <span>Variation</span>
+              </button>
+            )}
           </div>
 
           <a
