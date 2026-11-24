@@ -41,7 +41,7 @@ export const BILLING_CONFIG_SCHEMA: ConfigSchema = {
   },
   BILLING_MODE: {
     type: 'enum',
-    enumValues: ['mock', 'live'] as const,
+    enumValues: ['mock', 'razorpay_test', 'live'] as const,
     default: 'mock',
   },
   FREE_TIER_INITIAL_CREDITS: {
@@ -97,7 +97,7 @@ export interface BillingServiceConfig {
   readonly PORT: number;
   readonly BILLING_DATABASE_URL: string;
   readonly REDIS_URL: string;
-  readonly BILLING_MODE: 'mock' | 'live';
+  readonly BILLING_MODE: 'mock' | 'razorpay_test' | 'live';
   readonly FREE_TIER_INITIAL_CREDITS: number;
   readonly RESERVATION_TTL_SECONDS: number;
   readonly USER_CONTEXT_PUBLIC_KEY: string;
@@ -179,15 +179,23 @@ export function loadBillingConfig(
       'must be a valid Ed25519 SPKI public key in PEM or base64 format (§6.4)';
   }
 
-  if (config.BILLING_MODE === 'live') {
-    if (!config.RAZORPAY_KEY_ID || config.RAZORPAY_KEY_ID.trim().length < 8) {
-      crossFieldErrors.RAZORPAY_KEY_ID = 'required when BILLING_MODE=live';
+  if (config.BILLING_MODE === 'live' || config.BILLING_MODE === 'razorpay_test') {
+    const modeLabel = config.BILLING_MODE;
+    const trimmedKeyId = config.RAZORPAY_KEY_ID.trim();
+    if (!trimmedKeyId || trimmedKeyId.length < 8) {
+      crossFieldErrors.RAZORPAY_KEY_ID = `required when BILLING_MODE=${modeLabel}`;
+    } else if (config.BILLING_MODE === 'razorpay_test' && trimmedKeyId.startsWith('rzp_live_')) {
+      crossFieldErrors.RAZORPAY_KEY_ID =
+        'live Razorpay keys (rzp_live_*) are forbidden when BILLING_MODE=razorpay_test';
+    } else if (config.BILLING_MODE === 'razorpay_test' && !trimmedKeyId.startsWith('rzp_test_')) {
+      crossFieldErrors.RAZORPAY_KEY_ID =
+        'must start with "rzp_test_" when BILLING_MODE=razorpay_test';
     }
     if (!config.RAZORPAY_KEY_SECRET || config.RAZORPAY_KEY_SECRET.trim().length < 16) {
-      crossFieldErrors.RAZORPAY_KEY_SECRET = 'required when BILLING_MODE=live';
+      crossFieldErrors.RAZORPAY_KEY_SECRET = `required when BILLING_MODE=${modeLabel}`;
     }
     if (!config.RAZORPAY_WEBHOOK_SECRET || config.RAZORPAY_WEBHOOK_SECRET.trim().length < 16) {
-      crossFieldErrors.RAZORPAY_WEBHOOK_SECRET = 'required when BILLING_MODE=live';
+      crossFieldErrors.RAZORPAY_WEBHOOK_SECRET = `required when BILLING_MODE=${modeLabel}`;
     }
   }
 

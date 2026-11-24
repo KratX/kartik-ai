@@ -53,6 +53,10 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
   let savedQdrantUrl: string | undefined;
   let savedQdrantApiKey: string | undefined;
   let savedRedisUrl: string | undefined;
+  let savedBillingMode: string | undefined;
+  let savedRazorpayKeyId: string | undefined;
+  let savedRazorpayKeySecret: string | undefined;
+  let savedRazorpayWebhookSecret: string | undefined;
 
   before(() => {
     savedNodeEnv = process.env.NODE_ENV;
@@ -62,13 +66,21 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
     savedQdrantUrl = process.env.QDRANT_URL;
     savedQdrantApiKey = process.env.QDRANT_API_KEY;
     savedRedisUrl = process.env.REDIS_URL;
+    savedBillingMode = process.env.BILLING_MODE;
+    savedRazorpayKeyId = process.env.RAZORPAY_KEY_ID;
+    savedRazorpayKeySecret = process.env.RAZORPAY_KEY_SECRET;
+    savedRazorpayWebhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
     process.env.NODE_ENV = 'test';
     process.env.MOCK_AI = 'true';
     process.env.AI_PROVIDER_MODE = 'mock';
     process.env.IMAGE_PROVIDER = 'mock';
+    process.env.BILLING_MODE = 'mock';
     delete process.env.QDRANT_URL;
     delete process.env.QDRANT_API_KEY;
     delete process.env.REDIS_URL;
+    delete process.env.RAZORPAY_KEY_ID;
+    delete process.env.RAZORPAY_KEY_SECRET;
+    delete process.env.RAZORPAY_WEBHOOK_SECRET;
   });
 
   after(() => {
@@ -86,6 +98,15 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
     else process.env.QDRANT_API_KEY = savedQdrantApiKey;
     if (savedRedisUrl === undefined) delete process.env.REDIS_URL;
     else process.env.REDIS_URL = savedRedisUrl;
+    if (savedBillingMode === undefined) delete process.env.BILLING_MODE;
+    else process.env.BILLING_MODE = savedBillingMode;
+    if (savedRazorpayKeyId === undefined) delete process.env.RAZORPAY_KEY_ID;
+    else process.env.RAZORPAY_KEY_ID = savedRazorpayKeyId;
+    if (savedRazorpayKeySecret === undefined) delete process.env.RAZORPAY_KEY_SECRET;
+    else process.env.RAZORPAY_KEY_SECRET = savedRazorpayKeySecret;
+    if (savedRazorpayWebhookSecret === undefined)
+      delete process.env.RAZORPAY_WEBHOOK_SECRET;
+    else process.env.RAZORPAY_WEBHOOK_SECRET = savedRazorpayWebhookSecret;
   });
 
   afterEach(() => {
@@ -2260,6 +2281,274 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
       else process.env.CLOUDFLARE_ACCOUNT_ID = prevCfAccount;
       if (prevCfModel === undefined) delete process.env.CLOUDFLARE_IMAGE_MODEL;
       else process.env.CLOUDFLARE_IMAGE_MODEL = prevCfModel;
+    }
+  });
+
+  it('enforces Razorpay Test Mode order creation, strict HMAC-SHA256 verification, rzp_live_* rejection, and raw-body webhook settlement (Fix #35)', async () => {
+    const crypto = await import('node:crypto');
+    const prevBillingMode = process.env.BILLING_MODE;
+    const prevKeyId = process.env.RAZORPAY_KEY_ID;
+    const prevKeySecret = process.env.RAZORPAY_KEY_SECRET;
+    const prevWebhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    const originalFetch = globalThis.fetch;
+
+    const fakeKeyId = 'rzp_test_fix35_unit_key';
+    const fakeKeySecret = 'fix35_unit_key_secret_9876543210';
+    const fakeWebhookSecret = 'whsec_fix35_unit_webhook_9876543210';
+
+    try {
+      process.env.BILLING_MODE = 'razorpay_test';
+      process.env.RAZORPAY_KEY_ID = fakeKeyId;
+      process.env.RAZORPAY_KEY_SECRET = fakeKeySecret;
+      process.env.RAZORPAY_WEBHOOK_SECRET = fakeWebhookSecret;
+
+      let razorpayApiCalls = 0;
+      globalThis.fetch = (async (input, init) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url === 'https://api.razorpay.com/v1/orders') {
+          razorpayApiCalls += 1;
+          const reqBody = JSON.parse(String(init?.body ?? '{}')) as {
+            amount: number;
+            currency: string;
+          };
+          return new Response(
+            JSON.stringify({
+              id: `order_Fix35Test0${razorpayApiCalls}`,
+              entity: 'order',
+              amount: reqBody.amount,
+              currency: reqBody.currency,
+              status: 'created',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+
+      const persistence = new InMemoryPlatformPersistenceAdapter();
+      const runtimeRzp = new KartikPlatformRuntime({ persistence });
+      const appRzp = createKartikExpressApp(runtimeRzp, {
+        NODE_ENV: 'test',
+        DEMO_MODE: 'true',
+      });
+      const serverRzp = http.createServer(appRzp);
+      await new Promise<void>((resolve) => serverRzp.listen(0, '127.0.0.1', resolve));
+      const addr = serverRzp.address();
+      if (!addr || typeof addr === 'string') {
+        throw new Error('Failed to bind Fix #35 test server');
+      }
+      const baseUrlRzp = `http://127.0.0.1:${addr.port}`;
+      const guestHeaders = {
+        'Content-Type': 'application/json',
+        'x-kartik-guest-id': 'gst_fix35_rzp_e2e',
+      };
+
+      try {
+        // 1. Billing summary accurately reports billingMode: 'razorpay_test'
+        const balInit = (await (
+          await fetch(`${baseUrlRzp}/api/v1/billing/balance`, { headers: guestHeaders })
+        ).json()) as { data: { billingMode: string; availableCredits: number } };
+        assert.equal(balInit.data.billingMode, 'razorpay_test');
+        assert.equal(balInit.data.availableCredits, 250);
+
+        // 2. Rejects rzp_live_* keys even if accidentally configured
+        process.env.RAZORPAY_KEY_ID = 'rzp_live_accident_key_001';
+        const liveKeyRes = await fetch(`${baseUrlRzp}/api/v1/billing/orders`, {
+          method: 'POST',
+          headers: { ...guestHeaders, 'Idempotency-Key': 'req_fix35_live_reject' },
+          body: JSON.stringify({ planId: 'plan_starter_199' }),
+        });
+        assert.equal(liveKeyRes.status, 400);
+        process.env.RAZORPAY_KEY_ID = fakeKeyId;
+
+        // 3. Creates real Razorpay Test Mode order and preserves liveRazorpayOrder on replay
+        const orderRes = await fetch(`${baseUrlRzp}/api/v1/billing/orders`, {
+          method: 'POST',
+          headers: { ...guestHeaders, 'Idempotency-Key': 'req_fix35_order_1' },
+          body: JSON.stringify({ planId: 'plan_starter_199' }),
+        });
+        assert.equal(orderRes.status, 201);
+        const orderJson = (await orderRes.json()) as {
+          data: {
+            orderId: string;
+            razorpayKeyId: string;
+            liveRazorpayOrder: boolean;
+            billingMode: string;
+            amountPaise: number;
+          };
+        };
+        assert.equal(orderJson.data.orderId, 'order_Fix35Test01');
+        assert.equal(orderJson.data.razorpayKeyId, fakeKeyId);
+        assert.equal(orderJson.data.liveRazorpayOrder, true);
+        assert.equal(orderJson.data.billingMode, 'razorpay_test');
+        assert.equal(orderJson.data.amountPaise, 19900);
+        assert.equal(razorpayApiCalls, 1);
+
+        const replayRes = await fetch(`${baseUrlRzp}/api/v1/billing/orders`, {
+          method: 'POST',
+          headers: { ...guestHeaders, 'Idempotency-Key': 'req_fix35_order_1' },
+          body: JSON.stringify({ planId: 'plan_starter_199' }),
+        });
+        assert.equal(replayRes.status, 200);
+        const replayJson = (await replayRes.json()) as {
+          data: { orderId: string; liveRazorpayOrder: boolean; idempotentReplay: boolean };
+        };
+        assert.equal(replayJson.data.orderId, 'order_Fix35Test01');
+        assert.equal(replayJson.data.liveRazorpayOrder, true);
+        assert.equal(replayJson.data.idempotentReplay, true);
+        assert.equal(razorpayApiCalls, 1);
+
+        // 4. Strictly rejects unsigned verify call on live Razorpay Test order (prevents free credits!)
+        const unsignedRes = await fetch(`${baseUrlRzp}/api/v1/billing/verify`, {
+          method: 'POST',
+          headers: { ...guestHeaders, 'Idempotency-Key': 'req_fix35_unsigned' },
+          body: JSON.stringify({ orderId: 'order_Fix35Test01' }),
+        });
+        assert.equal(unsignedRes.status, 400);
+
+        // 5. Rejects invalid HMAC signature
+        const badSigRes = await fetch(`${baseUrlRzp}/api/v1/billing/verify`, {
+          method: 'POST',
+          headers: { ...guestHeaders, 'Idempotency-Key': 'req_fix35_badsig' },
+          body: JSON.stringify({
+            razorpayOrderId: 'order_Fix35Test01',
+            razorpayPaymentId: 'pay_Fix35Test01',
+            razorpaySignature: '0'.repeat(64),
+          }),
+        });
+        assert.equal(badSigRes.status, 400);
+
+        // 6. Valid HMAC-SHA256 checkout signature grants +500 credits once (250 -> 750)
+        const paymentId = 'pay_Fix35Test01';
+        const validCheckoutSig = crypto
+          .createHmac('sha256', fakeKeySecret)
+          .update(`order_Fix35Test01|${paymentId}`)
+          .digest('hex');
+
+        const verifyRes = await fetch(`${baseUrlRzp}/api/v1/billing/verify`, {
+          method: 'POST',
+          headers: { ...guestHeaders, 'Idempotency-Key': 'req_fix35_valid_verify' },
+          body: JSON.stringify({
+            razorpayOrderId: 'order_Fix35Test01',
+            razorpayPaymentId: paymentId,
+            razorpaySignature: validCheckoutSig,
+          }),
+        });
+        assert.equal(verifyRes.status, 200);
+        const verifyJson = (await verifyRes.json()) as {
+          data: {
+            verified: boolean;
+            creditsAdded: number;
+            availableCredits: number;
+            idempotentReplay: boolean;
+          };
+        };
+        assert.equal(verifyJson.data.verified, true);
+        assert.equal(verifyJson.data.creditsAdded, 500);
+        assert.equal(verifyJson.data.availableCredits, 750);
+        assert.equal(verifyJson.data.idempotentReplay, false);
+
+        // 7. Webhook arriving after checkout verification is idempotent (+0 credits)
+        const delayedWebhookBody = JSON.stringify({
+          event: 'payment.captured',
+          payload: {
+            payment: {
+              entity: {
+                id: paymentId,
+                order_id: 'order_Fix35Test01',
+                amount: 19900,
+                currency: 'INR',
+                notes: { userId: 'gst_fix35_rzp_e2e' },
+              },
+            },
+          },
+        });
+        const badWebhookRes = await fetch(`${baseUrlRzp}/api/v1/webhooks/razorpay`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-razorpay-signature': 'f'.repeat(64),
+            'x-razorpay-event-id': 'evt_fix35_bad_sig',
+          },
+          body: delayedWebhookBody,
+        });
+        assert.equal(badWebhookRes.status, 400);
+
+        const validWebhookSig = crypto
+          .createHmac('sha256', fakeWebhookSecret)
+          .update(delayedWebhookBody)
+          .digest('hex');
+        const delayedWebhookRes = await fetch(`${baseUrlRzp}/api/v1/webhooks/razorpay`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-razorpay-signature': validWebhookSig,
+            'x-razorpay-event-id': 'evt_fix35_delayed_1',
+          },
+          body: delayedWebhookBody,
+        });
+        assert.equal(delayedWebhookRes.status, 200);
+        const delayedWebhookJson = (await delayedWebhookRes.json()) as {
+          data: { creditsAdded: number; availableCredits: number; idempotentReplay: boolean };
+        };
+        assert.equal(delayedWebhookJson.data.creditsAdded, 0);
+        assert.equal(delayedWebhookJson.data.availableCredits, 750);
+        assert.equal(delayedWebhookJson.data.idempotentReplay, true);
+
+        // 8. Second order settled directly via Razorpay Webhook grants +1500 credits once (750 -> 2250)
+        const order2Res = await fetch(`${baseUrlRzp}/api/v1/billing/orders`, {
+          method: 'POST',
+          headers: { ...guestHeaders, 'Idempotency-Key': 'req_fix35_order_2' },
+          body: JSON.stringify({ planId: 'plan_pro_499' }),
+        });
+        assert.equal(order2Res.status, 201);
+        const webhook2Body = JSON.stringify({
+          event: 'order.paid',
+          payload: {
+            payment: {
+              entity: {
+                id: 'pay_Fix35Test02',
+                order_id: 'order_Fix35Test02',
+                amount: 49900,
+                currency: 'INR',
+                notes: { userId: 'gst_fix35_rzp_e2e' },
+              },
+            },
+          },
+        });
+        const webhook2Sig = crypto
+          .createHmac('sha256', fakeWebhookSecret)
+          .update(webhook2Body)
+          .digest('hex');
+        const webhook2Res = await fetch(`${baseUrlRzp}/api/v1/webhooks/razorpay`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-razorpay-signature': webhook2Sig,
+            'x-razorpay-event-id': 'evt_fix35_order2_paid',
+          },
+          body: webhook2Body,
+        });
+        assert.equal(webhook2Res.status, 200);
+        const webhook2Json = (await webhook2Res.json()) as {
+          data: { creditsAdded: number; availableCredits: number; idempotentReplay: boolean };
+        };
+        assert.equal(webhook2Json.data.creditsAdded, 1500);
+        assert.equal(webhook2Json.data.availableCredits, 2250);
+        assert.equal(webhook2Json.data.idempotentReplay, false);
+      } finally {
+        await new Promise<void>((resolve) => serverRzp.close(() => resolve()));
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (prevBillingMode === undefined) delete process.env.BILLING_MODE;
+      else process.env.BILLING_MODE = prevBillingMode;
+      if (prevKeyId === undefined) delete process.env.RAZORPAY_KEY_ID;
+      else process.env.RAZORPAY_KEY_ID = prevKeyId;
+      if (prevKeySecret === undefined) delete process.env.RAZORPAY_KEY_SECRET;
+      else process.env.RAZORPAY_KEY_SECRET = prevKeySecret;
+      if (prevWebhookSecret === undefined) delete process.env.RAZORPAY_WEBHOOK_SECRET;
+      else process.env.RAZORPAY_WEBHOOK_SECRET = prevWebhookSecret;
     }
   });
 });

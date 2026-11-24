@@ -24,6 +24,11 @@ import { createRedisClientFromUrl } from '../../backend/shared/redis/index.js';
 import { AppError } from '../../backend/shared/errors/index.js';
 import { OPERATION_CREDIT_COSTS } from '../../backend/services/billing/src/services/credit-service.js';
 import {
+  computeRazorpayCheckoutSignature,
+  parseAndVerifyRazorpayWebhook,
+  verifyRazorpayCheckoutSignature,
+} from '../../backend/services/billing/src/webhooks/index.js';
+import {
   AGENT_TO_BILLING_OPERATION,
   resolveTargetSpecialist,
 } from '../../backend/services/chat/src/services/index.js';
@@ -311,7 +316,9 @@ export class KartikPlatformRuntime {
       readonly plan: PlatformCreditPlan;
       readonly userId: string;
       readonly requestId?: string;
+      readonly liveRazorpayOrder: boolean;
       settled: boolean;
+      settledPaymentId?: string;
     }
   >();
   private readonly ordersByUserAndRequestId = new Map<
@@ -319,6 +326,7 @@ export class KartikPlatformRuntime {
     {
       readonly payloadFingerprint: string;
       readonly orderId: string;
+      readonly liveRazorpayOrder: boolean;
     }
   >();
   private readonly verifiedCheckoutsByUserAndRequestId = new Map<
@@ -331,6 +339,7 @@ export class KartikPlatformRuntime {
       readonly planId: 'plan_starter_199' | 'plan_pro_499';
     }
   >();
+  private readonly processedWebhookEventIds = new Set<string>();
 
   constructor(options?: KartikPlatformRuntimeOptions) {
     assertRootRuntimeDemoOrLocalOnly(process.env);
@@ -626,11 +635,15 @@ export class KartikPlatformRuntime {
     for (const order of snapshot.paymentOrders) {
       const plan = PLATFORM_CREDIT_PLANS.find((p) => p.planId === order.planId);
       if (plan) {
+        const isLiveOrder =
+          !order.orderId.startsWith('order_rzp_') &&
+          !order.orderId.startsWith('order_mock_');
         this.pendingOrders.set(order.orderId, {
           orderId: order.orderId,
           plan,
           userId: safeUserId,
           requestId: order.requestId,
+          liveRazorpayOrder: isLiveOrder,
           settled: order.settled,
         });
         if (order.requestId) {
@@ -643,6 +656,7 @@ export class KartikPlatformRuntime {
                 planId: plan.planId,
               }),
               orderId: order.orderId,
+              liveRazorpayOrder: isLiveOrder,
             },
           );
         }
@@ -1850,18 +1864,64 @@ export class KartikPlatformRuntime {
     return found ? { ...found } : null;
   }
 
+  private resolveRazorpayBillingConfig(env: NodeJS.ProcessEnv = process.env): {
+    readonly billingMode: 'mock' | 'razorpay_test';
+    readonly keyId: string;
+    readonly keySecret: string;
+    readonly webhookSecret: string;
+    readonly liveApiEnabled: boolean;
+  } {
+    const stripQuotes = (v?: string) => (v ?? '').trim().replace(/^["']|["']$/g, '');
+    const rawBillingMode = stripQuotes(env.BILLING_MODE).toLowerCase();
+    const keyId = stripQuotes(env.RAZORPAY_KEY_ID);
+    const keySecret = stripQuotes(env.RAZORPAY_KEY_SECRET);
+    const webhookSecret = stripQuotes(env.RAZORPAY_WEBHOOK_SECRET);
+
+    if (keyId.startsWith('rzp_live_')) {
+      throw new AppError(
+        'VALIDATION_FAILED',
+        'Live Razorpay keys (rzp_live_*) are forbidden on demo/local deployments. Use rzp_test_* test-mode credentials.',
+      );
+    }
+
+    const isPlaceholderKey =
+      !keyId ||
+      keyId === 'rzp_test_kartik_ai_demo' ||
+      keyId === 'rzp_test_mock_key_id' ||
+      keyId === 'rzp_test_kartik_local_dev_0001' ||
+      keyId.toLowerCase().includes('placeholder');
+
+    const hasRealTestKeys =
+      keyId.startsWith('rzp_test_') && !isPlaceholderKey && keySecret.length >= 16;
+
+    const liveApiEnabled = rawBillingMode !== 'mock' && hasRealTestKeys;
+    return {
+      billingMode: liveApiEnabled ? 'razorpay_test' : 'mock',
+      keyId: keyId || 'rzp_test_kartik_ai_demo',
+      keySecret: keySecret || 'rzp_test_secret_kartik',
+      webhookSecret,
+      liveApiEnabled,
+    };
+  }
+
   public getBillingSummary(actor: VerifiedRequestIdentity | string) {
     const user = this.requireUser(actor);
     const availableCredits =
       this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS;
     const reservedCredits = this.reservedCreditsByUserId.get(user.userId) ?? 0;
     const ledger = this.ledgerByUserId.get(user.userId) ?? [];
+    let billingMode: 'mock' | 'razorpay_test' = 'mock';
+    try {
+      billingMode = this.resolveRazorpayBillingConfig().billingMode;
+    } catch {
+      billingMode = 'mock';
+    }
     return {
       userId: user.userId,
       planId: user.planId,
       availableCredits,
       reservedCredits,
-      billingMode: 'mock' as const,
+      billingMode,
       plans: PLATFORM_CREDIT_PLANS,
       operationCosts: OPERATION_CREDIT_COSTS,
       ledger: ledger.slice(0, 25),
@@ -1892,6 +1952,8 @@ export class KartikPlatformRuntime {
       );
     }
 
+    const rzpCfg = this.resolveRazorpayBillingConfig();
+
     const payloadFingerprint = computePayloadFingerprint({
       userId: user.userId,
       operation: 'create_billing_order',
@@ -1901,10 +1963,6 @@ export class KartikPlatformRuntime {
     const existingOrderForReq =
       this.ordersByUserAndRequestId.get(scopedRequestIdKey);
 
-    const stripQuotes = (v?: string) => (v ?? '').trim().replace(/^["']|["']$/g, '');
-    const keyId = stripQuotes(process.env.RAZORPAY_KEY_ID);
-    const keySecret = stripQuotes(process.env.RAZORPAY_KEY_SECRET);
-
     if (existingOrderForReq) {
       if (existingOrderForReq.payloadFingerprint !== payloadFingerprint) {
         throw new AppError(
@@ -1912,11 +1970,15 @@ export class KartikPlatformRuntime {
           'Idempotency-Key was already used with a different billing order payload',
         );
       }
+      const existingPending = this.pendingOrders.get(existingOrderForReq.orderId);
+      const isLiveOrder =
+        existingPending?.liveRazorpayOrder ?? existingOrderForReq.liveRazorpayOrder;
       return {
         orderId: existingOrderForReq.orderId,
         razorpayOrderId: existingOrderForReq.orderId,
-        razorpayKeyId: keyId || 'rzp_test_kartik_ai_demo',
-        liveRazorpayOrder: false,
+        razorpayKeyId: rzpCfg.keyId,
+        liveRazorpayOrder: isLiveOrder,
+        billingMode: isLiveOrder ? ('razorpay_test' as const) : ('mock' as const),
         plan,
         planId: plan.planId,
         planName: plan.name,
@@ -1924,7 +1986,7 @@ export class KartikPlatformRuntime {
         amountInrLabel: plan.amountInrLabel,
         creditsGranted: plan.creditsGranted,
         currency: 'INR' as const,
-        status: 'created' as const,
+        status: existingPending?.settled ? ('paid' as const) : ('created' as const),
         idempotentReplay: true,
       };
     }
@@ -1932,16 +1994,14 @@ export class KartikPlatformRuntime {
     let orderId = `order_rzp_${crypto.randomBytes(8).toString('hex')}`;
     let liveRazorpayOrder = false;
 
-    if (
-      keyId &&
-      keySecret &&
-      keyId !== 'rzp_test_kartik_ai_demo' &&
-      !keyId.includes('placeholder') &&
-      process.env.NODE_ENV !== 'test'
-    ) {
+    if (rzpCfg.liveApiEnabled) {
+      const basicAuth = Buffer.from(
+        `${rzpCfg.keyId}:${rzpCfg.keySecret}`,
+        'utf8',
+      ).toString('base64');
+      let rzpRes: Response;
       try {
-        const basicAuth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
-        const rzpRes = await fetch('https://api.razorpay.com/v1/orders', {
+        rzpRes = await fetch('https://api.razorpay.com/v1/orders', {
           method: 'POST',
           headers: {
             Authorization: `Basic ${basicAuth}`,
@@ -1956,18 +2016,36 @@ export class KartikPlatformRuntime {
               userId: user.userId,
             },
           }),
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(10_000),
         });
-        if (rzpRes.ok) {
-          const rzpData = (await rzpRes.json()) as { id?: string };
-          if (rzpData.id) {
-            orderId = rzpData.id;
-            liveRazorpayOrder = true;
-          }
-        }
-      } catch {
-        // Fall back to local orderId if offline or unreachable
+      } catch (err) {
+        throw new AppError(
+          'BILLING_UNAVAILABLE',
+          `Unable to reach Razorpay Test Orders API: ${err instanceof Error ? err.message : 'network error'}`,
+        );
       }
+
+      const rzpData = (await rzpRes.json().catch(() => ({}))) as {
+        id?: string;
+        amount?: number;
+        currency?: string;
+        error?: { code?: string; description?: string };
+      };
+      if (!rzpRes.ok || !rzpData.id) {
+        const reason = rzpData.error?.description ?? `HTTP ${rzpRes.status}`;
+        throw new AppError(
+          'BILLING_UNAVAILABLE',
+          `Razorpay Test Orders API error: ${reason}`,
+        );
+      }
+      if (rzpData.amount !== undefined && rzpData.amount !== plan.amountPaise) {
+        throw new AppError(
+          'PAYMENT_VERIFICATION_FAILED',
+          `Razorpay returned mismatched amount: expected ${plan.amountPaise} paise, got ${rzpData.amount} paise`,
+        );
+      }
+      orderId = rzpData.id;
+      liveRazorpayOrder = true;
     }
 
     this.pendingOrders.set(orderId, {
@@ -1975,11 +2053,13 @@ export class KartikPlatformRuntime {
       plan,
       userId: user.userId,
       requestId,
+      liveRazorpayOrder,
       settled: false,
     });
     this.ordersByUserAndRequestId.set(scopedRequestIdKey, {
       payloadFingerprint,
       orderId,
+      liveRazorpayOrder,
     });
 
     this.trackPersistence(() =>
@@ -1999,8 +2079,9 @@ export class KartikPlatformRuntime {
     return {
       orderId,
       razorpayOrderId: orderId,
-      razorpayKeyId: keyId || 'rzp_test_kartik_ai_demo',
+      razorpayKeyId: rzpCfg.keyId,
       liveRazorpayOrder,
+      billingMode: liveRazorpayOrder ? ('razorpay_test' as const) : ('mock' as const),
       plan,
       planId: plan.planId,
       planName: plan.name,
@@ -2031,10 +2112,11 @@ export class KartikPlatformRuntime {
       );
     }
 
+    const trimmedOrderId = (input.orderId ?? '').trim();
     const payloadFingerprint = computePayloadFingerprint({
       userId: user.userId,
       operation: 'verify_checkout',
-      orderId: (input.orderId ?? '').trim(),
+      orderId: trimmedOrderId,
     });
     const scopedRequestIdKey = `${user.userId}:${requestId}`;
     const existingVerifyForReq =
@@ -2060,52 +2142,116 @@ export class KartikPlatformRuntime {
       };
     }
 
-    const order = this.pendingOrders.get(input.orderId);
+    const order = this.pendingOrders.get(trimmedOrderId);
     if (!order || order.userId !== user.userId) {
-      throw new AppError('NOT_FOUND', `Order "${input.orderId}" was not found`);
+      throw new AppError('NOT_FOUND', `Order "${trimmedOrderId}" was not found`);
     }
 
-    const stripQuotes = (v?: string) => (v ?? '').trim().replace(/^["']|["']$/g, '');
-    const secret = stripQuotes(process.env.RAZORPAY_KEY_SECRET) || 'rzp_test_secret_kartik';
+    const rzpCfg = this.resolveRazorpayBillingConfig();
+    const providedPaymentId = (input.paymentId ?? '').trim();
+    const providedSignature = (input.signature ?? '').trim();
 
-    const paymentId =
-      input.paymentId ?? `pay_rzp_${crypto.randomBytes(6).toString('hex')}`;
-    const expectedSignature = crypto
-      .createHmac('sha256', secret)
-      .update(`${order.orderId}|${paymentId}`)
-      .digest('hex');
+    let paymentId: string;
+    let signature: string;
 
-    if (input.signature && input.paymentId) {
-      const expectedBuf = Buffer.from(expectedSignature, 'utf8');
-      const actualBuf = Buffer.from(input.signature, 'utf8');
-      if (
-        expectedBuf.length !== actualBuf.length ||
-        !crypto.timingSafeEqual(expectedBuf, actualBuf)
-      ) {
-        throw new AppError(
-          'VALIDATION_FAILED',
-          'Razorpay HMAC-SHA256 payment signature verification failed.',
-        );
-      }
-    }
-    const signature = expectedSignature;
-
-    const currentBalance =
-      this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS;
-
-    if (order.settled) {
-      this.verifiedCheckoutsByUserAndRequestId.set(scopedRequestIdKey, {
-        payloadFingerprint,
-        orderId: order.orderId,
-        paymentId,
-        signature,
-        planId: order.plan.planId,
+    if (order.liveRazorpayOrder) {
+      // Live Razorpay Test Mode orders strictly require paymentId + constant-time HMAC-SHA256 signature.
+      verifyRazorpayCheckoutSignature({
+        razorpayOrderId: order.orderId,
+        razorpayPaymentId: providedPaymentId,
+        razorpaySignature: providedSignature,
+        keySecret: rzpCfg.keySecret,
       });
-      return {
-        verified: true,
-        orderId: order.orderId,
+      paymentId = providedPaymentId;
+      signature = providedSignature;
+    } else if (providedPaymentId || providedSignature) {
+      // Even in mock mode, any caller-supplied paymentId/signature must pass constant-time HMAC verification.
+      verifyRazorpayCheckoutSignature({
+        razorpayOrderId: order.orderId,
+        razorpayPaymentId: providedPaymentId,
+        razorpaySignature: providedSignature,
+        keySecret: rzpCfg.keySecret,
+      });
+      paymentId = providedPaymentId;
+      signature = providedSignature;
+    } else {
+      // Deterministic demo/mock order checkout convenience when no Razorpay keys are configured.
+      paymentId = `pay_rzp_${crypto.randomBytes(6).toString('hex')}`;
+      signature = computeRazorpayCheckoutSignature(
+        order.orderId,
         paymentId,
-        signature,
+        rzpCfg.keySecret,
+      );
+    }
+
+    const settlement = this.settleOrderIdempotently({
+      user,
+      order,
+      paymentId,
+      requestId,
+      signature,
+      scopedRequestIdKey,
+      payloadFingerprint,
+      sourceLabel: order.liveRazorpayOrder ? 'Razorpay Test' : 'Razorpay Demo',
+    });
+
+    return {
+      verified: true,
+      orderId: order.orderId,
+      paymentId: settlement.paymentId,
+      signature,
+      planId: order.plan.planId,
+      creditsAdded: settlement.creditsAdded,
+      availableCredits: settlement.availableCredits,
+      idempotentReplay: settlement.idempotentReplay,
+    };
+  }
+
+  public async handleRazorpayWebhook(params: {
+    readonly rawBody: string | Buffer;
+    readonly signatureHeader: string;
+    readonly eventIdHeader?: string;
+  }) {
+    const rzpCfg = this.resolveRazorpayBillingConfig();
+    if (!rzpCfg.webhookSecret) {
+      throw new AppError(
+        'PAYMENT_VERIFICATION_FAILED',
+        'RAZORPAY_WEBHOOK_SECRET is not configured on the server',
+      );
+    }
+
+    const verifiedEvent = parseAndVerifyRazorpayWebhook({
+      rawBody: params.rawBody,
+      signatureHeader: params.signatureHeader,
+      eventIdHeader: params.eventIdHeader,
+      webhookSecret: rzpCfg.webhookSecret,
+    });
+
+    const user = await this.hydrateUserFromPersistence(verifiedEvent.userId);
+    const order = this.pendingOrders.get(verifiedEvent.providerOrderId);
+    if (!order || order.userId !== user.userId) {
+      throw new AppError(
+        'NOT_FOUND',
+        `Order "${verifiedEvent.providerOrderId}" was not found`,
+      );
+    }
+
+    if (verifiedEvent.amountPaise !== order.plan.amountPaise) {
+      throw new AppError(
+        'PAYMENT_VERIFICATION_FAILED',
+        `Webhook amount mismatch: expected ${order.plan.amountPaise} paise, got ${verifiedEvent.amountPaise} paise`,
+      );
+    }
+
+    if (this.processedWebhookEventIds.has(verifiedEvent.eventId)) {
+      const currentBalance =
+        this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS;
+      return {
+        received: true,
+        eventId: verifiedEvent.eventId,
+        eventType: verifiedEvent.eventType,
+        orderId: order.orderId,
+        paymentId: order.settledPaymentId ?? verifiedEvent.providerPaymentId,
         planId: order.plan.planId,
         creditsAdded: 0,
         availableCredits: currentBalance,
@@ -2113,7 +2259,83 @@ export class KartikPlatformRuntime {
       };
     }
 
+    this.processedWebhookEventIds.add(verifiedEvent.eventId);
+
+    const settlement = this.settleOrderIdempotently({
+      user,
+      order,
+      paymentId: verifiedEvent.providerPaymentId,
+      requestId: verifiedEvent.eventId,
+      signature: params.signatureHeader,
+      sourceLabel: 'Razorpay Webhook',
+    });
+
+    return {
+      received: true,
+      eventId: verifiedEvent.eventId,
+      eventType: verifiedEvent.eventType,
+      orderId: order.orderId,
+      paymentId: settlement.paymentId,
+      planId: order.plan.planId,
+      creditsAdded: settlement.creditsAdded,
+      availableCredits: settlement.availableCredits,
+      idempotentReplay: settlement.idempotentReplay,
+    };
+  }
+
+  private settleOrderIdempotently(params: {
+    readonly user: PlatformUser;
+    readonly order: {
+      readonly orderId: string;
+      readonly plan: PlatformCreditPlan;
+      readonly userId: string;
+      readonly requestId?: string;
+      readonly liveRazorpayOrder: boolean;
+      settled: boolean;
+      settledPaymentId?: string;
+    };
+    readonly paymentId: string;
+    readonly requestId: string;
+    readonly signature: string;
+    readonly scopedRequestIdKey?: string;
+    readonly payloadFingerprint?: string;
+    readonly sourceLabel: string;
+  }): {
+    readonly paymentId: string;
+    readonly creditsAdded: number;
+    readonly availableCredits: number;
+    readonly idempotentReplay: boolean;
+  } {
+    const { user, order, paymentId, requestId, signature } = params;
+    const currentBalance =
+      this.creditsByUserId.get(user.userId) ?? INITIAL_FREE_CREDITS;
+
+    if (order.settled) {
+      if (order.settledPaymentId && order.settledPaymentId !== paymentId) {
+        throw new AppError(
+          'IDEMPOTENCY_CONFLICT',
+          'Order was already settled with a different Razorpay paymentId',
+        );
+      }
+      if (params.scopedRequestIdKey && params.payloadFingerprint) {
+        this.verifiedCheckoutsByUserAndRequestId.set(params.scopedRequestIdKey, {
+          payloadFingerprint: params.payloadFingerprint,
+          orderId: order.orderId,
+          paymentId: order.settledPaymentId ?? paymentId,
+          signature,
+          planId: order.plan.planId,
+        });
+      }
+      return {
+        paymentId: order.settledPaymentId ?? paymentId,
+        creditsAdded: 0,
+        availableCredits: currentBalance,
+        idempotentReplay: true,
+      };
+    }
+
     order.settled = true;
+    order.settledPaymentId = paymentId;
     const updatedBalance = currentBalance + order.plan.creditsGranted;
     this.creditsByUserId.set(user.userId, updatedBalance);
 
@@ -2126,7 +2348,7 @@ export class KartikPlatformRuntime {
     const ledgerEntry: PlatformLedgerEntry = {
       entryId: `led_${crypto.randomBytes(6).toString('hex')}`,
       timestamp: new Date().toISOString(),
-      description: `Razorpay Purchase — ${order.plan.name} (${order.plan.amountInrLabel}, ${paymentId})`,
+      description: `${params.sourceLabel} Purchase — ${order.plan.name} (${order.plan.amountInrLabel}, ${paymentId})`,
       deltaCredits: order.plan.creditsGranted,
       balanceAfter: updatedBalance,
       requestId,
@@ -2135,13 +2357,15 @@ export class KartikPlatformRuntime {
     userLedger.unshift(ledgerEntry);
     this.ledgerByUserId.set(user.userId, userLedger);
 
-    this.verifiedCheckoutsByUserAndRequestId.set(scopedRequestIdKey, {
-      payloadFingerprint,
-      orderId: order.orderId,
-      paymentId,
-      signature,
-      planId: order.plan.planId,
-    });
+    if (params.scopedRequestIdKey && params.payloadFingerprint) {
+      this.verifiedCheckoutsByUserAndRequestId.set(params.scopedRequestIdKey, {
+        payloadFingerprint: params.payloadFingerprint,
+        orderId: order.orderId,
+        paymentId,
+        signature,
+        planId: order.plan.planId,
+      });
+    }
 
     this.trackPersistence(async () => {
       await this.persistence.syncPaymentOrder({
@@ -2173,11 +2397,7 @@ export class KartikPlatformRuntime {
     });
 
     return {
-      verified: true,
-      orderId: order.orderId,
       paymentId,
-      signature,
-      planId: order.plan.planId,
       creditsAdded: order.plan.creditsGranted,
       availableCredits: updatedBalance,
       idempotentReplay: false,

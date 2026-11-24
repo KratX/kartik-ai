@@ -93,7 +93,14 @@ export function createKartikExpressApp(
 
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '20mb' }));
+  app.use(
+    express.json({
+      limit: '20mb',
+      verify: (req, _res, buf) => {
+        (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+      },
+    }),
+  );
   app.use(optionalAuth);
 
   const sendEnvelope = <T>(
@@ -789,6 +796,31 @@ export function createKartikExpressApp(
           requestId,
         });
         sendEnvelope(req, res, 200, verified, requestId);
+      } catch (err) {
+        sendError(req, res, err);
+      }
+    },
+  );
+
+  app.post(
+    ['/api/v1/webhooks/razorpay', '/webhooks/razorpay'],
+    async (req, res) => {
+      try {
+        const rawReq = req as Request & { rawBody?: Buffer };
+        const rawBody =
+          rawReq.rawBody ??
+          Buffer.from(
+            typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {}),
+            'utf8',
+          );
+        const signatureHeader = readHeaderString(req, 'x-razorpay-signature') ?? '';
+        const eventIdHeader = readHeaderString(req, 'x-razorpay-event-id');
+        const settled = await runtime.handleRazorpayWebhook({
+          rawBody,
+          signatureHeader,
+          eventIdHeader,
+        });
+        sendEnvelope(req, res, 200, settled, settled.eventId);
       } catch (err) {
         sendError(req, res, err);
       }

@@ -1,13 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { AppError } from '@kartik/shared';
+import { AppError, ConfigValidationError } from '@kartik/shared';
 import {
   InMemoryBillingRepository,
   MockPaymentProvider,
   PaymentOrderService,
+  RazorpayHttpPaymentProvider,
   computeRazorpayCheckoutSignature,
   computeRazorpayWebhookSignature,
+  loadBillingConfig,
 } from '../src/index.js';
+import { generateKeyPairSync } from 'node:crypto';
 
 const TEST_USER_ID = '550e8400-e29b-41d4-a716-446655440000';
 const KEY_SECRET = 'rzp_test_key_secret_for_checkout_9999';
@@ -267,5 +270,96 @@ describe('@kartik/billing PaymentOrderService & Razorpay checkout/webhook HMAC v
     const ledger = await repository.listLedgerEntries(TEST_USER_ID);
     const purchaseEntries = ledger.filter((e) => e.entryType === 'PURCHASE_CREDIT');
     assert.equal(purchaseEntries.length, 1);
+  });
+
+  it('creates real Razorpay Orders via Basic Auth in RazorpayHttpPaymentProvider and rejects rzp_live_* in test mode (Fix #35)', async () => {
+    // Rejects rzp_live_* when allowLiveKeys is not enabled
+    assert.throws(
+      () =>
+        new RazorpayHttpPaymentProvider({
+          keyId: 'rzp_live_forbidden_unit_key',
+          keySecret: 'unit_test_secret_1234567890',
+        }),
+      (err: unknown) => err instanceof AppError && err.code === 'VALIDATION_FAILED',
+    );
+
+    const capturedRequests: Array<{
+      url: string;
+      auth: string | null;
+      body: Record<string, unknown>;
+    }> = [];
+
+    const provider = new RazorpayHttpPaymentProvider({
+      keyId: 'rzp_test_unit_key_001',
+      keySecret: 'unit_test_secret_1234567890',
+      fetchImpl: (async (url, init) => {
+        const headers = new Headers(init?.headers);
+        capturedRequests.push({
+          url: String(url),
+          auth: headers.get('Authorization'),
+          body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
+        });
+        return new Response(
+          JSON.stringify({
+            id: 'order_RzpUnitTest01',
+            entity: 'order',
+            amount: 49_900,
+            currency: 'INR',
+            status: 'created',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }) as typeof fetch,
+    });
+
+    const result = await provider.createOrder({
+      userId: TEST_USER_ID,
+      planId: 'starter_inr_499',
+      requestId: 'idem_rzp_http_001',
+      amountPaise: 49_900,
+      currency: 'INR',
+    });
+
+    assert.equal(result.providerOrderId, 'order_RzpUnitTest01');
+    assert.equal(result.amountPaise, 49_900);
+    assert.equal(result.mock, false);
+    assert.equal(capturedRequests.length, 1);
+    const firstReq = capturedRequests[0];
+    assert.ok(firstReq);
+    assert.equal(firstReq.url, 'https://api.razorpay.com/v1/orders');
+    const expectedAuth = `Basic ${Buffer.from('rzp_test_unit_key_001:unit_test_secret_1234567890').toString('base64')}`;
+    assert.equal(firstReq.auth, expectedAuth);
+    assert.equal(firstReq.body.amount, 49_900);
+    assert.equal(firstReq.body.currency, 'INR');
+  });
+
+  it('accepts BILLING_MODE=razorpay_test with rzp_test_* keys and rejects rzp_live_* in loadBillingConfig (Fix #35)', () => {
+    const { publicKey } = generateKeyPairSync('ed25519');
+    const pubPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
+    const baseEnv = {
+      NODE_ENV: 'test',
+      BILLING_DATABASE_URL: 'postgresql://user:pass@127.0.0.1:5432/kartik',
+      REDIS_URL: 'redis://127.0.0.1:6379',
+      USER_CONTEXT_PUBLIC_KEY: pubPem,
+      GATEWAY_TO_BILLING_TOKEN: 'gw_to_billing_test_token_12345',
+      CHAT_TO_BILLING_TOKEN: 'chat_to_billing_test_token_12345',
+      BILLING_MODE: 'razorpay_test',
+      RAZORPAY_KEY_ID: 'rzp_test_unit_config_key',
+      RAZORPAY_KEY_SECRET: 'unit_test_secret_000011112222',
+      RAZORPAY_WEBHOOK_SECRET: 'whsec_unit_test_secret_00001111',
+    };
+
+    const validConfig = loadBillingConfig(baseEnv);
+    assert.equal(validConfig.BILLING_MODE, 'razorpay_test');
+    assert.equal(validConfig.RAZORPAY_KEY_ID, 'rzp_test_unit_config_key');
+
+    assert.throws(
+      () =>
+        loadBillingConfig({
+          ...baseEnv,
+          RAZORPAY_KEY_ID: 'rzp_live_forbidden_config_key',
+        }),
+      (err: unknown) => err instanceof ConfigValidationError,
+    );
   });
 });

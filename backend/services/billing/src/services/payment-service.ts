@@ -72,6 +72,115 @@ export class MockPaymentProvider implements PaymentProvider {
   }
 }
 
+export interface RazorpayHttpPaymentProviderOptions {
+  readonly keyId: string;
+  readonly keySecret: string;
+  readonly allowLiveKeys?: boolean;
+  readonly apiBaseUrl?: string;
+  readonly timeoutMs?: number;
+  readonly fetchImpl?: typeof fetch;
+}
+
+/**
+ * Live Razorpay Orders API provider (`BILLING_MODE=razorpay_test` or `live`).
+ * Calls `POST https://api.razorpay.com/v1/orders` with Basic Auth and integer paise amounts.
+ */
+export class RazorpayHttpPaymentProvider implements PaymentProvider {
+  private readonly keyId: string;
+  private readonly keySecret: string;
+  private readonly apiBaseUrl: string;
+  private readonly timeoutMs: number;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(options: RazorpayHttpPaymentProviderOptions) {
+    const cleanKeyId = options.keyId.trim();
+    const cleanKeySecret = options.keySecret.trim();
+    if (!cleanKeyId || !cleanKeySecret) {
+      throw new AppError(
+        'VALIDATION_FAILED',
+        'Razorpay keyId and keySecret are required for RazorpayHttpPaymentProvider',
+      );
+    }
+    if (!options.allowLiveKeys && cleanKeyId.startsWith('rzp_live_')) {
+      throw new AppError(
+        'VALIDATION_FAILED',
+        'Live Razorpay keys (rzp_live_*) are forbidden in test/demo mode; use rzp_test_* credentials',
+      );
+    }
+    this.keyId = cleanKeyId;
+    this.keySecret = cleanKeySecret;
+    this.apiBaseUrl = (options.apiBaseUrl ?? 'https://api.razorpay.com/v1').replace(/\/+$/, '');
+    this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  }
+
+  async createOrder(input: CreateProviderOrderInput): Promise<ProviderOrderResult> {
+    const basicAuth = Buffer.from(`${this.keyId}:${this.keySecret}`, 'utf8').toString('base64');
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.apiBaseUrl}/orders`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${basicAuth}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          amount: input.amountPaise,
+          currency: input.currency,
+          receipt: input.requestId.slice(0, 40),
+          notes: {
+            planId: input.planId,
+            userId: input.userId,
+          },
+        }),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch (err) {
+      throw new AppError(
+        'BILLING_UNAVAILABLE',
+        `Razorpay Orders API request failed: ${err instanceof Error ? err.message : 'network error'}`,
+      );
+    }
+
+    let data: {
+      id?: string;
+      amount?: number;
+      currency?: string;
+      error?: { code?: string; description?: string };
+    };
+    try {
+      data = (await res.json()) as typeof data;
+    } catch {
+      throw new AppError(
+        'BILLING_UNAVAILABLE',
+        `Razorpay Orders API returned invalid JSON (HTTP ${res.status})`,
+      );
+    }
+
+    if (!res.ok || !data.id) {
+      const reason = data.error?.description ?? `HTTP ${res.status}`;
+      throw new AppError(
+        'BILLING_UNAVAILABLE',
+        `Razorpay Orders API rejected order creation (${reason})`,
+      );
+    }
+
+    if (data.amount !== undefined && data.amount !== input.amountPaise) {
+      throw new AppError(
+        'PAYMENT_VERIFICATION_FAILED',
+        `Razorpay returned unexpected order amount: expected ${input.amountPaise} paise, got ${data.amount} paise`,
+      );
+    }
+
+    return {
+      providerOrderId: data.id,
+      amountPaise: input.amountPaise,
+      currency: 'INR',
+      mock: false,
+    };
+  }
+}
+
 export interface CreateBillingOrderRequest {
   readonly userId: string;
   readonly requestId: string;

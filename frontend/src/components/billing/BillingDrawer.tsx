@@ -69,8 +69,20 @@ interface RazorpayCheckoutResponse {
   readonly razorpay_signature?: string;
 }
 
+interface RazorpayPaymentFailedResponse {
+  readonly error?: {
+    readonly code?: string;
+    readonly description?: string;
+    readonly reason?: string;
+  };
+}
+
 interface RazorpayInstance {
   open: () => void;
+  on?: (
+    event: 'payment.failed',
+    handler: (response: RazorpayPaymentFailedResponse) => void,
+  ) => void;
 }
 
 interface WindowWithRazorpay {
@@ -78,6 +90,8 @@ interface WindowWithRazorpay {
 }
 
 type BillingTabId = 'overview' | 'ledger' | 'rates';
+
+let razorpayScriptPromise: Promise<void> | null = null;
 
 function loadRazorpayCheckoutScript(): Promise<void> {
   if (typeof window === 'undefined') {
@@ -87,15 +101,36 @@ function loadRazorpayCheckoutScript(): Promise<void> {
   if (typeof win.Razorpay === 'function') {
     return Promise.resolve();
   }
-  return new Promise((resolve, reject) => {
+  if (razorpayScriptPromise) {
+    return razorpayScriptPromise;
+  }
+  razorpayScriptPromise = new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>(
+      'script[src="https://checkout.razorpay.com/v1/checkout.js"]',
+    );
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener(
+        'error',
+        () => {
+          razorpayScriptPromise = null;
+          reject(new Error('Failed to load Razorpay Checkout SDK'));
+        },
+        { once: true },
+      );
+      return;
+    }
     const script = document.createElement('script');
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
     script.async = true;
     script.onload = () => resolve();
-    script.onerror = () =>
+    script.onerror = () => {
+      razorpayScriptPromise = null;
       reject(new Error('Failed to load Razorpay Checkout SDK'));
+    };
     document.head.appendChild(script);
   });
+  return razorpayScriptPromise;
 }
 
 function formatLedgerTimestamp(iso: string): string {
@@ -193,6 +228,79 @@ export function BillingDrawer({
     }, 1600);
   };
 
+  const openRazorpayCheckoutModal = async (order: {
+    readonly orderId: string;
+    readonly razorpayKeyId?: string;
+    readonly liveRazorpayOrder?: boolean;
+    readonly planName: string;
+    readonly amountPaise: number;
+    readonly amountInrLabel: string;
+    readonly creditsGranted: number;
+  }) => {
+    setErrorMessage(null);
+    try {
+      await loadRazorpayCheckoutScript();
+      const win = window as unknown as WindowWithRazorpay;
+      if (typeof win.Razorpay !== 'function') {
+        throw new Error('Razorpay Checkout SDK did not initialize.');
+      }
+      const rzp = new win.Razorpay({
+        key: order.razorpayKeyId,
+        amount: order.amountPaise,
+        currency: 'INR',
+        name: 'Kartik.ai',
+        description: `${order.planName} (+${order.creditsGranted.toLocaleString()} Credits)`,
+        order_id: order.orderId,
+        theme: { color: '#09090b' },
+        modal: {
+          ondismiss: () => {
+            setIsProcessing(false);
+          },
+        },
+        handler: (response: RazorpayCheckoutResponse) => {
+          void (async () => {
+            setIsProcessing(true);
+            try {
+              await onVerifyPayment(
+                response.razorpay_order_id ?? order.orderId,
+                {
+                  paymentId: response.razorpay_payment_id,
+                  signature: response.razorpay_signature,
+                },
+              );
+              setPendingCheckoutOrder(null);
+              setSuccessNotice(
+                `+${order.creditsGranted.toLocaleString()} credits added to your workspace balance.`,
+              );
+            } catch (verifyErr) {
+              setErrorMessage(
+                verifyErr instanceof Error
+                  ? verifyErr.message
+                  : 'Payment verification failed',
+              );
+            } finally {
+              setIsProcessing(false);
+            }
+          })();
+        },
+      });
+      rzp.on?.('payment.failed', (failure) => {
+        setIsProcessing(false);
+        setErrorMessage(
+          failure.error?.description ??
+            'Razorpay test payment did not complete. You can retry with a Razorpay test card or UPI ID.',
+        );
+      });
+      rzp.open();
+    } catch (sdkErr) {
+      setErrorMessage(
+        sdkErr instanceof Error
+          ? `${sdkErr.message} — allow checkout.razorpay.com and try again.`
+          : 'Unable to open Razorpay Checkout modal.',
+      );
+    }
+  };
+
   const handleStartOrder = async (planId: string) => {
     setErrorMessage(null);
     setSuccessNotice(null);
@@ -207,50 +315,7 @@ export function BillingDrawer({
         order.razorpayKeyId &&
         order.razorpayKeyId !== 'rzp_test_kartik_ai_demo'
       ) {
-        try {
-          await loadRazorpayCheckoutScript();
-          const win = window as unknown as WindowWithRazorpay;
-          if (typeof win.Razorpay === 'function') {
-            const rzp = new win.Razorpay({
-              key: order.razorpayKeyId,
-              amount: order.amountPaise,
-              currency: 'INR',
-              name: 'Kartik.ai',
-              description: `${order.planName} (+${order.creditsGranted.toLocaleString()} Credits)`,
-              order_id: order.orderId,
-              theme: { color: '#09090b' },
-              handler: (response: RazorpayCheckoutResponse) => {
-                void (async () => {
-                  setIsProcessing(true);
-                  try {
-                    await onVerifyPayment(
-                      response.razorpay_order_id ?? order.orderId,
-                      {
-                        paymentId: response.razorpay_payment_id,
-                        signature: response.razorpay_signature,
-                      },
-                    );
-                    setPendingCheckoutOrder(null);
-                    setSuccessNotice(
-                      `+${order.creditsGranted.toLocaleString()} credits added to your workspace balance.`,
-                    );
-                  } catch (verifyErr) {
-                    setErrorMessage(
-                      verifyErr instanceof Error
-                        ? verifyErr.message
-                        : 'Payment verification failed',
-                    );
-                  } finally {
-                    setIsProcessing(false);
-                  }
-                })();
-              },
-            });
-            rzp.open();
-          }
-        } catch {
-          // Keep interactive checkout card open if popup script is blocked
-        }
+        await openRazorpayCheckoutModal(order);
       }
     } catch (err) {
       setErrorMessage(
@@ -547,7 +612,9 @@ export function BillingDrawer({
                               </span>
                             </div>
                             <span className="text-[11px] font-mono text-zinc-400">
-                              Razorpay HMAC-SHA256 Verified
+                              {pendingCheckoutOrder.liveRazorpayOrder
+                                ? 'Razorpay Test Mode · HMAC-SHA256'
+                                : 'Demo Checkout · HMAC-SHA256'}
                             </span>
                           </div>
 
@@ -589,19 +656,36 @@ export function BillingDrawer({
                             >
                               Cancel
                             </button>
-                            <button
-                              type="button"
-                              disabled={isProcessing}
-                              data-billing-confirm-payment="true"
-                              onClick={() => void handleConfirmRazorpayPayment()}
-                              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white hover:bg-zinc-200 disabled:opacity-50 text-zinc-950 text-xs font-semibold transition-colors cursor-pointer"
-                            >
-                              <Lock className="w-3.5 h-3.5" />
-                              <span>
-                                Complete Payment &amp; Credit +
-                                {pendingCheckoutOrder.creditsGranted.toLocaleString()} cr
-                              </span>
-                            </button>
+                            {pendingCheckoutOrder.liveRazorpayOrder ? (
+                              <button
+                                type="button"
+                                disabled={isProcessing}
+                                data-billing-open-razorpay="true"
+                                onClick={() =>
+                                  void openRazorpayCheckoutModal(pendingCheckoutOrder)
+                                }
+                                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white hover:bg-zinc-200 disabled:opacity-50 text-zinc-950 text-xs font-semibold transition-colors cursor-pointer"
+                              >
+                                <Lock className="w-3.5 h-3.5" />
+                                <span>
+                                  Open Razorpay Test Checkout ({pendingCheckoutOrder.amountInrLabel})
+                                </span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={isProcessing}
+                                data-billing-confirm-payment="true"
+                                onClick={() => void handleConfirmRazorpayPayment()}
+                                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white hover:bg-zinc-200 disabled:opacity-50 text-zinc-950 text-xs font-semibold transition-colors cursor-pointer"
+                              >
+                                <Lock className="w-3.5 h-3.5" />
+                                <span>
+                                  Complete Payment &amp; Credit +
+                                  {pendingCheckoutOrder.creditsGranted.toLocaleString()} cr
+                                </span>
+                              </button>
+                            )}
                           </div>
                         </div>
                       </motion.div>

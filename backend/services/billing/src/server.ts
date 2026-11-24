@@ -41,6 +41,7 @@ import {
   CreditReservationService,
   MockPaymentProvider,
   PaymentOrderService,
+  RazorpayHttpPaymentProvider,
   RedisMoneyIdempotencyStore,
   type MoneyIdempotencyStore,
   type PaymentProvider,
@@ -188,7 +189,15 @@ export function bootstrapBillingService(
     new ResilientBillingRepository(postgresBillingRepo, config.NODE_ENV === 'production');
   const idempotencyStore =
     options.idempotencyStore ?? new RedisMoneyIdempotencyStore(redisClient);
-  const paymentProvider = options.paymentProvider ?? new MockPaymentProvider();
+  const paymentProvider =
+    options.paymentProvider ??
+    (config.BILLING_MODE === 'razorpay_test' || config.BILLING_MODE === 'live'
+      ? new RazorpayHttpPaymentProvider({
+          keyId: config.RAZORPAY_KEY_ID,
+          keySecret: config.RAZORPAY_KEY_SECRET,
+          allowLiveKeys: config.BILLING_MODE === 'live',
+        })
+      : new MockPaymentProvider());
   const rateLimitStore =
     options.rateLimitStore ?? new RedisRateLimitStore(redisClient);
 
@@ -202,6 +211,8 @@ export function bootstrapBillingService(
     repository,
     paymentProvider,
     initialFreeCredits: config.FREE_TIER_INITIAL_CREDITS,
+    razorpayKeyId:
+      config.RAZORPAY_KEY_ID || DEV_SHARED_BOOTSTRAP_DEFAULTS.razorpayKeyId,
     razorpayKeySecret:
       config.RAZORPAY_KEY_SECRET || DEV_SHARED_BOOTSTRAP_DEFAULTS.razorpayKeySecret,
     razorpayWebhookSecret:
