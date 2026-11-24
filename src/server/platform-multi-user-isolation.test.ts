@@ -1,4 +1,4 @@
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { DecodedIdToken } from 'firebase-admin/auth';
@@ -46,6 +46,33 @@ function buildDecodedFirebaseToken(input: {
 }
 
 describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Audit Item #14)', () => {
+  let savedNodeEnv: string | undefined;
+  let savedMockAi: string | undefined;
+  let savedAiMode: string | undefined;
+  let savedImageProvider: string | undefined;
+
+  before(() => {
+    savedNodeEnv = process.env.NODE_ENV;
+    savedMockAi = process.env.MOCK_AI;
+    savedAiMode = process.env.AI_PROVIDER_MODE;
+    savedImageProvider = process.env.IMAGE_PROVIDER;
+    process.env.NODE_ENV = 'test';
+    process.env.MOCK_AI = 'true';
+    process.env.AI_PROVIDER_MODE = 'mock';
+    process.env.IMAGE_PROVIDER = 'mock';
+  });
+
+  after(() => {
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = savedNodeEnv;
+    if (savedMockAi === undefined) delete process.env.MOCK_AI;
+    else process.env.MOCK_AI = savedMockAi;
+    if (savedAiMode === undefined) delete process.env.AI_PROVIDER_MODE;
+    else process.env.AI_PROVIDER_MODE = savedAiMode;
+    if (savedImageProvider === undefined) delete process.env.IMAGE_PROVIDER;
+    else process.env.IMAGE_PROVIDER = savedImageProvider;
+  });
+
   afterEach(() => {
     setFirebaseTokenVerifierForTests(null);
   });
@@ -1890,7 +1917,338 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it('Fix #31: refunds all 10 reserved credits on Gemini Image HTTP 429 RESOURCE_EXHAUSTED (limit:0), emits structured SSE error details, and honors IMAGE_PROVIDER=mock', async () => {
+    const prevGeminiKey = process.env.GEMINI_API_KEY;
+    const prevMockAi = process.env.MOCK_AI;
+    const prevAiMode = process.env.AI_PROVIDER_MODE;
+    const prevImageProvider = process.env.IMAGE_PROVIDER;
+    const prevCfToken = process.env.CLOUDFLARE_API_TOKEN;
+    const prevCfAccount = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const originalFetch = globalThis.fetch;
+
+    try {
+      // Part A: Live Image Gen hits free-tier limit:0 429 -> must emit 429 RATE_LIMITED with reason=paid_tier_required AND refund all 10 credits!
+      process.env.GEMINI_API_KEY = 'AIzaSyTestFreeTierLiveKey1234567890';
+      process.env.MOCK_AI = 'false';
+      process.env.AI_PROVIDER_MODE = 'live';
+      process.env.IMAGE_PROVIDER = 'live';
+      delete process.env.CLOUDFLARE_API_TOKEN;
+      delete process.env.CLOUDFLARE_ACCOUNT_ID;
+
+      const runtimeLive = new KartikPlatformRuntime({
+        persistence: new InMemoryPlatformPersistenceAdapter(),
+      });
+      const appLive = createKartikExpressApp(runtimeLive);
+      const serverLive = http.createServer(appLive);
+      await new Promise<void>((resolve) => serverLive.listen(0, '127.0.0.1', resolve));
+      const addrLive = serverLive.address();
+      const portLive = typeof addrLive === 'object' && addrLive ? addrLive.port : 0;
+      const baseUrlLive = `http://127.0.0.1:${portLive}`;
+
+      try {
+        // Intercept ONLY outbound Gemini API calls while letting local http://127.0.0.1 calls pass through
+        globalThis.fetch = (async (inputUrl, init) => {
+          const urlStr = String(inputUrl);
+          if (urlStr.startsWith('https://generativelanguage.googleapis.com/')) {
+            return new Response(
+              JSON.stringify({
+                error: {
+                  code: 429,
+                  status: 'RESOURCE_EXHAUSTED',
+                  message:
+                    'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-flash-lite-image',
+                },
+              }),
+              { status: 429, headers: { 'Content-Type': 'application/json' } },
+            );
+          }
+          return originalFetch(inputUrl, init);
+        }) as typeof fetch;
+
+        const guestHeaders = {
+          'x-kartik-guest-id': 'gst_fix31_refund_check',
+          'content-type': 'application/json',
+        };
+
+        const meBeforeRes = await fetch(`${baseUrlLive}/api/v1/billing/balance`, {
+          headers: guestHeaders,
+        });
+        const meBeforeJson = (await meBeforeRes.json()) as {
+          data: { availableCredits: number; reservedCredits: number };
+        };
+        const initialCredits = meBeforeJson.data.availableCredits;
+        assert.ok(initialCredits >= 10);
+
+        const convRes = await fetch(`${baseUrlLive}/api/v1/conversations`, {
+          method: 'POST',
+          headers: guestHeaders,
+          body: JSON.stringify({ title: 'Image 429 Refund Test' }),
+        });
+        const convJson = (await convRes.json()) as { data: { conversationId: string } };
+        const convId = convJson.data.conversationId;
+
+        const sseRes = await fetch(
+          `${baseUrlLive}/api/v1/conversations/${convId}/messages/stream`,
+          {
+            method: 'POST',
+            headers: {
+              ...guestHeaders,
+              Accept: 'text/event-stream',
+              'Idempotency-Key': 'req_fix31_img_429_01',
+            },
+            body: JSON.stringify({
+              prompt: 'Generate a minimalist glass library at dusk',
+              preferredAgent: 'image',
+            }),
+          },
+        );
+        const sseBody = await sseRes.text();
+        assert.ok(sseBody.includes('event: error'), `Expected SSE error event, got: ${sseBody}`);
+        assert.ok(sseBody.includes('"code":"RATE_LIMITED"'));
+        assert.ok(sseBody.includes('"paid_tier_required"'));
+        assert.ok(sseBody.includes('free-tier quota of 0'));
+
+        // Verify all 10 reserved credits were immediately released/refunded
+        const meAfterRes = await fetch(`${baseUrlLive}/api/v1/billing/balance`, {
+          headers: guestHeaders,
+        });
+        const meAfterJson = (await meAfterRes.json()) as {
+          data: { availableCredits: number; reservedCredits: number };
+        };
+        assert.equal(meAfterJson.data.availableCredits, initialCredits);
+        assert.equal(meAfterJson.data.reservedCredits, 0);
+      } finally {
+        await new Promise<void>((resolve) => serverLive.close(() => resolve()));
+      }
+
+      // Part B: With GEMINI_API_KEY set AND IMAGE_PROVIDER=mock, runtime must honor mock image previews without calling Gemini image API
+      process.env.IMAGE_PROVIDER = 'mock';
+      let geminiImageCalled = false;
+      globalThis.fetch = (async (inputUrl, init) => {
+        const urlStr = String(inputUrl);
+        if (urlStr.includes('generativelanguage.googleapis.com')) {
+          geminiImageCalled = true;
+          return new Response('Should not be called when IMAGE_PROVIDER=mock', { status: 500 });
+        }
+        return originalFetch(inputUrl, init);
+      }) as typeof fetch;
+
+      const runtimeMockImg = new KartikPlatformRuntime({
+        persistence: new InMemoryPlatformPersistenceAdapter(),
+      });
+      const appMockImg = createKartikExpressApp(runtimeMockImg);
+      const serverMockImg = http.createServer(appMockImg);
+      await new Promise<void>((resolve) => serverMockImg.listen(0, '127.0.0.1', resolve));
+      const addrMockImg = serverMockImg.address();
+      const portMockImg = typeof addrMockImg === 'object' && addrMockImg ? addrMockImg.port : 0;
+      const baseUrlMockImg = `http://127.0.0.1:${portMockImg}`;
+
+      try {
+        const guestHeaders = {
+          'x-kartik-guest-id': 'gst_fix31_mock_img_check',
+          'content-type': 'application/json',
+        };
+        const convRes = await fetch(`${baseUrlMockImg}/api/v1/conversations`, {
+          method: 'POST',
+          headers: guestHeaders,
+          body: JSON.stringify({ title: 'Image Mock Mode Test' }),
+        });
+        const convJson = (await convRes.json()) as { data: { conversationId: string } };
+
+        const msgRes = await fetch(
+          `${baseUrlMockImg}/api/v1/conversations/${convJson.data.conversationId}/messages`,
+          {
+            method: 'POST',
+            headers: {
+              ...guestHeaders,
+              'Idempotency-Key': 'req_fix31_img_mock_01',
+            },
+            body: JSON.stringify({
+              prompt: 'Create a 16:9 minimalist mountain observatory',
+              preferredAgent: 'image',
+            }),
+          },
+        );
+        assert.equal(msgRes.status, 201);
+        const msgJson = (await msgRes.json()) as {
+          data: {
+            assistantMessage: {
+              agentUsed: string;
+              artifacts?: Array<{ artifactType: string; mimeType: string; sizeBytes: number }>;
+            };
+          };
+        };
+        assert.equal(geminiImageCalled, false);
+        assert.equal(msgJson.data.assistantMessage.agentUsed, 'image');
+        assert.equal(msgJson.data.assistantMessage.artifacts?.[0]?.artifactType, 'generated_image');
+        assert.equal(msgJson.data.assistantMessage.artifacts?.[0]?.mimeType, 'image/png');
+        assert.ok((msgJson.data.assistantMessage.artifacts?.[0]?.sizeBytes ?? 0) > 500);
+      } finally {
+        await new Promise<void>((resolve) => serverMockImg.close(() => resolve()));
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (prevGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = prevGeminiKey;
+      if (prevMockAi === undefined) delete process.env.MOCK_AI;
+      else process.env.MOCK_AI = prevMockAi;
+      if (prevAiMode === undefined) delete process.env.AI_PROVIDER_MODE;
+      else process.env.AI_PROVIDER_MODE = prevAiMode;
+      if (prevImageProvider === undefined) delete process.env.IMAGE_PROVIDER;
+      else process.env.IMAGE_PROVIDER = prevImageProvider;
+      if (prevCfToken === undefined) delete process.env.CLOUDFLARE_API_TOKEN;
+      else process.env.CLOUDFLARE_API_TOKEN = prevCfToken;
+      if (prevCfAccount === undefined) delete process.env.CLOUDFLARE_ACCOUNT_ID;
+      else process.env.CLOUDFLARE_ACCOUNT_ID = prevCfAccount;
+    }
+  });
+
+  it('Fix #32: generates live PNG artifacts via Cloudflare Workers AI (FLUX.1 Schnell) when IMAGE_PROVIDER=cloudflare and refunds 10 credits if CLOUDFLARE_ACCOUNT_ID is missing', async () => {
+    const prevMockAi = process.env.MOCK_AI;
+    const prevAiMode = process.env.AI_PROVIDER_MODE;
+    const prevImageProvider = process.env.IMAGE_PROVIDER;
+    const prevCfToken = process.env.CLOUDFLARE_API_TOKEN;
+    const prevCfAccount = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const prevCfModel = process.env.CLOUDFLARE_IMAGE_MODEL;
+    const originalFetch = globalThis.fetch;
+
+    const syntheticPng = Buffer.concat([
+      Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      ]),
+      Buffer.alloc(256, 0x42),
+    ]);
+
+    try {
+      process.env.MOCK_AI = 'false';
+      process.env.AI_PROVIDER_MODE = 'live';
+      process.env.IMAGE_PROVIDER = 'cloudflare';
+      process.env.CLOUDFLARE_API_TOKEN = 'cfut_synthetic_e2e_token_for_unit_test_only_123456';
+      process.env.CLOUDFLARE_ACCOUNT_ID = '0123456789abcdef0123456789abcdef';
+      process.env.CLOUDFLARE_IMAGE_MODEL = '@cf/black-forest-labs/flux-1-schnell';
+
+      let cfUrlCalled = '';
+      globalThis.fetch = (async (inputUrl, init) => {
+        const urlStr = String(inputUrl);
+        if (urlStr.startsWith('https://api.cloudflare.com/client/v4/accounts/')) {
+          cfUrlCalled = urlStr;
+          return new Response(
+            JSON.stringify({
+              success: true,
+              result: { image: syntheticPng.toString('base64') },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return originalFetch(inputUrl, init);
+      }) as typeof fetch;
+
+      const runtimeCf = new KartikPlatformRuntime({
+        persistence: new InMemoryPlatformPersistenceAdapter(),
+      });
+      const appCf = createKartikExpressApp(runtimeCf);
+      const serverCf = http.createServer(appCf);
+      await new Promise<void>((resolve) => serverCf.listen(0, '127.0.0.1', resolve));
+      const addrCf = serverCf.address();
+      const portCf = typeof addrCf === 'object' && addrCf ? addrCf.port : 0;
+      const baseUrlCf = `http://127.0.0.1:${portCf}`;
+
+      try {
+        const guestHeaders = {
+          'x-kartik-guest-id': 'gst_fix32_cf_image_e2e',
+          'content-type': 'application/json',
+        };
+        const balBefore = (await (
+          await fetch(`${baseUrlCf}/api/v1/billing/balance`, { headers: guestHeaders })
+        ).json()) as { data: { availableCredits: number } };
+
+        const convJson = (await (
+          await fetch(`${baseUrlCf}/api/v1/conversations`, {
+            method: 'POST',
+            headers: guestHeaders,
+            body: JSON.stringify({ title: 'Cloudflare FLUX.1 Schnell E2E' }),
+          })
+        ).json()) as { data: { conversationId: string } };
+
+        const msgRes = await fetch(
+          `${baseUrlCf}/api/v1/conversations/${convJson.data.conversationId}/messages`,
+          {
+            method: 'POST',
+            headers: {
+              ...guestHeaders,
+              'Idempotency-Key': 'req_fix32_cf_flux_01',
+            },
+            body: JSON.stringify({
+              prompt: 'Generate an editorial watercolor painting of a Kyoto bridge in autumn',
+              preferredAgent: 'image',
+            }),
+          },
+        );
+        assert.equal(msgRes.status, 201);
+        const msgJson = (await msgRes.json()) as {
+          data: {
+            assistantMessage: {
+              agentUsed: string;
+              artifacts?: Array<{
+                artifactId: string;
+                artifactType: string;
+                mimeType: string;
+                sizeBytes: number;
+              }>;
+            };
+          };
+        };
+
+        assert.ok(
+          cfUrlCalled.includes('/accounts/0123456789abcdef0123456789abcdef/ai/run/@cf/black-forest-labs/flux-1-schnell'),
+          `Expected Cloudflare FLUX.1 Schnell endpoint, got: ${cfUrlCalled}`,
+        );
+        assert.equal(msgJson.data.assistantMessage.agentUsed, 'image');
+        const imgArtifact = msgJson.data.assistantMessage.artifacts?.[0];
+        assert.equal(imgArtifact?.artifactType, 'generated_image');
+        assert.equal(imgArtifact?.mimeType, 'image/png');
+        assert.equal(imgArtifact?.sizeBytes, syntheticPng.byteLength);
+
+        // Raw artifact streams back exact PNG bytes
+        const rawRes = await fetch(
+          `${baseUrlCf}/api/v1/artifacts/${imgArtifact!.artifactId}/raw?inline=1`,
+          { headers: { 'x-kartik-guest-id': 'gst_fix32_cf_image_e2e' } },
+        );
+        assert.equal(rawRes.status, 200);
+        const rawBuf = Buffer.from(await rawRes.arrayBuffer());
+        assert.deepEqual(rawBuf, syntheticPng);
+
+        // Exactly 10 credits charged for the successful generation
+        const balAfter = (await (
+          await fetch(`${baseUrlCf}/api/v1/billing/balance`, { headers: guestHeaders })
+        ).json()) as { data: { availableCredits: number; reservedCredits: number } };
+        assert.equal(balAfter.data.availableCredits, balBefore.data.availableCredits - 10);
+        assert.equal(balAfter.data.reservedCredits, 0);
+      } finally {
+        await new Promise<void>((resolve) => serverCf.close(() => resolve()));
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (prevMockAi === undefined) delete process.env.MOCK_AI;
+      else process.env.MOCK_AI = prevMockAi;
+      if (prevAiMode === undefined) delete process.env.AI_PROVIDER_MODE;
+      else process.env.AI_PROVIDER_MODE = prevAiMode;
+      if (prevImageProvider === undefined) delete process.env.IMAGE_PROVIDER;
+      else process.env.IMAGE_PROVIDER = prevImageProvider;
+      if (prevCfToken === undefined) delete process.env.CLOUDFLARE_API_TOKEN;
+      else process.env.CLOUDFLARE_API_TOKEN = prevCfToken;
+      if (prevCfAccount === undefined) delete process.env.CLOUDFLARE_ACCOUNT_ID;
+      else process.env.CLOUDFLARE_ACCOUNT_ID = prevCfAccount;
+      if (prevCfModel === undefined) delete process.env.CLOUDFLARE_IMAGE_MODEL;
+      else process.env.CLOUDFLARE_IMAGE_MODEL = prevCfModel;
+    }
+  });
 });
+
 
 
 

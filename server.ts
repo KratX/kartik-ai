@@ -438,7 +438,15 @@ export function createKartikExpressApp(
                 ? err.message
                 : 'Stream execution failed';
           const code = err instanceof AppError ? err.code : 'INTERNAL_ERROR';
-          writeSse('error', { code, message });
+          const details = err instanceof AppError ? err.details : undefined;
+          const retryAfterSeconds =
+            err instanceof AppError ? err.retryAfterSeconds : undefined;
+          writeSse('error', {
+            code,
+            message,
+            ...(details ? { details } : {}),
+            ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+          });
           res.end();
         }
       }

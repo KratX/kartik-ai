@@ -12,6 +12,7 @@
  */
 
 import crypto from 'node:crypto';
+import { AppError } from '@kartik/shared/errors';
 import type {
   ChatResponseDepth,
   ConversationHistoryTurn,
@@ -84,15 +85,23 @@ import {
   parseImageDimensions,
 } from '../agents/vision/index.js';
 import {
+  GEMINI_IMAGE_DEFAULT_MODEL,
+  GEMINI_IMAGE_PRO_MODEL,
   buildEnhancedImagePrompt,
   buildOfflineStudioPreviewPng,
+  classifyGeminiImageError,
   classifyImageStyle,
   detectImageAspectRatio,
   formatImageCaption,
+  selectGeminiImageModel,
   type ImageAspectRatio,
   type ImageStyleArchetype,
 } from '../agents/image/index.js';
 import { computeDeterministicEmbedding } from './mock-providers.js';
+import {
+  CloudflareWorkersAiImageProvider,
+  hasCloudflareImageCredentials,
+} from './cloudflare-image-provider.js';
 import {
   stripMarkdownJsonFences,
   validatePdfDocumentSpec,
@@ -173,16 +182,33 @@ interface GeminiClientAdapter {
     readonly taskType?: EmbeddingTaskType;
     readonly timeoutMs?: number;
   }): Promise<GeminiEmbedContentResult>;
-  predictImagen?(params: {
+}
+
+class GeminiHttpError extends Error {
+  public readonly httpStatus: number;
+  public readonly model: string;
+  public readonly rawErrorBody: string;
+  public readonly retryAfterHeader: string | null;
+
+  constructor(input: {
+    readonly message: string;
+    readonly httpStatus: number;
     readonly model: string;
-    readonly prompt: string;
-    readonly timeoutMs?: number;
-  }): Promise<{ readonly mimeType: 'image/png' | 'image/jpeg'; readonly data: Uint8Array } | null>;
+    readonly rawErrorBody: string;
+    readonly retryAfterHeader?: string | null;
+  }) {
+    super(input.message);
+    this.name = 'GeminiHttpError';
+    this.httpStatus = input.httpStatus;
+    this.model = input.model;
+    this.rawErrorBody = input.rawErrorBody;
+    this.retryAfterHeader = input.retryAfterHeader ?? null;
+  }
 }
 
 const DEFAULT_TEXT_MODEL = 'gemini-3.1-flash-lite';
 const TEXT_MODEL_FALLBACKS: readonly string[] = [];
-const DEFAULT_IMAGE_MODELS = ['gemini-3.1-flash-lite-image'] as const;
+const DEFAULT_IMAGE_MODELS = [GEMINI_IMAGE_DEFAULT_MODEL] as const;
 
 const unavailableModelsUntilMs = new Map<string, number>();
 const MODEL_404_COOLDOWN_MS = 5 * 60_000;
@@ -338,7 +364,9 @@ async function createServerGeminiClient(
 
       let lastErr: Error | null = null;
       const inTest = isRunningInTestRunner();
-      for (const targetModel of candidates) {
+      for (let idx = 0; idx < candidates.length; idx += 1) {
+        const targetModel = candidates[idx]!;
+        const hasMoreCandidates = idx + 1 < candidates.length;
         const skipUntil = unavailableModelsUntilMs.get(targetModel) ?? 0;
         if (!inTest && Date.now() < skipUntil) {
           continue;
@@ -359,27 +387,37 @@ async function createServerGeminiClient(
           signal: combinedSignal,
         });
         if (!res.ok) {
-          let errSnippet = '';
+          let rawErrBody = '';
           try {
-            errSnippet = extractConciseGeminiError(await res.text());
+            rawErrBody = await res.text();
           } catch {
             // ignore
           }
-          lastErr = new Error(`Gemini HTTP ${res.status} (${targetModel}): ${errSnippet}`);
+          const errSnippet = extractConciseGeminiError(rawErrBody);
+          const retryAfterHeader = res.headers?.get?.('retry-after') ?? null;
+          lastErr = new GeminiHttpError({
+            message: `Gemini HTTP ${res.status} (${targetModel}): ${errSnippet}`,
+            httpStatus: res.status,
+            model: targetModel,
+            rawErrorBody: rawErrBody,
+            retryAfterHeader,
+          });
           if (res.status === 404 && !inTest) {
             unavailableModelsUntilMs.set(targetModel, Date.now() + MODEL_404_COOLDOWN_MS);
           }
           if (!inTest) {
             const detail = errSnippet ? ` (${errSnippet})` : '';
-            console.warn(`[kartik-gemini] ${targetModel} HTTP ${res.status}${detail} — trying next candidate`);
+            const suffix = hasMoreCandidates ? ' — trying next candidate' : '';
+            console.warn(`[kartik-gemini] ${targetModel} HTTP ${res.status}${detail}${suffix}`);
           }
           // Retry next model candidate on 400/403/404 (tier/feature mismatch) or 429/5xx
           if (
-            res.status === 400 ||
-            res.status === 403 ||
-            res.status === 404 ||
-            res.status === 429 ||
-            res.status >= 500
+            hasMoreCandidates &&
+            (res.status === 400 ||
+              res.status === 403 ||
+              res.status === 404 ||
+              res.status === 429 ||
+              res.status >= 500)
           ) {
             continue;
           }
@@ -611,45 +649,6 @@ async function createServerGeminiClient(
       }
 
       throw lastErr ?? new Error('Gemini embedContent failed');
-    },
-
-    async predictImagen(params): Promise<{
-      readonly mimeType: 'image/png' | 'image/jpeg';
-      readonly data: Uint8Array;
-    } | null> {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.model)}:predict`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': key,
-          'User-Agent': 'aistudio-build',
-        },
-        body: JSON.stringify({
-          instances: [{ prompt: params.prompt }],
-          parameters: { sampleCount: 1 },
-        }),
-        signal: AbortSignal.timeout(params.timeoutMs ?? defaultTimeout),
-      });
-      if (!res.ok) {
-        return null;
-      }
-      const data = (await res.json()) as {
-        predictions?: Array<{
-          bytesBase64Encoded?: string;
-          mimeType?: string;
-        }>;
-      };
-      const b64 = data.predictions?.[0]?.bytesBase64Encoded;
-      if (!b64) {
-        return null;
-      }
-      const mime =
-        data.predictions?.[0]?.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png';
-      return {
-        mimeType: mime,
-        data: new Uint8Array(Buffer.from(b64, 'base64')),
-      };
     },
   };
 }
@@ -1702,9 +1701,19 @@ Every slide MUST also include: kicker (2-4 words), title, subtitle, and speakerN
 export class LiveGeminiImageGenerationProvider implements ImageGenerationProvider {
   public readonly providerName = 'gemini-live-image';
   private readonly apiKey?: string;
+  private readonly maxTransientRetries: number;
+  private readonly sleepFn: (ms: number) => Promise<void>;
 
-  constructor(options?: { readonly apiKey?: string }) {
+  constructor(options?: {
+    readonly apiKey?: string;
+    readonly maxTransientRetries?: number;
+    readonly sleepFn?: (ms: number) => Promise<void>;
+  }) {
     this.apiKey = options?.apiKey;
+    this.maxTransientRetries = Math.max(0, Math.min(3, options?.maxTransientRetries ?? 2));
+    this.sleepFn =
+      options?.sleepFn ??
+      ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
   public async generateImage(input: {
@@ -1751,10 +1760,15 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
 
     const ai = await createServerGeminiClient(this.apiKey);
 
-    // Direct multimodal image generation / editing via Gemini lite image model
+    // Direct multimodal image generation / editing via active Gemini image models
     if (ai) {
+      const primaryModel = selectGeminiImageModel({
+        prompt: rawPrompt,
+        aspectRatio,
+        configuredModel: process.env.GEMINI_IMAGE_MODEL,
+      });
       const imageModels = uniqueNonEmpty([
-        process.env.GEMINI_IMAGE_MODEL,
+        primaryModel,
         ...DEFAULT_IMAGE_MODELS,
       ]);
       const userParts: Array<
@@ -1771,85 +1785,170 @@ export class LiveGeminiImageGenerationProvider implements ImageGenerationProvide
       }
       userParts.push({ text: enhancedPrompt });
 
+      let lastAppError: AppError | null = null;
+
       for (const imageModel of imageModels) {
-        try {
-          const imgRes = await ai.generateContent({
-            model: imageModel,
-            fallbackModels: [],
-            contents: [
-              {
-                role: 'user',
-                parts: userParts,
+        const supportsImageSize =
+          imageModel === GEMINI_IMAGE_PRO_MODEL || imageModel === 'gemini-3-pro-image';
+        const requestedSize = /\b4k\b/i.test(rawPrompt)
+          ? '4K'
+          : /\b2k\b/i.test(rawPrompt)
+            ? '2K'
+            : undefined;
+        let includeResponseModalities = true;
+
+        for (let attempt = 0; attempt <= this.maxTransientRetries; attempt += 1) {
+          try {
+            const imageConfig: Record<string, string> = { aspectRatio };
+            if (supportsImageSize && requestedSize) {
+              imageConfig.imageSize = requestedSize;
+            }
+            const imgRes = await ai.generateContent({
+              model: imageModel,
+              fallbackModels: [],
+              contents: [
+                {
+                  role: 'user',
+                  parts: userParts,
+                },
+              ],
+              config: {
+                ...(includeResponseModalities
+                  ? { responseModalities: ['IMAGE', 'TEXT'] }
+                  : {}),
+                imageConfig,
               },
-            ],
-            config: {
-              responseModalities: ['IMAGE', 'TEXT'],
-              imageConfig: {
-                aspectRatio,
-              },
-            },
-            timeoutMs: resolveProviderTimeoutMs(60_000),
-          });
-          const parts =
-            imgRes.parts ?? imgRes.candidates?.[0]?.content?.parts ?? [];
-          for (const part of parts) {
-            if (part.inlineData?.data) {
-              const rawMime = (part.inlineData.mimeType ?? 'image/png').toLowerCase();
-              const mimeType: 'image/png' | 'image/jpeg' | 'image/webp' =
-                rawMime === 'image/jpeg' || rawMime === 'image/jpg'
-                  ? 'image/jpeg'
-                  : rawMime === 'image/webp'
-                    ? 'image/webp'
-                    : 'image/png';
-              const bytes = new Uint8Array(
-                Buffer.from(part.inlineData.data, 'base64'),
-              );
-              if (bytes.byteLength > 64) {
-                return {
-                  mimeType,
-                  data: bytes,
-                  caption,
-                  enhancedPrompt,
-                  aspectRatio,
-                  style,
-                  modelUsed: imageModel,
-                  liveGenerated: true,
-                };
+              timeoutMs: resolveProviderTimeoutMs(60_000),
+            });
+            const parts =
+              imgRes.parts ?? imgRes.candidates?.[0]?.content?.parts ?? [];
+            let textResponseSnippet = '';
+            for (const part of parts) {
+              if (part.inlineData?.data) {
+                const rawMime = (part.inlineData.mimeType ?? 'image/png').toLowerCase();
+                const mimeType: 'image/png' | 'image/jpeg' | 'image/webp' =
+                  rawMime === 'image/jpeg' || rawMime === 'image/jpg'
+                    ? 'image/jpeg'
+                    : rawMime === 'image/webp'
+                      ? 'image/webp'
+                      : 'image/png';
+                const bytes = new Uint8Array(
+                  Buffer.from(part.inlineData.data, 'base64'),
+                );
+                if (bytes.byteLength > 64) {
+                  return {
+                    mimeType,
+                    data: bytes,
+                    caption,
+                    enhancedPrompt,
+                    aspectRatio,
+                    style,
+                    modelUsed: imageModel,
+                    liveGenerated: true,
+                  };
+                }
+              } else if (part.text && !part.thought && !textResponseSnippet) {
+                textResponseSnippet = part.text.trim().replace(/\s+/g, ' ').slice(0, 180);
               }
             }
+
+            // Live API returned 200 OK without image bytes (e.g. safety refusal or text-only response)
+            lastAppError = new AppError(
+              'PROVIDER_UNAVAILABLE',
+              textResponseSnippet
+                ? `Gemini image generation (${imageModel}) did not return an image: "${textResponseSnippet}". No credits were charged.`
+                : `Gemini image generation (${imageModel}) returned an empty image payload. Try rephrasing your prompt. No credits were charged.`,
+              {
+                details: {
+                  reason: ['no_image_returned'],
+                  model: [imageModel],
+                },
+              },
+            );
+            break;
+          } catch (err) {
+            if (err instanceof AppError) {
+              throw err;
+            }
+            const status = err instanceof GeminiHttpError ? err.httpStatus : 0;
+            const rawBody =
+              err instanceof GeminiHttpError
+                ? err.rawErrorBody
+                : err instanceof Error
+                  ? err.message
+                  : String(err);
+            const retryAfterHeader =
+              err instanceof GeminiHttpError ? err.retryAfterHeader : null;
+
+            // If a model rejects explicit responseModalities with HTTP 400, retry once without it
+            if (
+              status === 400 &&
+              includeResponseModalities &&
+              /responsemodalities|response_modalities|modality/i.test(rawBody)
+            ) {
+              includeResponseModalities = false;
+              continue;
+            }
+
+            const classification = classifyGeminiImageError({
+              status,
+              rawBody,
+              model: imageModel,
+              retryAfterHeader,
+              attempt,
+            });
+
+            if (classification.retryable && attempt < this.maxTransientRetries) {
+              await this.sleepFn(classification.retryDelayMs);
+              continue;
+            }
+
+            lastAppError = new AppError(
+              classification.appErrorCode,
+              classification.userMessage,
+              {
+                retryAfterSeconds: classification.retryAfterSeconds,
+                details: {
+                  reason: [classification.kind],
+                  model: [imageModel],
+                  ...(status > 0 ? { upstreamStatus: [String(status)] } : {}),
+                },
+                cause: err,
+              },
+            );
+
+            // Fail fast on zero-quota free-tier 429 or invalid API key without trying redundant models
+            if (classification.kind === 'paid_tier_required') {
+              // Seamless free-tier fallback: if Cloudflare Workers AI credentials are configured,
+              // generate a real FLUX image instead of failing with Gemini's limit:0 429.
+              if (!isEdit && hasCloudflareImageCredentials()) {
+                const cfProvider = new CloudflareWorkersAiImageProvider({
+                  maxTransientRetries: this.maxTransientRetries,
+                  sleepFn: this.sleepFn,
+                });
+                return cfProvider.generateImage(input);
+              }
+              throw lastAppError;
+            }
+            if (classification.kind === 'auth_forbidden') {
+              throw lastAppError;
+            }
+            break;
           }
-        } catch {
-          // Try next Gemini image model
         }
       }
 
-      // Secondary real image generation: Google Imagen 3 :predict endpoint (text-to-image)
-      if (!isEdit && ai.predictImagen) {
-        try {
-          const imagen = await ai.predictImagen({
-            model: 'imagen-3.0-generate-002',
-            prompt: enhancedPrompt,
-            timeoutMs: resolveProviderTimeoutMs(60_000),
-          });
-          if (imagen && imagen.data.byteLength > 64) {
-            return {
-              mimeType: imagen.mimeType,
-              data: imagen.data,
-              caption,
-              enhancedPrompt,
-              aspectRatio,
-              style,
-              modelUsed: 'imagen-3.0-generate-002',
-              liveGenerated: true,
-            };
-          }
-        } catch {
-          // Fall through to offline test PNG fallback
-        }
+      if (lastAppError) {
+        throw lastAppError;
       }
+
+      throw new AppError(
+        'PROVIDER_UNAVAILABLE',
+        'Gemini image generation failed to return image bytes. Please retry shortly. No credits were charged.',
+      );
     }
 
-    // Offline/demo aspect-ratio-matched raster PNG fallback when GEMINI_API_KEY is not configured
+    // Offline/demo aspect-ratio-matched raster PNG fallback when GEMINI_API_KEY is unset or IMAGE_PROVIDER=mock
     const pngBytes = buildOfflineStudioPreviewPng({
       style,
       aspectRatio,

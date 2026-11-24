@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { describe, it } from 'node:test';
+import { AppError } from '@kartik/shared/errors';
 import { InMemoryObjectStorage } from '@kartik/shared/storage';
 import {
   AgentGraphExecutor,
+  CLOUDFLARE_IMAGE_DEFAULT_MODEL,
+  CloudflareWorkersAiImageProvider,
   DailyLiveBudgetGuard,
   FileIngestionAndArtifactService,
+  GEMINI_IMAGE_DEFAULT_MODEL,
+  GEMINI_IMAGE_PRO_MODEL,
   IMAGE_ASPECT_RATIOS,
   IMAGE_STYLE_ARCHETYPES,
   InMemoryAgentRepository,
@@ -17,16 +22,23 @@ import {
   MockEmbeddingProvider,
   MockSearchProvider,
   MockVisionProvider,
+  buildCloudflareImageRequestBody,
   buildEnhancedImagePrompt,
   buildImageFollowUps,
   buildImageSpecManifestPayload,
+  classifyGeminiImageError,
   classifyImageStyle,
+  decodeCloudflareImageResponse,
   detectImageAspectRatio,
+  detectImageMimeFromMagicBytes,
   formatImageCaption,
   getImageStyleDisplayLabel,
+  hasCloudflareImageCredentials,
   loadAgentConfig,
+  parseGeminiRetryDelayMs,
   parseImageDimensions,
   routePromptToSpecialist,
+  selectGeminiImageModel,
   type ImageGenerationProvider,
   type ImageStyleArchetype,
   type UploadedFileRecord,
@@ -385,3 +397,508 @@ describe('Fix #20 — Image Gen Art-Direction, Aspect Ratio & Studio Engine', ()
     assert.ok(out.enhancedPrompt && out.enhancedPrompt.includes('Orbital Labs'));
   });
 });
+
+describe('Fix #31 — Image Gen HTTP 429 RESOURCE_EXHAUSTED Classification, Backoff & Fail-Fast Behavior', () => {
+  it('classifies free-tier limit:0 429 separately from transient burst 429 and parses Retry-After / retryDelay', () => {
+    const freeTierBody = JSON.stringify({
+      error: {
+        code: 429,
+        status: 'RESOURCE_EXHAUSTED',
+        message:
+          'You exceeded your current quota, please check your plan and billing details. Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-flash-lite-image',
+      },
+    });
+    const paidTierErr = classifyGeminiImageError({
+      status: 429,
+      rawBody: freeTierBody,
+      model: GEMINI_IMAGE_DEFAULT_MODEL,
+    });
+    assert.equal(paidTierErr.kind, 'paid_tier_required');
+    assert.equal(paidTierErr.retryable, false);
+    assert.equal(paidTierErr.appErrorCode, 'RATE_LIMITED');
+    assert.ok(paidTierErr.userMessage.includes('free-tier quota of 0'));
+    assert.ok(paidTierErr.userMessage.includes('IMAGE_PROVIDER=mock'));
+    assert.ok(paidTierErr.userMessage.includes('No credits were charged'));
+
+    const transientBody = JSON.stringify({
+      error: {
+        code: 429,
+        status: 'RESOURCE_EXHAUSTED',
+        message: 'Too many requests per minute. Please retry in 2.5s.',
+        details: [{ retryDelay: '2s' }],
+      },
+    });
+    const transientErr = classifyGeminiImageError({
+      status: 429,
+      rawBody: transientBody,
+      model: GEMINI_IMAGE_DEFAULT_MODEL,
+    });
+    assert.equal(transientErr.kind, 'transient_rate_limit');
+    assert.equal(transientErr.retryable, true);
+    assert.equal(transientErr.retryDelayMs, 2000);
+    assert.equal(transientErr.appErrorCode, 'RATE_LIMITED');
+
+    assert.equal(parseGeminiRetryDelayMs('', '3'), 3000);
+    assert.equal(parseGeminiRetryDelayMs('Please retry in 500ms'), 500);
+    assert.equal(parseGeminiRetryDelayMs('"retryDelay": "12s"'), 4000);
+  });
+
+  it('selects active Gemini image models and ignores deprecated imagen-* / gemini-2.0-* overrides', () => {
+    assert.equal(
+      selectGeminiImageModel({ prompt: 'A minimalist glass pavilion at dusk' }),
+      GEMINI_IMAGE_DEFAULT_MODEL,
+    );
+    assert.equal(
+      selectGeminiImageModel({ prompt: 'Render a 4K cinematic mountain temple' }),
+      GEMINI_IMAGE_PRO_MODEL,
+    );
+    assert.equal(
+      selectGeminiImageModel({
+        prompt: 'A minimalist icon',
+        configuredModel: 'imagen-3.0-generate-002',
+      }),
+      GEMINI_IMAGE_DEFAULT_MODEL,
+    );
+    assert.equal(
+      selectGeminiImageModel({
+        prompt: 'A minimalist icon',
+        configuredModel: 'gemini-2.0-flash-exp-image-generation',
+      }),
+      GEMINI_IMAGE_DEFAULT_MODEL,
+    );
+    assert.equal(
+      selectGeminiImageModel({
+        prompt: 'A minimalist icon',
+        configuredModel: GEMINI_IMAGE_PRO_MODEL,
+      }),
+      GEMINI_IMAGE_PRO_MODEL,
+    );
+  });
+
+  it('fails fast with AppError(RATE_LIMITED) on free-tier limit:0 429 without calling deprecated Imagen or returning a fake preview PNG', async () => {
+    const originalFetch = globalThis.fetch;
+    const prevCfToken = process.env.CLOUDFLARE_API_TOKEN;
+    const prevCfAccount = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const requestedUrls: string[] = [];
+    const sleepCalls: number[] = [];
+
+    try {
+      delete process.env.CLOUDFLARE_API_TOKEN;
+      delete process.env.CLOUDFLARE_ACCOUNT_ID;
+      globalThis.fetch = (async (inputUrl) => {
+        requestedUrls.push(String(inputUrl));
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 429,
+              status: 'RESOURCE_EXHAUSTED',
+              message:
+                'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-flash-lite-image',
+            },
+          }),
+          { status: 429, headers: { 'Content-Type': 'application/json' } },
+        );
+      }) as typeof fetch;
+
+      const provider = new LiveGeminiImageGenerationProvider({
+        apiKey: 'AIzaSyTestFreeTierKey9876543210',
+        maxTransientRetries: 2,
+        sleepFn: async (ms) => {
+          sleepCalls.push(ms);
+        },
+      });
+
+      await assert.rejects(
+        () => provider.generateImage({ prompt: 'A futuristic observatory on Mars' }),
+        (err: unknown) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.code, 'RATE_LIMITED');
+          assert.equal(err.httpStatus, 429);
+          assert.deepEqual(err.details?.reason, ['paid_tier_required']);
+          assert.ok(err.message.includes('free-tier quota of 0'));
+          assert.ok(err.message.includes('No credits were charged'));
+          return true;
+        },
+      );
+
+      // Must fail fast on attempt 1: zero wasted backoff sleeps, zero deprecated imagen-3 calls
+      assert.equal(requestedUrls.length, 1);
+      assert.equal(sleepCalls.length, 0);
+      assert.ok(requestedUrls[0]?.includes('gemini-3.1-flash-lite-image:generateContent'));
+      assert.ok(!requestedUrls.some((u) => u.includes('imagen-')));
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (prevCfToken === undefined) delete process.env.CLOUDFLARE_API_TOKEN;
+      else process.env.CLOUDFLARE_API_TOKEN = prevCfToken;
+      if (prevCfAccount === undefined) delete process.env.CLOUDFLARE_ACCOUNT_ID;
+      else process.env.CLOUDFLARE_ACCOUNT_ID = prevCfAccount;
+    }
+  });
+
+  it('retries transient HTTP 429 with bounded backoff and succeeds once quota window clears', async () => {
+    const originalFetch = globalThis.fetch;
+    const sleepCalls: number[] = [];
+    let attemptCount = 0;
+    const realPngBytes = buildSyntheticPng(1024, 1024);
+    const paddedPng = Buffer.concat([Buffer.from(realPngBytes), Buffer.alloc(128, 7)]);
+
+    try {
+      globalThis.fetch = (async () => {
+        attemptCount += 1;
+        if (attemptCount === 1) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 429,
+                status: 'RESOURCE_EXHAUSTED',
+                message: 'Rate limit exceeded. Please retry in 1s.',
+              },
+            }),
+            {
+              status: 429,
+              headers: { 'Content-Type': 'application/json', 'Retry-After': '1' },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    { text: 'Generated image' },
+                    {
+                      inlineData: {
+                        mimeType: 'image/png',
+                        data: paddedPng.toString('base64'),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }) as typeof fetch;
+
+      const provider = new LiveGeminiImageGenerationProvider({
+        apiKey: 'AIzaSyTestPaidTierKey9876543210',
+        maxTransientRetries: 2,
+        sleepFn: async (ms) => {
+          sleepCalls.push(ms);
+        },
+      });
+
+      const out = await provider.generateImage({ prompt: 'A sunlit botanical glasshouse' });
+      assert.equal(attemptCount, 2);
+      assert.deepEqual(sleepCalls, [1000]);
+      assert.equal(out.liveGenerated, true);
+      assert.equal(out.modelUsed, GEMINI_IMAGE_DEFAULT_MODEL);
+      assert.deepEqual(Buffer.from(out.data), paddedPng);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('automatically retries without responseModalities if upstream returns HTTP 400 modality error', async () => {
+    const originalFetch = globalThis.fetch;
+    const seenBodies: Array<Record<string, unknown>> = [];
+    const paddedPng = Buffer.concat([Buffer.from(buildSyntheticPng(512, 512)), Buffer.alloc(128, 9)]);
+
+    try {
+      globalThis.fetch = (async (_url, init) => {
+        const parsed = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        seenBodies.push(parsed);
+        if (seenBodies.length === 1) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 400,
+                status: 'INVALID_ARGUMENT',
+                message: 'responseModalities is not supported for this image model',
+              },
+            }),
+            { status: 400, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      inlineData: {
+                        mimeType: 'image/png',
+                        data: paddedPng.toString('base64'),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }) as typeof fetch;
+
+      const provider = new LiveGeminiImageGenerationProvider({
+        apiKey: 'AIzaSyTestModalityRetry9876543210',
+        sleepFn: async () => undefined,
+      });
+
+      const out = await provider.generateImage({ prompt: 'Minimalist ceramic teapot' });
+      assert.equal(seenBodies.length, 2);
+      const firstGenCfg = seenBodies[0]?.generationConfig as Record<string, unknown> | undefined;
+      const secondGenCfg = seenBodies[1]?.generationConfig as Record<string, unknown> | undefined;
+      assert.ok(Array.isArray(firstGenCfg?.responseModalities));
+      assert.equal(secondGenCfg?.responseModalities, undefined);
+      assert.deepEqual(secondGenCfg?.imageConfig, { aspectRatio: '1:1' });
+      assert.equal(out.liveGenerated, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('throws PROVIDER_UNAVAILABLE instead of returning a fake preview PNG when live Gemini returns text-only without image bytes', async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: 'I cannot generate that image.' }],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )) as typeof fetch;
+
+      const provider = new LiveGeminiImageGenerationProvider({
+        apiKey: 'AIzaSyTestEmptyImageKey9876543210',
+        sleepFn: async () => undefined,
+      });
+
+      await assert.rejects(
+        () => provider.generateImage({ prompt: 'Test empty response' }),
+        (err: unknown) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.code, 'PROVIDER_UNAVAILABLE');
+          assert.ok(err.message.includes('I cannot generate that image.'));
+          assert.ok(err.message.includes('No credits were charged'));
+          return true;
+        },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe('Fix #32 — Cloudflare Workers AI Image Generation (FLUX.1 Schnell) & Free-Tier Fallback', () => {
+  const TEST_ACCOUNT_ID = '0123456789abcdef0123456789abcdef';
+  const TEST_CF_TOKEN = 'cfut_unit_test_workers_ai_token_1234567890';
+  const SYNTHETIC_JPEG = Buffer.concat([
+    Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]),
+    Buffer.alloc(128, 0x33),
+  ]);
+
+  it('builds valid Cloudflare request bodies and decodes JSON base64 & raw binary image responses', () => {
+    const fluxBody = buildCloudflareImageRequestBody({
+      model: CLOUDFLARE_IMAGE_DEFAULT_MODEL,
+      prompt: 'A'.repeat(2500),
+      aspectRatio: '16:9',
+      steps: 4,
+    });
+    assert.equal((fluxBody.prompt as string).length, 2048);
+    assert.equal(fluxBody.steps, 4);
+
+    const sdxlBody = buildCloudflareImageRequestBody({
+      model: '@cf/stabilityai/stable-diffusion-xl-base-1.0',
+      prompt: 'Minimalist pavilion',
+      aspectRatio: '16:9',
+    });
+    assert.equal(sdxlBody.width, 1024);
+    assert.equal(sdxlBody.height, 576);
+    assert.equal(sdxlBody.num_steps, 16);
+
+    assert.equal(detectImageMimeFromMagicBytes(new Uint8Array(SYNTHETIC_JPEG)), 'image/jpeg');
+    assert.equal(detectImageMimeFromMagicBytes(buildSyntheticPng(64, 64)), 'image/png');
+
+    const jsonDecoded = decodeCloudflareImageResponse({
+      contentType: 'application/json',
+      bodyBytes: new Uint8Array(
+        Buffer.from(
+          JSON.stringify({
+            success: true,
+            result: { image: SYNTHETIC_JPEG.toString('base64') },
+          }),
+          'utf8',
+        ),
+      ),
+    });
+    assert.ok(jsonDecoded);
+    assert.equal(jsonDecoded.mimeType, 'image/jpeg');
+    assert.deepEqual(Buffer.from(jsonDecoded.data), SYNTHETIC_JPEG);
+
+    const pngBytes = Buffer.concat([Buffer.from(buildSyntheticPng(512, 512)), Buffer.alloc(96, 4)]);
+    const binDecoded = decodeCloudflareImageResponse({
+      contentType: 'image/png',
+      bodyBytes: new Uint8Array(pngBytes),
+    });
+    assert.ok(binDecoded);
+    assert.equal(binDecoded.mimeType, 'image/png');
+    assert.deepEqual(Buffer.from(binDecoded.data), pngBytes);
+  });
+
+  it('generates live FLUX.1 Schnell images via Cloudflare Workers AI REST API and validates credentials helper', async () => {
+    assert.equal(
+      hasCloudflareImageCredentials({
+        CLOUDFLARE_API_TOKEN: TEST_CF_TOKEN,
+        CLOUDFLARE_ACCOUNT_ID: TEST_ACCOUNT_ID,
+      }),
+      true,
+    );
+    assert.equal(
+      hasCloudflareImageCredentials({
+        CLOUDFLARE_API_TOKEN: TEST_CF_TOKEN,
+        CLOUDFLARE_ACCOUNT_ID: '',
+      }),
+      false,
+    );
+
+    const originalFetch = globalThis.fetch;
+    let seenUrl = '';
+    let seenAuth = '';
+    try {
+      globalThis.fetch = (async (inputUrl, init) => {
+        seenUrl = String(inputUrl);
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        seenAuth = headers.Authorization ?? '';
+        return new Response(
+          JSON.stringify({
+            success: true,
+            result: { image: SYNTHETIC_JPEG.toString('base64') },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }) as typeof fetch;
+
+      const provider = new CloudflareWorkersAiImageProvider({
+        apiToken: TEST_CF_TOKEN,
+        accountId: TEST_ACCOUNT_ID,
+        sleepFn: async () => undefined,
+      });
+
+      const out = await provider.generateImage({
+        prompt: '16:9 minimalist concrete library in pine forest',
+      });
+      assert.equal(
+        seenUrl,
+        `https://api.cloudflare.com/client/v4/accounts/${TEST_ACCOUNT_ID}/ai/run/${CLOUDFLARE_IMAGE_DEFAULT_MODEL}`,
+      );
+      assert.equal(seenAuth, `Bearer ${TEST_CF_TOKEN}`);
+      assert.equal(out.liveGenerated, true);
+      assert.equal(out.mimeType, 'image/jpeg');
+      assert.equal(out.modelUsed, CLOUDFLARE_IMAGE_DEFAULT_MODEL);
+      assert.deepEqual(Buffer.from(out.data), SYNTHETIC_JPEG);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('throws actionable PROVIDER_UNAVAILABLE when CLOUDFLARE_ACCOUNT_ID is missing and token cannot list accounts', async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ success: true, result: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })) as typeof fetch;
+
+      const provider = new CloudflareWorkersAiImageProvider({
+        apiToken: 'cfut_scoped_workers_ai_only_token_999999',
+        accountId: '',
+        sleepFn: async () => undefined,
+      });
+
+      await assert.rejects(
+        () => provider.generateImage({ prompt: 'A glass prism' }),
+        (err: unknown) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.code, 'PROVIDER_UNAVAILABLE');
+          assert.deepEqual(err.details?.reason, ['missing_cloudflare_account_id']);
+          assert.ok(err.message.includes('CLOUDFLARE_ACCOUNT_ID'));
+          assert.ok(err.message.includes('No credits were charged'));
+          return true;
+        },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('automatically falls back to Cloudflare Workers AI FLUX when Gemini returns free-tier limit:0 429', async () => {
+    const originalFetch = globalThis.fetch;
+    const prevCfToken = process.env.CLOUDFLARE_API_TOKEN;
+    const prevCfAccount = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const requestedUrls: string[] = [];
+
+    try {
+      process.env.CLOUDFLARE_API_TOKEN = TEST_CF_TOKEN;
+      process.env.CLOUDFLARE_ACCOUNT_ID = TEST_ACCOUNT_ID;
+
+      globalThis.fetch = (async (inputUrl) => {
+        const urlStr = String(inputUrl);
+        requestedUrls.push(urlStr);
+        if (urlStr.startsWith('https://generativelanguage.googleapis.com/')) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 429,
+                status: 'RESOURCE_EXHAUSTED',
+                message:
+                  'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-flash-lite-image',
+              },
+            }),
+            { status: 429, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            success: true,
+            result: { image: SYNTHETIC_JPEG.toString('base64') },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }) as typeof fetch;
+
+      const geminiProvider = new LiveGeminiImageGenerationProvider({
+        apiKey: 'AIzaSyTestFreeTierKeyWithCloudflareFallback99',
+        sleepFn: async () => undefined,
+      });
+
+      const out = await geminiProvider.generateImage({
+        prompt: 'Futuristic botanical conservatory at sunrise',
+      });
+      assert.equal(requestedUrls.length, 2);
+      assert.ok(requestedUrls[0]?.includes('generativelanguage.googleapis.com'));
+      assert.ok(requestedUrls[1]?.includes(`api.cloudflare.com/client/v4/accounts/${TEST_ACCOUNT_ID}/ai/run/`));
+      assert.equal(out.liveGenerated, true);
+      assert.equal(out.modelUsed, CLOUDFLARE_IMAGE_DEFAULT_MODEL);
+      assert.deepEqual(Buffer.from(out.data), SYNTHETIC_JPEG);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (prevCfToken === undefined) delete process.env.CLOUDFLARE_API_TOKEN;
+      else process.env.CLOUDFLARE_API_TOKEN = prevCfToken;
+      if (prevCfAccount === undefined) delete process.env.CLOUDFLARE_ACCOUNT_ID;
+      else process.env.CLOUDFLARE_ACCOUNT_ID = prevCfAccount;
+    }
+  });
+});
+
+

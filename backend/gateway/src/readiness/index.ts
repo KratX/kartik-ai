@@ -181,8 +181,12 @@ export function verifyPortfolioFreeTierReadiness(
   }
 
   const imageProviderRaw = (env.IMAGE_PROVIDER ?? 'mock').trim().toLowerCase();
-  if (imageProviderRaw !== 'mock' && imageProviderRaw !== 'live') {
-    violations.push('IMAGE_PROVIDER must be "mock" or "live"');
+  if (
+    imageProviderRaw !== 'mock' &&
+    imageProviderRaw !== 'live' &&
+    imageProviderRaw !== 'cloudflare'
+  ) {
+    violations.push('IMAGE_PROVIDER must be "mock", "live", or "cloudflare"');
   }
 
   const billingModeRaw = (env.BILLING_MODE ?? 'mock').trim().toLowerCase();

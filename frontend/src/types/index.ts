@@ -288,6 +288,7 @@ export type ApiEnvelope<T> =
       readonly error: {
         readonly code: string;
         readonly message: string;
+        readonly details?: Readonly<Record<string, readonly string[]>>;
       };
     };
 

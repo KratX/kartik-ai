@@ -30,9 +30,11 @@ import {
 import {
   AgentGraphExecutor,
   AgentSlidingWindowRateLimiter,
+  CloudflareWorkersAiImageProvider,
   createVectorStoreFromEnv,
   DailyLiveBudgetGuard,
   FileIngestionAndArtifactService,
+  hasCloudflareImageCredentials,
   LiveGeminiChatModelProvider,
   LiveGeminiCodingModelProvider,
   LiveGeminiEmbeddingProvider,
@@ -356,12 +358,19 @@ export class KartikPlatformRuntime {
       process.env.MOCK_AI === 'true' || process.env.AI_PROVIDER_MODE === 'mock';
     const hasLiveAiKey =
       !explicitMockAi && isUsableApiKey(process.env.GEMINI_API_KEY);
-    const configuredImageProvider =
+    const hasCloudflareImage = hasCloudflareImageCredentials(process.env);
+    const configuredImageProvider: 'mock' | 'live' | 'cloudflare' =
       process.env.IMAGE_PROVIDER === 'mock'
         ? 'mock'
-        : process.env.IMAGE_PROVIDER === 'live' || hasLiveAiKey
-          ? 'live'
-          : 'mock';
+        : process.env.IMAGE_PROVIDER === 'cloudflare'
+          ? 'cloudflare'
+          : process.env.IMAGE_PROVIDER === 'live'
+            ? 'live'
+            : hasCloudflareImage
+              ? 'cloudflare'
+              : hasLiveAiKey
+                ? 'live'
+                : 'mock';
     const config = loadAgentConfig({
       NODE_ENV: process.env.NODE_ENV === 'production' ? 'production' : 'development',
       DATABASE_URL:
@@ -374,6 +383,10 @@ export class KartikPlatformRuntime {
       IMAGE_PROVIDER: configuredImageProvider,
       GEMINI_API_KEY:
         process.env.GEMINI_API_KEY?.trim() || 'test-gemini-api-key-value',
+      CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN?.trim() || '',
+      CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || '',
+      CLOUDFLARE_IMAGE_MODEL:
+        process.env.CLOUDFLARE_IMAGE_MODEL?.trim() || '@cf/black-forest-labs/flux-1-schnell',
       DAILY_LIVE_CALL_BUDGET: process.env.DAILY_LIVE_CALL_BUDGET?.trim() || '500',
     });
 
@@ -402,7 +415,16 @@ export class KartikPlatformRuntime {
       codingProvider: new LiveGeminiCodingModelProvider(),
       searchProvider: this.searchProvider,
       embeddingProvider,
-      imageProvider: new LiveGeminiImageGenerationProvider(),
+      imageProvider:
+        configuredImageProvider === 'cloudflare'
+          ? new CloudflareWorkersAiImageProvider({
+              apiToken: config.cloudflareApiToken,
+              accountId: config.cloudflareAccountId,
+              model: config.cloudflareImageModel,
+            })
+          : configuredImageProvider === 'live'
+            ? new LiveGeminiImageGenerationProvider()
+            : new LiveGeminiImageGenerationProvider({ apiKey: '' }),
       visionProvider: new LiveGeminiVisionProvider(),
       pdfProvider: new LiveGeminiPdfDocumentProvider(),
       pptProvider: new LiveGeminiPptPresentationProvider(),

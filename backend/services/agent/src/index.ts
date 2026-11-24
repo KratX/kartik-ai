@@ -113,16 +113,28 @@ export {
 } from './agents/vision/index.js';
 
 export {
+  CLOUDFLARE_IMAGE_DEFAULT_MODEL,
+  CLOUDFLARE_IMAGE_DIMENSIONS,
+  GEMINI_IMAGE_DEFAULT_MODEL,
+  GEMINI_IMAGE_PRO_MODEL,
   IMAGE_ASPECT_RATIOS,
   IMAGE_STYLE_ARCHETYPES,
+  buildCloudflareImageRequestBody,
   buildEnhancedImagePrompt,
   buildImageFollowUps,
   buildImageSpecManifestPayload,
   buildOfflineStudioPreviewPng,
+  classifyGeminiImageError,
   classifyImageStyle,
+  decodeCloudflareImageResponse,
   detectImageAspectRatio,
+  detectImageMimeFromMagicBytes,
   formatImageCaption,
   getImageStyleDisplayLabel,
+  parseGeminiRetryDelayMs,
+  selectGeminiImageModel,
+  type GeminiImageErrorClassification,
+  type GeminiImageErrorKind,
   type ImageArtifactSpecPayload,
   type ImageAspectRatio,
   type ImageStyleArchetype,
@@ -269,6 +281,11 @@ export {
   LiveGeminiImageGenerationProvider,
   type SearchImageGalleryItem,
 } from './services/live-gemini-providers.js';
+
+export {
+  CloudflareWorkersAiImageProvider,
+  hasCloudflareImageCredentials,
+} from './services/cloudflare-image-provider.js';
 
 export {
   buildDeterministicFollowUps,

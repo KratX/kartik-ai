@@ -20,6 +20,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { AlertCircle, X } from 'lucide-react';
 import type {
   ApiEnvelope,
   ArtifactRecord,
@@ -298,6 +299,12 @@ export function App() {
     null,
   );
   const [isTurnLoading, setIsTurnLoading] = useState(false);
+  const [turnErrorBanner, setTurnErrorBanner] = useState<{
+    readonly code: string;
+    readonly message: string;
+    readonly reason?: string;
+    readonly agent: SpecialistAgentName;
+  } | null>(null);
   const [toasts, setToasts] = useState<readonly WorkspaceToast[]>([]);
   const toastTimersRef = useRef<Map<string, number>>(new Map());
   const activeTurnAbortRef = useRef<AbortController | null>(null);
@@ -690,6 +697,7 @@ export function App() {
   }, [refreshBillingAndAuth, refreshConversations]);
 
   const handleSelectConversation = async (conversationId: string) => {
+    setTurnErrorBanner(null);
     setStreamingMessageIds(new Set());
     setActiveConversationIdSafe(conversationId);
     await loadConversationMessages(conversationId);
@@ -698,6 +706,7 @@ export function App() {
   // New Chat / Brand Home cleanly resets straight to the calm 21st.dev Hero Empty State
   const handleCreateConversation = () => {
     messagesLoadSeqRef.current += 1;
+    setTurnErrorBanner(null);
     setStreamingMessageIds(new Set());
     setActiveConversationIdSafe(null);
     setMessages([]);
@@ -802,6 +811,7 @@ export function App() {
     activeTurnAbortRef.current = abortController;
 
     const initialAgent: SpecialistAgentName = input.preferredAgent ?? 'chat';
+    setTurnErrorBanner(null);
     setIsTurnLoading(true);
     setLiveStreamState({
       agent: initialAgent,
@@ -845,7 +855,11 @@ export function App() {
       );
 
       let completion: TurnCompletionPayload | null = null;
-      let streamError: { code: string; message: string } | null = null;
+      let streamError: {
+        code: string;
+        message: string;
+        reason?: string;
+      } | null = null;
       let receivedLiveDeltas = false;
 
       const contentType = res.headers.get('content-type') ?? '';
@@ -906,16 +920,23 @@ export function App() {
             }
           } else if (parsed.event === 'error') {
             const envelope = payload as unknown as {
-              error?: { code?: string; message?: string };
+              error?: {
+                code?: string;
+                message?: string;
+                details?: Record<string, string[]>;
+              };
               code?: string;
               message?: string;
+              details?: Record<string, string[]>;
             };
+            const details = envelope.error?.details ?? envelope.details;
             streamError = {
               code: envelope.error?.code ?? envelope.code ?? 'AGENT_STREAM_ERROR',
               message:
                 envelope.error?.message ??
                 envelope.message ??
                 'Agent execution failed.',
+              reason: details?.reason?.[0],
             };
           }
         };
@@ -936,14 +957,25 @@ export function App() {
       } else {
         const json = (await res.json()) as ApiEnvelope<TurnCompletionPayload>;
         if (!json.ok) {
-          streamError = { code: json.error.code, message: json.error.message };
+          streamError = {
+            code: json.error.code,
+            message: json.error.message,
+            reason: json.error.details?.reason?.[0],
+          };
         } else {
           completion = json.data;
         }
       }
 
       if (streamError) {
+        setTurnErrorBanner({
+          code: streamError.code,
+          message: streamError.message,
+          reason: streamError.reason,
+          agent: initialAgent,
+        });
         pushToast(`${streamError.code}: ${streamError.message}`, 'error');
+        void refreshBillingAndAuth();
         return;
       }
 
@@ -1700,7 +1732,43 @@ export function App() {
             streamingMessageIds={streamingMessageIds}
             activeCanvasArtifactId={activeArtifact?.artifactId ?? null}
             isCanvasOpen={isArtifactPanelOpen && Boolean(activeArtifact)}
-            heroComposer={<ChatInput variant="hero" {...sharedComposerProps} />}
+            heroComposer={
+              <div className="space-y-3">
+                {turnErrorBanner && (
+                  <div
+                    role="alert"
+                    data-turn-error-banner="true"
+                    data-error-code={turnErrorBanner.code}
+                    className="mx-auto max-w-3xl rounded-xl border border-amber-500/30 bg-[#141210] px-4 py-3 text-left shadow-lg"
+                  >
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex items-center gap-2 text-xs font-semibold text-amber-200">
+                          <span>
+                            {turnErrorBanner.reason === 'paid_tier_required'
+                              ? 'Billing-Enabled Gemini Key Required for Image Gen'
+                              : `${turnErrorBanner.code}`}
+                          </span>
+                        </div>
+                        <p className="text-xs leading-relaxed text-zinc-300">
+                          {turnErrorBanner.message}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setTurnErrorBanner(null)}
+                        aria-label="Dismiss error banner"
+                        className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer shrink-0"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <ChatInput variant="hero" {...sharedComposerProps} />
+              </div>
+            }
             onStreamComplete={handleStreamComplete}
             onQuickPromptSelect={(prompt, agent) =>
               void handleQuickPromptSelect(prompt, agent)
@@ -1722,6 +1790,38 @@ export function App() {
             onCloseLightboxImage={() => setLightboxImage(null)}
             onNotify={(message, tone) => pushToast(message, tone ?? 'success')}
           >
+            {turnErrorBanner && (
+              <div
+                role="alert"
+                data-turn-error-banner="true"
+                data-error-code={turnErrorBanner.code}
+                className="mx-auto mb-3 max-w-3xl rounded-xl border border-amber-500/30 bg-[#141210] px-4 py-3 text-left shadow-lg"
+              >
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-amber-200">
+                      <span>
+                        {turnErrorBanner.reason === 'paid_tier_required'
+                          ? 'Billing-Enabled Gemini Key Required for Image Gen'
+                          : `${turnErrorBanner.code}`}
+                      </span>
+                    </div>
+                    <p className="text-xs leading-relaxed text-zinc-300">
+                      {turnErrorBanner.message}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTurnErrorBanner(null)}
+                    aria-label="Dismiss error banner"
+                    className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
             <ChatInput variant="dock" {...sharedComposerProps} />
           </ChatArea>
         </div>

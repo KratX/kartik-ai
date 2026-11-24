@@ -525,3 +525,345 @@ export function buildOfflineStudioPreviewPng(input: {
   out.set(iendChunk, pos);
   return out;
 }
+
+export const GEMINI_IMAGE_DEFAULT_MODEL = 'gemini-3.1-flash-lite-image' as const;
+export const GEMINI_IMAGE_PRO_MODEL = 'gemini-nano-banana-2.1' as const;
+
+export type GeminiImageErrorKind =
+  | 'paid_tier_required'
+  | 'transient_rate_limit'
+  | 'auth_forbidden'
+  | 'model_not_found'
+  | 'bad_request'
+  | 'upstream_unavailable';
+
+export interface GeminiImageErrorClassification {
+  readonly kind: GeminiImageErrorKind;
+  readonly retryable: boolean;
+  readonly retryDelayMs: number;
+  readonly retryAfterSeconds?: number;
+  readonly appErrorCode: 'RATE_LIMITED' | 'FORBIDDEN' | 'PROVIDER_UNAVAILABLE';
+  readonly userMessage: string;
+}
+
+function isDeprecatedOrLegacyImageModel(model: string): boolean {
+  const lower = model.trim().toLowerCase();
+  return (
+    lower.startsWith('imagen-') ||
+    lower.startsWith('gemini-1.5') ||
+    lower.startsWith('gemini-2.0') ||
+    lower.includes('exp-image-generation')
+  );
+}
+
+/**
+ * Selects an active Gemini image generation model (`gemini-3.1-flash-lite-image` by default,
+ * upgrading to `gemini-nano-banana-2.1` when 2K/4K resolution is explicitly requested),
+ * while safely ignoring deprecated `imagen-*` / `gemini-2.0-*` env overrides.
+ */
+export function selectGeminiImageModel(input: {
+  readonly prompt: string;
+  readonly aspectRatio?: string;
+  readonly configuredModel?: string;
+}): string {
+  const configured = (input.configuredModel ?? '').trim().replace(/^["']|["']$/g, '');
+  if (configured && !isDeprecatedOrLegacyImageModel(configured)) {
+    return configured;
+  }
+
+  const ratio = (input.aspectRatio ?? '').trim();
+  if (ratio === '1:4' || ratio === '1:8' || ratio === '4:1' || ratio === '8:1') {
+    return GEMINI_IMAGE_PRO_MODEL;
+  }
+
+  if (/\b(4k|2k|ultra\s+hd|ultra-high\s+res)\b/i.test(input.prompt)) {
+    return GEMINI_IMAGE_PRO_MODEL;
+  }
+
+  return GEMINI_IMAGE_DEFAULT_MODEL;
+}
+
+/**
+ * Extracts a bounded retry delay in milliseconds from an HTTP `Retry-After` header
+ * or Gemini JSON `retryDelay` / `"Please retry in Xs"` error body.
+ */
+export function parseGeminiRetryDelayMs(
+  rawBody: string,
+  retryAfterHeader?: string | null,
+): number | null {
+  if (retryAfterHeader) {
+    const trimmed = retryAfterHeader.trim();
+    const numericSeconds = Number(trimmed);
+    if (Number.isFinite(numericSeconds) && numericSeconds > 0) {
+      return Math.min(4_000, Math.max(250, Math.round(numericSeconds * 1000)));
+    }
+    const parsedDateMs = Date.parse(trimmed);
+    if (Number.isFinite(parsedDateMs)) {
+      const deltaMs = parsedDateMs - Date.now();
+      if (deltaMs > 0) {
+        return Math.min(4_000, Math.max(250, Math.round(deltaMs)));
+      }
+    }
+  }
+
+  const jsonRetryMatch = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/i.exec(rawBody);
+  if (jsonRetryMatch?.[1]) {
+    const sec = Number(jsonRetryMatch[1]);
+    if (Number.isFinite(sec) && sec > 0) {
+      return Math.min(4_000, Math.max(250, Math.round(sec * 1000)));
+    }
+  }
+
+  const textRetryMatch = /please\s+retry\s+in\s+(\d+(?:\.\d+)?)\s*(ms|s)\b/i.exec(rawBody);
+  if (textRetryMatch?.[1] && textRetryMatch[2]) {
+    const value = Number(textRetryMatch[1]);
+    if (Number.isFinite(value) && value > 0) {
+      const ms = textRetryMatch[2].toLowerCase() === 'ms' ? value : value * 1000;
+      return Math.min(4_000, Math.max(250, Math.round(ms)));
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Classifies Gemini Image Generation HTTP failures so zero-quota free-tier `429 RESOURCE_EXHAUSTED`
+ * (`limit: 0`) fails fast with an actionable billing message (and 0 credit loss) instead of
+ * wasting retries or silently returning a placeholder gradient image.
+ */
+export function classifyGeminiImageError(input: {
+  readonly status: number;
+  readonly rawBody: string;
+  readonly model: string;
+  readonly retryAfterHeader?: string | null;
+  readonly attempt?: number;
+}): GeminiImageErrorClassification {
+  const { status, rawBody, model, retryAfterHeader } = input;
+  const attempt = Math.max(0, input.attempt ?? 0);
+  const lower = rawBody.toLowerCase();
+
+  if (status === 429) {
+    const indicatesZeroQuota =
+      /\blimit\s*:\s*0\b/i.test(rawBody) ||
+      /"limit"\s*:\s*0\b/i.test(rawBody) ||
+      /quotavalue["']?\s*[:=]\s*["']?0\b/i.test(rawBody) ||
+      lower.includes('free_tier') ||
+      lower.includes('freetier') ||
+      lower.includes('free tier') ||
+      lower.includes('billing') ||
+      lower.includes('paid tier') ||
+      lower.includes('check your plan');
+
+    if (indicatesZeroQuota) {
+      return {
+        kind: 'paid_tier_required',
+        retryable: false,
+        retryDelayMs: 0,
+        retryAfterSeconds: 60,
+        appErrorCode: 'RATE_LIMITED',
+        userMessage: `Image generation (${model}) returned HTTP 429 RESOURCE_EXHAUSTED because Gemini image models have a free-tier quota of 0 and require a billing-enabled API key — even on your first request. Enable billing on your Gemini API key (or select a paid key in Settings > Secrets), or set IMAGE_PROVIDER=mock in .env for local offline previews. No credits were charged.`,
+      };
+    }
+
+    const parsedDelay = parseGeminiRetryDelayMs(rawBody, retryAfterHeader);
+    const backoffMs = Math.min(4_000, 600 * Math.pow(2, attempt));
+    const retryDelayMs = parsedDelay ?? backoffMs;
+    const retryAfterSeconds = Math.max(1, Math.ceil(retryDelayMs / 1000));
+
+    return {
+      kind: 'transient_rate_limit',
+      retryable: true,
+      retryDelayMs,
+      retryAfterSeconds,
+      appErrorCode: 'RATE_LIMITED',
+      userMessage: `Gemini image generation (${model}) is temporarily rate-limited (HTTP 429 RESOURCE_EXHAUSTED). Please wait a few seconds and retry. No credits were charged.`,
+    };
+  }
+
+  if (status === 401 || status === 403) {
+    return {
+      kind: 'auth_forbidden',
+      retryable: false,
+      retryDelayMs: 0,
+      appErrorCode: 'FORBIDDEN',
+      userMessage: `Gemini image generation (${model}) rejected the configured API key (HTTP ${status}). Verify your billing-enabled Gemini API key permissions. No credits were charged.`,
+    };
+  }
+
+  if (status === 404) {
+    return {
+      kind: 'model_not_found',
+      retryable: false,
+      retryDelayMs: 0,
+      appErrorCode: 'PROVIDER_UNAVAILABLE',
+      userMessage: `Gemini image model "${model}" is unavailable (HTTP 404). Verify GEMINI_IMAGE_MODEL is set to an active Gemini image model (e.g. ${GEMINI_IMAGE_DEFAULT_MODEL}). No credits were charged.`,
+    };
+  }
+
+  if (status === 400) {
+    return {
+      kind: 'bad_request',
+      retryable: false,
+      retryDelayMs: 0,
+      appErrorCode: 'PROVIDER_UNAVAILABLE',
+      userMessage: `Gemini image generation (${model}) could not process this prompt (HTTP 400). Try rephrasing the visual description. No credits were charged.`,
+    };
+  }
+
+  const retryDelayMs = Math.min(3_000, 500 * Math.pow(2, attempt));
+  return {
+    kind: 'upstream_unavailable',
+    retryable: status >= 500 || status === 0,
+    retryDelayMs,
+    appErrorCode: 'PROVIDER_UNAVAILABLE',
+    userMessage: `Gemini image generation (${model}) encountered a temporary upstream error${status > 0 ? ` (HTTP ${status})` : ''}. Please retry in a moment. No credits were charged.`,
+  };
+}
+
+export const CLOUDFLARE_IMAGE_DEFAULT_MODEL = '@cf/black-forest-labs/flux-1-schnell' as const;
+
+export const CLOUDFLARE_IMAGE_DIMENSIONS: Readonly<
+  Record<ImageAspectRatio, { readonly width: number; readonly height: number }>
+> = Object.freeze({
+  '1:1': { width: 1024, height: 1024 },
+  '16:9': { width: 1024, height: 576 },
+  '9:16': { width: 576, height: 1024 },
+  '4:3': { width: 1024, height: 768 },
+  '3:4': { width: 768, height: 1024 },
+});
+
+/**
+ * Detects PNG, JPEG, or WebP MIME type directly from image file magic bytes.
+ */
+export function detectImageMimeFromMagicBytes(
+  bytes: Uint8Array,
+  fallback: 'image/png' | 'image/jpeg' | 'image/webp' = 'image/jpeg',
+): 'image/png' | 'image/jpeg' | 'image/webp' {
+  if (
+    bytes.byteLength >= 4 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return 'image/png';
+  }
+  if (
+    bytes.byteLength >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
+    return 'image/jpeg';
+  }
+  if (
+    bytes.byteLength >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+  return fallback;
+}
+
+/**
+ * Builds a validated Cloudflare Workers AI image generation payload.
+ * Enforces Cloudflare's 2,048-character prompt ceiling and model-specific parameters.
+ */
+export function buildCloudflareImageRequestBody(input: {
+  readonly model: string;
+  readonly prompt: string;
+  readonly aspectRatio: ImageAspectRatio;
+  readonly steps?: number;
+}): Record<string, unknown> {
+  const prompt = input.prompt.trim().slice(0, 2048);
+  const lowerModel = input.model.toLowerCase();
+
+  // FLUX.1 Schnell accepts `prompt`, `steps` (1-8, default 4)
+  if (lowerModel.includes('flux-1-schnell')) {
+    const steps = Math.max(1, Math.min(8, Math.round(input.steps ?? 4)));
+    return { prompt, steps };
+  }
+
+  // SDXL / Lucid / FLUX-2 models accept explicit width & height
+  const dims = CLOUDFLARE_IMAGE_DIMENSIONS[input.aspectRatio] ?? CLOUDFLARE_IMAGE_DIMENSIONS['1:1'];
+  if (lowerModel.includes('stable-diffusion')) {
+    const numSteps = Math.max(1, Math.min(20, Math.round(input.steps ?? 16)));
+    return {
+      prompt,
+      width: dims.width,
+      height: dims.height,
+      num_steps: numSteps,
+    };
+  }
+
+  return {
+    prompt,
+    width: dims.width,
+    height: dims.height,
+    steps: Math.max(1, Math.min(8, Math.round(input.steps ?? 4))),
+  };
+}
+
+/**
+ * Decodes either Cloudflare's JSON `{ result: { image: "<base64>" } }` response (FLUX models)
+ * or raw binary PNG/JPEG image stream (SDXL models) into normalized image bytes + MIME type.
+ */
+export function decodeCloudflareImageResponse(input: {
+  readonly contentType: string;
+  readonly bodyBytes: Uint8Array;
+}): {
+  readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+  readonly data: Uint8Array;
+} | null {
+  const ct = input.contentType.toLowerCase();
+
+  // Raw binary image stream (e.g. Stable Diffusion XL)
+  if (ct.startsWith('image/')) {
+    if (input.bodyBytes.byteLength <= 64) {
+      return null;
+    }
+    const fallbackMime: 'image/png' | 'image/jpeg' | 'image/webp' = ct.includes('png')
+      ? 'image/png'
+      : ct.includes('webp')
+        ? 'image/webp'
+        : 'image/jpeg';
+    return {
+      mimeType: detectImageMimeFromMagicBytes(input.bodyBytes, fallbackMime),
+      data: input.bodyBytes,
+    };
+  }
+
+  // JSON envelope `{ success: true, result: { image: "<base64>" } }` (FLUX.1 Schnell)
+  try {
+    const text = Buffer.from(input.bodyBytes).toString('utf8');
+    const parsed = JSON.parse(text) as {
+      readonly success?: boolean;
+      readonly result?: { readonly image?: string };
+      readonly image?: string;
+    };
+    const rawB64 = parsed.result?.image ?? parsed.image;
+    if (!rawB64 || typeof rawB64 !== 'string') {
+      return null;
+    }
+    const cleanedB64 = rawB64.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, '').trim();
+    const decoded = new Uint8Array(Buffer.from(cleanedB64, 'base64'));
+    if (decoded.byteLength <= 64) {
+      return null;
+    }
+    return {
+      mimeType: detectImageMimeFromMagicBytes(decoded, 'image/jpeg'),
+      data: decoded,
+    };
+  } catch {
+    return null;
+  }
+}
+
+

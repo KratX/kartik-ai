@@ -45,7 +45,7 @@ export const AGENT_CONFIG_SCHEMA: ConfigSchema = {
   },
   IMAGE_PROVIDER: {
     type: 'enum',
-    enumValues: ['mock', 'live'] as const,
+    enumValues: ['mock', 'live', 'cloudflare'] as const,
     default: 'mock',
   },
   GEMINI_API_KEY: {
@@ -53,6 +53,22 @@ export const AGENT_CONFIG_SCHEMA: ConfigSchema = {
     required: false,
     secret: true,
     default: '',
+  },
+  CLOUDFLARE_API_TOKEN: {
+    type: 'string',
+    required: false,
+    secret: true,
+    default: '',
+  },
+  CLOUDFLARE_ACCOUNT_ID: {
+    type: 'string',
+    required: false,
+    default: '',
+  },
+  CLOUDFLARE_IMAGE_MODEL: {
+    type: 'string',
+    required: false,
+    default: '@cf/black-forest-labs/flux-1-schnell',
   },
   QDRANT_URL: {
     type: 'url',
@@ -130,8 +146,11 @@ export interface AgentConfig {
   readonly userContextPublicKey: string;
   readonly internalCallerTokenChat: string;
   readonly mockAi: boolean;
-  readonly imageProvider: 'mock' | 'live';
+  readonly imageProvider: 'mock' | 'live' | 'cloudflare';
   readonly geminiApiKey?: string;
+  readonly cloudflareApiToken?: string;
+  readonly cloudflareAccountId?: string;
+  readonly cloudflareImageModel: string;
   readonly qdrantUrl: string;
   readonly qdrantCollection: string;
   readonly routerModelId: string;
@@ -202,8 +221,11 @@ export function loadAgentConfig(
     USER_CONTEXT_PUBLIC_KEY: string;
     INTERNAL_CALLER_TOKEN_CHAT: string;
     MOCK_AI: boolean;
-    IMAGE_PROVIDER: 'mock' | 'live';
+    IMAGE_PROVIDER: 'mock' | 'live' | 'cloudflare';
     GEMINI_API_KEY: string;
+    CLOUDFLARE_API_TOKEN: string;
+    CLOUDFLARE_ACCOUNT_ID: string;
+    CLOUDFLARE_IMAGE_MODEL: string;
     QDRANT_URL: string;
     QDRANT_COLLECTION: string;
     ROUTER_MODEL_ID: string;
@@ -266,6 +288,9 @@ export function loadAgentConfig(
     mockAi: raw.MOCK_AI,
     imageProvider: raw.IMAGE_PROVIDER,
     geminiApiKey: raw.GEMINI_API_KEY || undefined,
+    cloudflareApiToken: raw.CLOUDFLARE_API_TOKEN || undefined,
+    cloudflareAccountId: raw.CLOUDFLARE_ACCOUNT_ID || undefined,
+    cloudflareImageModel: raw.CLOUDFLARE_IMAGE_MODEL,
     qdrantUrl: raw.QDRANT_URL,
     qdrantCollection: raw.QDRANT_COLLECTION,
     routerModelId: raw.ROUTER_MODEL_ID,

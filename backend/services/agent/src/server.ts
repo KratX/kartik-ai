@@ -77,6 +77,7 @@ import {
   LiveGeminiSearchProvider,
   LiveGeminiVisionProvider,
 } from './services/live-gemini-providers.js';
+import { CloudflareWorkersAiImageProvider } from './services/cloudflare-image-provider.js';
 import {
   MockChatModelProvider,
   MockCodingModelProvider,
@@ -347,9 +348,15 @@ export function bootstrapAgentService(
       : new MockEmbeddingProvider());
   const imageProvider =
     options.imageProvider ??
-    (useLiveProviders && config.imageProvider === 'live'
-      ? new LiveGeminiImageGenerationProvider({ apiKey: geminiKey })
-      : new MockImageGenerationProvider());
+    (config.imageProvider === 'cloudflare'
+      ? new CloudflareWorkersAiImageProvider({
+          apiToken: config.cloudflareApiToken,
+          accountId: config.cloudflareAccountId,
+          model: config.cloudflareImageModel,
+        })
+      : useLiveProviders && config.imageProvider === 'live'
+        ? new LiveGeminiImageGenerationProvider({ apiKey: geminiKey })
+        : new MockImageGenerationProvider());
   const visionProvider =
     options.visionProvider ??
     (useLiveProviders
