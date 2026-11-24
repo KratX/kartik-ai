@@ -1,9 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import net from 'node:net';
 import {
   RedisKeys,
   REDIS_TTL_SECONDS,
   resolveRedisTlsOptions,
+  parseRespFrame,
+  RespRedisClient,
+  ResilientRedisClient,
 } from '../redis/index.js';
 
 describe('@kartik/shared/redis key contract & TTL builders (1.5.a)', () => {
@@ -98,5 +102,120 @@ describe('@kartik/shared/redis key contract & TTL builders (1.5.a)', () => {
       servername: '127.0.0.1',
       rejectUnauthorized: false,
     });
+  });
+
+  it('Fix #34: reuses a single authenticated TCP socket across commands, runs atomic EVAL for delIfEquals, and reconnects after idle drops', async () => {
+    let connectionCount = 0;
+    let authCount = 0;
+    let evalCount = 0;
+    const kv = new Map<string, string>();
+    const activeSockets = new Set<net.Socket>();
+
+    const server = net.createServer((sock) => {
+      connectionCount += 1;
+      activeSockets.add(sock);
+      let buf = Buffer.alloc(0);
+
+      sock.on('close', () => activeSockets.delete(sock));
+      sock.on('data', (chunk) => {
+        buf = Buffer.concat([buf, chunk]);
+        while (buf.length > 0) {
+          const parsed = parseRespFrame(buf, 0);
+          if (!parsed) break;
+          buf = buf.subarray(parsed.nextOffset);
+          const args = Array.isArray(parsed.value) ? parsed.value.map(String) : [];
+          const cmd = (args[0] ?? '').toUpperCase();
+
+          if (cmd === 'AUTH') {
+            authCount += 1;
+            sock.write('+OK\r\n');
+          } else if (cmd === 'PING') {
+            sock.write('+PONG\r\n');
+          } else if (cmd === 'SET') {
+            const key = args[1] ?? '';
+            const val = args[2] ?? '';
+            kv.set(key, val);
+            sock.write('+OK\r\n');
+          } else if (cmd === 'GET') {
+            const val = kv.get(args[1] ?? '');
+            if (val === undefined) {
+              sock.write('$-1\r\n');
+            } else {
+              const byteLen = Buffer.byteLength(val, 'utf8');
+              sock.write(`$${byteLen}\r\n${val}\r\n`);
+            }
+          } else if (cmd === 'EVAL') {
+            evalCount += 1;
+            const key = args[3] ?? '';
+            const expected = args[4] ?? '';
+            if (kv.get(key) === expected) {
+              kv.delete(key);
+              sock.write(':1\r\n');
+            } else {
+              sock.write(':0\r\n');
+            }
+          } else {
+            sock.write('+OK\r\n');
+          }
+        }
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+
+    const client = new RespRedisClient(`redis://default:test_pass_123@127.0.0.1:${port}`, {
+      timeoutMs: 2_000,
+    });
+
+    try {
+      assert.equal(await client.ping(), 'PONG');
+      await client.setEx('lock:test:1', 'ownerA', 60);
+      assert.equal(await client.get('lock:test:1'), 'ownerA');
+      assert.equal(await client.delIfEquals('lock:test:1', 'ownerB'), false);
+      assert.equal(await client.delIfEquals('lock:test:1', 'ownerA'), true);
+      assert.equal(await client.get('lock:test:1'), null);
+
+      // All 6 commands shared ONE authenticated connection!
+      assert.equal(connectionCount, 1);
+      assert.equal(authCount, 1);
+      assert.equal(evalCount, 2);
+
+      // Simulate Upstash closing the idle socket -> next command transparently reconnects!
+      for (const s of activeSockets) {
+        s.destroy();
+      }
+      await new Promise((r) => setTimeout(r, 25));
+      assert.equal(await client.ping(), 'PONG');
+      assert.equal(connectionCount, 2);
+      assert.equal(authCount, 2);
+    } finally {
+      await client.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('Fix #34: ResilientRedisClient backs off for retryCooldownMs on outage and auto-recovers', async () => {
+    let nowMs = 500_000;
+    const resilient = new ResilientRedisClient('redis://127.0.0.1:63997', {
+      timeoutMs: 200,
+      retryCooldownMs: 30_000,
+      nowFn: () => nowMs,
+    });
+
+    // First call hits unreachable port -> degrades into in-memory fallback
+    await resilient.setEx('k:1', 'v1', 60);
+    assert.equal(await resilient.get('k:1'), 'v1');
+
+    // Subsequent calls during cooldown are instant (<15ms) via in-memory fallback
+    const t0 = Date.now();
+    await resilient.setEx('k:2', 'v2', 60);
+    assert.equal(await resilient.get('k:2'), 'v2');
+    assert.ok(Date.now() - t0 < 50);
+
+    const health = await resilient.checkPrimaryHealth();
+    assert.equal(health.ok, false);
+    await resilient.close();
   });
 });

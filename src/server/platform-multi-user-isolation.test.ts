@@ -52,6 +52,7 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
   let savedImageProvider: string | undefined;
   let savedQdrantUrl: string | undefined;
   let savedQdrantApiKey: string | undefined;
+  let savedRedisUrl: string | undefined;
 
   before(() => {
     savedNodeEnv = process.env.NODE_ENV;
@@ -60,12 +61,14 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
     savedImageProvider = process.env.IMAGE_PROVIDER;
     savedQdrantUrl = process.env.QDRANT_URL;
     savedQdrantApiKey = process.env.QDRANT_API_KEY;
+    savedRedisUrl = process.env.REDIS_URL;
     process.env.NODE_ENV = 'test';
     process.env.MOCK_AI = 'true';
     process.env.AI_PROVIDER_MODE = 'mock';
     process.env.IMAGE_PROVIDER = 'mock';
     delete process.env.QDRANT_URL;
     delete process.env.QDRANT_API_KEY;
+    delete process.env.REDIS_URL;
   });
 
   after(() => {
@@ -81,6 +84,8 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
     else process.env.QDRANT_URL = savedQdrantUrl;
     if (savedQdrantApiKey === undefined) delete process.env.QDRANT_API_KEY;
     else process.env.QDRANT_API_KEY = savedQdrantApiKey;
+    if (savedRedisUrl === undefined) delete process.env.REDIS_URL;
+    else process.env.REDIS_URL = savedRedisUrl;
   });
 
   afterEach(() => {
