@@ -50,16 +50,22 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
   let savedMockAi: string | undefined;
   let savedAiMode: string | undefined;
   let savedImageProvider: string | undefined;
+  let savedQdrantUrl: string | undefined;
+  let savedQdrantApiKey: string | undefined;
 
   before(() => {
     savedNodeEnv = process.env.NODE_ENV;
     savedMockAi = process.env.MOCK_AI;
     savedAiMode = process.env.AI_PROVIDER_MODE;
     savedImageProvider = process.env.IMAGE_PROVIDER;
+    savedQdrantUrl = process.env.QDRANT_URL;
+    savedQdrantApiKey = process.env.QDRANT_API_KEY;
     process.env.NODE_ENV = 'test';
     process.env.MOCK_AI = 'true';
     process.env.AI_PROVIDER_MODE = 'mock';
     process.env.IMAGE_PROVIDER = 'mock';
+    delete process.env.QDRANT_URL;
+    delete process.env.QDRANT_API_KEY;
   });
 
   after(() => {
@@ -71,6 +77,10 @@ describe('Root Express Runtime Multi-User Isolation & Verified Firebase Auth (Au
     else process.env.AI_PROVIDER_MODE = savedAiMode;
     if (savedImageProvider === undefined) delete process.env.IMAGE_PROVIDER;
     else process.env.IMAGE_PROVIDER = savedImageProvider;
+    if (savedQdrantUrl === undefined) delete process.env.QDRANT_URL;
+    else process.env.QDRANT_URL = savedQdrantUrl;
+    if (savedQdrantApiKey === undefined) delete process.env.QDRANT_API_KEY;
+    else process.env.QDRANT_API_KEY = savedQdrantApiKey;
   });
 
   afterEach(() => {

@@ -285,4 +285,191 @@ describe('Concrete Production Persistence Adapters (PostgreSQL / Redis / S3 Obje
     });
     assert.equal(malloryHits.length, 0);
   });
+
+  it('Fix #33: self-heals missing Qdrant Cloud strict-mode payload indexes, prevents destructive collection deletion on delete/mismatch, and auto-recovers after transient outage cooldown', async () => {
+    const indexedFieldsCreated: string[] = [];
+    let collectionDeleted = false;
+
+    // 1. Existing collection missing userId/fileId payload indexes -> auto-creates keyword indexes
+    const strictCloudStore = new QdrantHttpVectorStore({
+      baseUrl: 'https://example-cluster.aws.cloud.qdrant.io',
+      collectionName: 'kartik_rag_chunks',
+      apiKey: 'test_qdrant_jwt_token',
+      fetchImpl: async (inputUrl, init) => {
+        const urlStr = String(inputUrl);
+        if (init?.method === 'GET' && urlStr.endsWith('/collections/kartik_rag_chunks')) {
+          return new Response(
+            JSON.stringify({
+              result: {
+                status: 'green',
+                points_count: 5,
+                config: { params: { vectors: { size: 4, distance: 'Cosine' } } },
+                payload_schema: {},
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        if (init?.method === 'DELETE' && urlStr.endsWith('/collections/kartik_rag_chunks')) {
+          collectionDeleted = true;
+          return new Response(JSON.stringify({ result: true }), { status: 200 });
+        }
+        if (init?.method === 'PUT' && urlStr.includes('/index')) {
+          const parsed = JSON.parse(String(init.body)) as { field_name: string };
+          indexedFieldsCreated.push(parsed.field_name);
+          return new Response(JSON.stringify({ result: { status: 'completed' } }), { status: 200 });
+        }
+        if (urlStr.includes('/points/delete')) {
+          return new Response(JSON.stringify({ result: { status: 'completed' } }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ result: { status: 'completed' } }), { status: 200 });
+      },
+    });
+
+    await strictCloudStore.upsertChunks([
+      {
+        chunkId: 'chk_strict_01',
+        fileId: 'file_strict_01',
+        userId: 'usr_alice',
+        documentTitle: 'Cloud.pdf',
+        pageNumber: 1,
+        chunkIndex: 0,
+        textContent: 'Strict mode payload index test.',
+        embeddingVector: [0.1, 0.2, 0.3, 0.4],
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    assert.deepEqual(indexedFieldsCreated, ['userId', 'fileId']);
+    assert.equal(collectionDeleted, false);
+
+    // 2. deleteByFileIds must NEVER trigger collection deletion even with different defaultVectorSize
+    const delCount = await strictCloudStore.deleteByFileIds({
+      userId: 'usr_alice',
+      fileIds: ['file_strict_01'],
+    });
+    assert.equal(delCount, 1);
+    assert.equal(collectionDeleted, false);
+
+    // 3. Non-empty collection with mismatched vector size must refuse destructive recreation
+    const mismatchStore = new QdrantHttpVectorStore({
+      baseUrl: 'https://example-cluster.aws.cloud.qdrant.io',
+      collectionName: 'kartik_rag_chunks',
+      fetchImpl: async (inputUrl, init) => {
+        const urlStr = String(inputUrl);
+        if (init?.method === 'GET' && urlStr.endsWith('/collections/kartik_rag_chunks')) {
+          return new Response(
+            JSON.stringify({
+              result: {
+                status: 'green',
+                points_count: 12,
+                config: { params: { vectors: { size: 768, distance: 'Cosine' } } },
+                payload_schema: { userId: { data_type: 'keyword' }, fileId: { data_type: 'keyword' } },
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        if (init?.method === 'DELETE') {
+          collectionDeleted = true;
+        }
+        return new Response(JSON.stringify({ result: {} }), { status: 200 });
+      },
+    });
+    await assert.rejects(
+      () =>
+        mismatchStore.searchChunks({
+          userId: 'usr_alice',
+          queryVector: [1, 0, 0, 0],
+        }),
+      /Refusing destructive recreation/,
+    );
+    assert.equal(collectionDeleted, false);
+
+    // 4. ResilientQdrantVectorStore recovers automatically once retryCooldownMs elapses
+    let nowMs = 1_000_000;
+    let shouldFailPrimary = true;
+    let primarySearchCalls = 0;
+    const tmpFile = path.join(os.tmpdir(), `kartik-qdrant-recover-${process.pid}-${Date.now()}.json`);
+    const recoveringStore = new ResilientQdrantVectorStore({
+      qdrantUrl: 'https://example-cluster.aws.cloud.qdrant.io',
+      collectionName: 'kartik_rag_chunks',
+      storageFilePath: tmpFile,
+      retryCooldownMs: 30_000,
+      nowFn: () => nowMs,
+      fetchImpl: async (inputUrl, init) => {
+        const urlStr = String(inputUrl);
+        if (shouldFailPrimary) {
+          throw new Error('Simulated transient Qdrant Cloud network blip');
+        }
+        if (init?.method === 'GET' && urlStr.endsWith('/collections/kartik_rag_chunks')) {
+          return new Response(
+            JSON.stringify({
+              result: {
+                status: 'green',
+                points_count: 1,
+                config: { params: { vectors: { size: 4, distance: 'Cosine' } } },
+                payload_schema: { userId: { data_type: 'keyword' }, fileId: { data_type: 'keyword' } },
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        if (urlStr.includes('/points/search')) {
+          primarySearchCalls += 1;
+          return new Response(
+            JSON.stringify({
+              result: [
+                {
+                  id: chunkIdToQdrantPointUuid('chk_rec_01'),
+                  score: 0.99,
+                  payload: {
+                    chunkId: 'chk_rec_01',
+                    fileId: 'file_rec_01',
+                    userId: 'usr_alice',
+                    documentTitle: 'Recovered.pdf',
+                    pageNumber: 1,
+                    textContent: 'Returned from live Qdrant Cloud after cooldown.',
+                  },
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ result: { status: 'completed' } }), { status: 200 });
+      },
+    });
+
+    await recoveringStore.upsertChunks([
+      {
+        chunkId: 'chk_rec_01',
+        fileId: 'file_rec_01',
+        userId: 'usr_alice',
+        documentTitle: 'Recovered.pdf',
+        pageNumber: 1,
+        chunkIndex: 0,
+        textContent: 'Fallback local chunk.',
+        embeddingVector: [1, 0, 0, 0],
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+
+    // During cooldown window, falls back to local disk without calling primary
+    const duringCooldown = await recoveringStore.searchChunks({
+      userId: 'usr_alice',
+      queryVector: [1, 0, 0, 0],
+    });
+    assert.equal(primarySearchCalls, 0);
+    assert.equal(duringCooldown[0]?.textContent, 'Fallback local chunk.');
+
+    // After 30s cooldown elapses and Qdrant recovers, primary is automatically used again
+    shouldFailPrimary = false;
+    nowMs += 31_000;
+    const afterRecovery = await recoveringStore.searchChunks({
+      userId: 'usr_alice',
+      queryVector: [1, 0, 0, 0],
+    });
+    assert.equal(primarySearchCalls, 1);
+    assert.equal(afterRecovery[0]?.textContent, 'Returned from live Qdrant Cloud after cooldown.');
+  });
 });

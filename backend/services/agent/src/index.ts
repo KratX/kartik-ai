@@ -267,6 +267,7 @@ export {
   ResilientQdrantVectorStore,
   createVectorStoreFromEnv,
   type QdrantHttpVectorStoreOptions,
+  type QdrantCollectionHealth,
 } from './services/qdrant-vector-store.js';
 
 export {

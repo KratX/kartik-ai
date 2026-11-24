@@ -15,7 +15,18 @@ export interface QdrantHttpVectorStoreOptions {
   readonly collectionName?: string;
   readonly apiKey?: string;
   readonly vectorSize?: number;
+  readonly timeoutMs?: number;
   readonly fetchImpl?: typeof fetch;
+}
+
+export interface QdrantCollectionHealth {
+  readonly ok: boolean;
+  readonly collectionName: string;
+  readonly status?: string;
+  readonly pointsCount?: number;
+  readonly vectorSize?: number;
+  readonly indexedFields?: readonly string[];
+  readonly error?: string;
 }
 
 /**
@@ -41,6 +52,19 @@ interface QdrantSearchResponsePayload {
   }>;
 }
 
+interface QdrantCollectionInspectPayload {
+  readonly result?: {
+    readonly status?: string;
+    readonly points_count?: number;
+    readonly config?: {
+      readonly params?: {
+        readonly vectors?: { readonly size?: number };
+      };
+    };
+    readonly payload_schema?: Record<string, { readonly data_type?: string }>;
+  };
+}
+
 function stripEnvQuotes(value: string | undefined): string | undefined {
   if (typeof value !== 'string') {
     return undefined;
@@ -51,6 +75,8 @@ function stripEnvQuotes(value: string | undefined): string | undefined {
   }
   return trimmed.replace(/^["']|["']$/g, '');
 }
+
+const REQUIRED_TENANT_INDEX_FIELDS = ['userId', 'fileId'] as const;
 
 /**
  * Production Qdrant HTTP REST API (`v1`) adapter implementing `VectorStore`
@@ -63,6 +89,7 @@ export class QdrantHttpVectorStore implements VectorStore {
   private readonly collectionName: string;
   private readonly apiKey: string | undefined;
   private readonly defaultVectorSize: number;
+  private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private ensuredDimension: number | null = null;
 
@@ -75,6 +102,7 @@ export class QdrantHttpVectorStore implements VectorStore {
     this.collectionName = stripEnvQuotes(options.collectionName) ?? 'kartik_document_chunks';
     this.apiKey = stripEnvQuotes(options.apiKey);
     this.defaultVectorSize = options.vectorSize ?? 768;
+    this.timeoutMs = Math.max(1_000, options.timeoutMs ?? 15_000);
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
   }
 
@@ -89,12 +117,29 @@ export class QdrantHttpVectorStore implements VectorStore {
     return headers;
   }
 
-  private async ensurePayloadIndexes(): Promise<void> {
+  private async qdrantFetch(url: string, init: RequestInit): Promise<Response> {
+    const signal =
+      init.signal ??
+      (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(this.timeoutMs)
+        : undefined);
+    return this.fetchImpl(url, {
+      ...init,
+      headers: this.buildHeaders(),
+      ...(signal ? { signal } : {}),
+    });
+  }
+
+  private async ensurePayloadIndexes(
+    fields: readonly ('userId' | 'fileId')[] = REQUIRED_TENANT_INDEX_FIELDS,
+  ): Promise<void> {
+    if (fields.length === 0) {
+      return;
+    }
     const indexUrl = `${this.baseUrl}/collections/${encodeURIComponent(this.collectionName)}/index?wait=true`;
-    for (const fieldName of ['userId', 'fileId'] as const) {
-      await this.fetchImpl(indexUrl, {
+    for (const fieldName of fields) {
+      await this.qdrantFetch(indexUrl, {
         method: 'PUT',
-        headers: this.buildHeaders(),
         body: JSON.stringify({
           field_name: fieldName,
           field_schema: 'keyword',
@@ -110,33 +155,41 @@ export class QdrantHttpVectorStore implements VectorStore {
     }
 
     const collectionUrl = `${this.baseUrl}/collections/${encodeURIComponent(this.collectionName)}`;
-    const getResp = await this.fetchImpl(collectionUrl, {
+    const getResp = await this.qdrantFetch(collectionUrl, {
       method: 'GET',
-      headers: this.buildHeaders(),
     });
 
     let needsCreate = getResp.status === 404;
+    let missingIndexes: Array<'userId' | 'fileId'> = [];
+
     if (getResp.ok) {
       try {
-        const info = (await getResp.json()) as {
-          readonly result?: {
-            readonly config?: {
-              readonly params?: {
-                readonly vectors?: { readonly size?: number };
-              };
-            };
-          };
-        };
+        const info = (await getResp.json()) as QdrantCollectionInspectPayload;
         const existingSize = info.result?.config?.params?.vectors?.size;
+        const pointsCount = info.result?.points_count ?? 0;
         if (typeof existingSize === 'number' && existingSize !== dim) {
-          await this.fetchImpl(collectionUrl, {
-            method: 'DELETE',
-            headers: this.buildHeaders(),
-          });
-          needsCreate = true;
+          if (pointsCount === 0) {
+            await this.qdrantFetch(collectionUrl, { method: 'DELETE' });
+            needsCreate = true;
+          } else {
+            throw new AppError(
+              'VALIDATION_FAILED',
+              `Qdrant collection "${this.collectionName}" has vector size ${existingSize} with ${pointsCount} stored points, but received ${dim}-dimensional vectors. Refusing destructive recreation.`,
+            );
+          }
+        } else if (info.result?.payload_schema && typeof info.result.payload_schema === 'object') {
+          // Qdrant Cloud strict mode requires keyword payload indexes on userId and fileId
+          for (const fieldName of REQUIRED_TENANT_INDEX_FIELDS) {
+            if (!info.result.payload_schema[fieldName]) {
+              missingIndexes.push(fieldName);
+            }
+          }
         }
-      } catch {
-        // Ignore JSON inspection error on mock responses that return minimal JSON
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw err;
+        }
+        // Ignore JSON inspection error on minimal mock responses
       }
     } else if (getResp.status !== 404) {
       throw new AppError(
@@ -146,9 +199,8 @@ export class QdrantHttpVectorStore implements VectorStore {
     }
 
     if (needsCreate) {
-      const createResp = await this.fetchImpl(collectionUrl, {
+      const createResp = await this.qdrantFetch(collectionUrl, {
         method: 'PUT',
-        headers: this.buildHeaders(),
         body: JSON.stringify({
           vectors: {
             size: dim,
@@ -162,10 +214,45 @@ export class QdrantHttpVectorStore implements VectorStore {
           `Failed to create Qdrant collection "${this.collectionName}" (HTTP ${createResp.status})`,
         );
       }
-      await this.ensurePayloadIndexes();
+      await this.ensurePayloadIndexes(REQUIRED_TENANT_INDEX_FIELDS);
+    } else if (missingIndexes.length > 0) {
+      await this.ensurePayloadIndexes(missingIndexes);
     }
 
     this.ensuredDimension = dim;
+  }
+
+  /**
+   * Non-mutating health check for the configured Qdrant collection.
+   */
+  public async checkHealth(): Promise<QdrantCollectionHealth> {
+    try {
+      const collectionUrl = `${this.baseUrl}/collections/${encodeURIComponent(this.collectionName)}`;
+      const resp = await this.qdrantFetch(collectionUrl, { method: 'GET' });
+      if (!resp.ok) {
+        return {
+          ok: false,
+          collectionName: this.collectionName,
+          error: `HTTP ${resp.status}`,
+        };
+      }
+      const body = (await resp.json()) as QdrantCollectionInspectPayload;
+      const result = body.result;
+      return {
+        ok: true,
+        collectionName: this.collectionName,
+        status: result?.status,
+        pointsCount: result?.points_count ?? 0,
+        vectorSize: result?.config?.params?.vectors?.size,
+        indexedFields: result?.payload_schema ? Object.keys(result.payload_schema) : [],
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        collectionName: this.collectionName,
+        error: err instanceof Error ? err.message : 'Qdrant health check failed',
+      };
+    }
   }
 
   public async upsertChunks(chunks: readonly DocumentChunkRecord[]): Promise<void> {
@@ -201,9 +288,8 @@ export class QdrantHttpVectorStore implements VectorStore {
     }));
 
     const url = `${this.baseUrl}/collections/${encodeURIComponent(this.collectionName)}/points?wait=true`;
-    const response = await this.fetchImpl(url, {
+    const response = await this.qdrantFetch(url, {
       method: 'PUT',
-      headers: this.buildHeaders(),
       body: JSON.stringify({ points }),
     });
 
@@ -246,18 +332,36 @@ export class QdrantHttpVectorStore implements VectorStore {
 
     const topK = Math.max(1, Math.min(input.topK ?? 5, 100));
     const url = `${this.baseUrl}/collections/${encodeURIComponent(this.collectionName)}/points/search`;
-    const response = await this.fetchImpl(url, {
-      method: 'POST',
-      headers: this.buildHeaders(),
-      body: JSON.stringify({
-        vector: [...input.queryVector],
-        limit: topK,
-        with_payload: true,
-        filter: {
-          must: mustClauses,
-        },
-      }),
+    const payloadBody = JSON.stringify({
+      vector: [...input.queryVector],
+      limit: topK,
+      with_payload: true,
+      filter: {
+        must: mustClauses,
+      },
     });
+
+    let response = await this.qdrantFetch(url, {
+      method: 'POST',
+      body: payloadBody,
+    });
+
+    // Self-heal once if Qdrant Cloud strict mode reports a missing payload index
+    if (response.status === 400) {
+      const errText = await response.text().catch(() => '');
+      if (errText.toLowerCase().includes('index required')) {
+        await this.ensurePayloadIndexes(REQUIRED_TENANT_INDEX_FIELDS);
+        response = await this.qdrantFetch(url, {
+          method: 'POST',
+          body: payloadBody,
+        });
+      } else {
+        throw new AppError(
+          'PROVIDER_UNAVAILABLE',
+          `Qdrant vector search failed with HTTP 400`,
+        );
+      }
+    }
 
     if (!response.ok) {
       throw new AppError(
@@ -312,21 +416,41 @@ export class QdrantHttpVectorStore implements VectorStore {
     if (input.fileIds.length === 0) {
       return 0;
     }
-    await this.ensureCollection(this.defaultVectorSize);
 
     const url = `${this.baseUrl}/collections/${encodeURIComponent(this.collectionName)}/points/delete?wait=true`;
-    const response = await this.fetchImpl(url, {
-      method: 'POST',
-      headers: this.buildHeaders(),
-      body: JSON.stringify({
-        filter: {
-          must: [
-            { key: 'userId', match: { value: input.userId } },
-            { key: 'fileId', match: { any: [...input.fileIds] } },
-          ],
-        },
-      }),
+    const payloadBody = JSON.stringify({
+      filter: {
+        must: [
+          { key: 'userId', match: { value: input.userId } },
+          { key: 'fileId', match: { any: [...input.fileIds] } },
+        ],
+      },
     });
+
+    let response = await this.qdrantFetch(url, {
+      method: 'POST',
+      body: payloadBody,
+    });
+
+    if (response.status === 404) {
+      return 0;
+    }
+
+    if (response.status === 400) {
+      const errText = await response.text().catch(() => '');
+      if (errText.toLowerCase().includes('index required')) {
+        await this.ensurePayloadIndexes(REQUIRED_TENANT_INDEX_FIELDS);
+        response = await this.qdrantFetch(url, {
+          method: 'POST',
+          body: payloadBody,
+        });
+      } else {
+        throw new AppError(
+          'PROVIDER_UNAVAILABLE',
+          `Qdrant deleteByFileIds failed with HTTP 400`,
+        );
+      }
+    }
 
     if (!response.ok) {
       throw new AppError(
@@ -342,18 +466,38 @@ export class QdrantHttpVectorStore implements VectorStore {
     if (!userId || userId.trim().length === 0) {
       return 0;
     }
-    await this.ensureCollection(this.defaultVectorSize);
 
     const url = `${this.baseUrl}/collections/${encodeURIComponent(this.collectionName)}/points/delete?wait=true`;
-    const response = await this.fetchImpl(url, {
-      method: 'POST',
-      headers: this.buildHeaders(),
-      body: JSON.stringify({
-        filter: {
-          must: [{ key: 'userId', match: { value: userId } }],
-        },
-      }),
+    const payloadBody = JSON.stringify({
+      filter: {
+        must: [{ key: 'userId', match: { value: userId } }],
+      },
     });
+
+    let response = await this.qdrantFetch(url, {
+      method: 'POST',
+      body: payloadBody,
+    });
+
+    if (response.status === 404) {
+      return 0;
+    }
+
+    if (response.status === 400) {
+      const errText = await response.text().catch(() => '');
+      if (errText.toLowerCase().includes('index required')) {
+        await this.ensurePayloadIndexes(REQUIRED_TENANT_INDEX_FIELDS);
+        response = await this.qdrantFetch(url, {
+          method: 'POST',
+          body: payloadBody,
+        });
+      } else {
+        throw new AppError(
+          'PROVIDER_UNAVAILABLE',
+          `Qdrant deleteByUserId failed with HTTP 400`,
+        );
+      }
+    }
 
     if (!response.ok) {
       throw new AppError(
@@ -501,39 +645,67 @@ export class PersistentDiskVectorStore implements VectorStore {
 
 /**
  * Resilient Qdrant adapter that routes vector operations to `QdrantHttpVectorStore`
- * when a Qdrant server is reachable and transparently mirrors/falls back to
- * `PersistentDiskVectorStore` when Qdrant is unreachable.
+ * when a Qdrant server is reachable, transparently mirrors/falls back to
+ * `PersistentDiskVectorStore` during transient outages, and automatically probes
+ * Qdrant again after `retryCooldownMs` (default 30s).
  */
 export class ResilientQdrantVectorStore implements VectorStore {
   private readonly primary: QdrantHttpVectorStore;
   private readonly fallback: PersistentDiskVectorStore;
-  private primaryHealthy = true;
+  private readonly retryCooldownMs: number;
+  private readonly nowFn: () => number;
+  private primaryDegradedUntilMs = 0;
 
   constructor(options: {
     readonly qdrantUrl: string;
     readonly collectionName?: string;
     readonly apiKey?: string;
     readonly storageFilePath?: string;
+    readonly retryCooldownMs?: number;
+    readonly timeoutMs?: number;
+    readonly nowFn?: () => number;
     readonly fetchImpl?: typeof fetch;
   }) {
     this.primary = new QdrantHttpVectorStore({
       baseUrl: options.qdrantUrl,
       ...(options.collectionName ? { collectionName: options.collectionName } : {}),
       ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+      ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     });
     this.fallback = new PersistentDiskVectorStore(
       options.storageFilePath ? { storageFilePath: options.storageFilePath } : undefined,
     );
+    this.retryCooldownMs = Math.max(0, options.retryCooldownMs ?? 30_000);
+    this.nowFn = options.nowFn ?? Date.now;
+  }
+
+  private shouldUsePrimary(): boolean {
+    return this.nowFn() >= this.primaryDegradedUntilMs;
+  }
+
+  private markPrimaryDegraded(operation: string, err: unknown): void {
+    const wasHealthy = this.shouldUsePrimary();
+    this.primaryDegradedUntilMs = this.nowFn() + this.retryCooldownMs;
+    if (wasHealthy) {
+      const msg = err instanceof Error ? err.message : 'Qdrant request failed';
+      console.warn(
+        `[kartik-qdrant] ${operation} failed (${msg}); falling back to local disk vector store for ${Math.round(this.retryCooldownMs / 1000)}s.`,
+      );
+    }
+  }
+
+  public async checkPrimaryHealth(): Promise<QdrantCollectionHealth> {
+    return this.primary.checkHealth();
   }
 
   public async upsertChunks(chunks: readonly DocumentChunkRecord[]): Promise<void> {
     await this.fallback.upsertChunks(chunks);
-    if (this.primaryHealthy) {
+    if (this.shouldUsePrimary()) {
       try {
         await this.primary.upsertChunks(chunks);
-      } catch {
-        this.primaryHealthy = false;
+      } catch (err) {
+        this.markPrimaryDegraded('upsertChunks', err);
       }
     }
   }
@@ -550,11 +722,11 @@ export class ResilientQdrantVectorStore implements VectorStore {
         'Vector search requires a non-empty authenticated userId (Invariant #9)',
       );
     }
-    if (this.primaryHealthy) {
+    if (this.shouldUsePrimary()) {
       try {
         return await this.primary.searchChunks(input);
-      } catch {
-        this.primaryHealthy = false;
+      } catch (err) {
+        this.markPrimaryDegraded('searchChunks', err);
       }
     }
     return this.fallback.searchChunks(input);
@@ -565,11 +737,11 @@ export class ResilientQdrantVectorStore implements VectorStore {
     readonly fileIds: readonly string[];
   }): Promise<number> {
     const fallbackDeleted = await this.fallback.deleteByFileIds(input);
-    if (this.primaryHealthy) {
+    if (this.shouldUsePrimary()) {
       try {
         await this.primary.deleteByFileIds(input);
-      } catch {
-        this.primaryHealthy = false;
+      } catch (err) {
+        this.markPrimaryDegraded('deleteByFileIds', err);
       }
     }
     return fallbackDeleted;
@@ -577,11 +749,11 @@ export class ResilientQdrantVectorStore implements VectorStore {
 
   public async deleteByUserId(userId: string): Promise<number> {
     const fallbackDeleted = await this.fallback.deleteByUserId(userId);
-    if (this.primaryHealthy) {
+    if (this.shouldUsePrimary()) {
       try {
         await this.primary.deleteByUserId(userId);
-      } catch {
-        this.primaryHealthy = false;
+      } catch (err) {
+        this.markPrimaryDegraded('deleteByUserId', err);
       }
     }
     return fallbackDeleted;
