@@ -52,6 +52,7 @@ import {
   buildSitemapXml,
   buildWebManifest,
   injectSeoIntoHtml,
+  isStaticAssetRequestPath,
   resolvePublicSiteUrl,
 } from './src/server/seo.ts';
 
@@ -99,10 +100,15 @@ export function createKartikExpressApp(
   );
 
   const app = express();
+  app.disable('x-powered-by');
   app.set('trust proxy', 1);
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
+  app.use('/api', (_req, res, next) => {
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
     next();
   });
   app.use(
@@ -912,7 +918,12 @@ const ALLOWED_DEV_DOWNLOAD_ROOT_FILES = new Set([
   'index.html',
   'metadata.json',
   'package.json',
+  'public/apple-touch-icon.png',
+  'public/favicon-48.png',
+  'public/favicon.ico',
   'public/favicon.svg',
+  'public/icon-192.png',
+  'public/icon-512.png',
   'public/og-image.jpg',
   'render.yaml',
   'server.ts',
@@ -1028,6 +1039,10 @@ async function startServer() {
       }),
     );
     app.get('*', (req, res) => {
+      if (isStaticAssetRequestPath(req.path)) {
+        res.status(404).type('text/plain; charset=utf-8').send('Not Found');
+        return;
+      }
       if (rawDistIndexHtml) {
         const siteUrl = resolvePublicSiteUrl(process.env, req.headers);
         const renderedHtml = injectSeoIntoHtml(rawDistIndexHtml, {

@@ -210,10 +210,65 @@ export function buildWebManifest(siteUrl: string): Record<string, unknown> {
         src: '/favicon.svg',
         sizes: 'any',
         type: 'image/svg+xml',
+        purpose: 'any',
+      },
+      {
+        src: '/icon-192.png',
+        sizes: '192x192',
+        type: 'image/png',
+        purpose: 'any',
+      },
+      {
+        src: '/icon-512.png',
+        sizes: '512x512',
+        type: 'image/png',
         purpose: 'any maskable',
       },
     ],
   };
+}
+
+const STATIC_ASSET_EXTENSIONS = new Set([
+  '.ico',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp',
+  '.svg',
+  '.gif',
+  '.css',
+  '.js',
+  '.mjs',
+  '.cjs',
+  '.map',
+  '.json',
+  '.xml',
+  '.txt',
+  '.woff',
+  '.woff2',
+  '.ttf',
+  '.eot',
+  '.pdf',
+  '.zip',
+  '.php',
+  '.env',
+]);
+
+/**
+ * Returns true when a request pathname looks like a static asset or file extension
+ * so the SPA fallback returns a clean HTTP 404 instead of a Soft-404 HTML page.
+ */
+export function isStaticAssetRequestPath(pathname: string): boolean {
+  const cleanPath = pathname.split('?')[0]?.trim().toLowerCase() ?? '';
+  if (!cleanPath || cleanPath === '/') {
+    return false;
+  }
+  const lastSegment = cleanPath.slice(cleanPath.lastIndexOf('/') + 1);
+  const dotIdx = lastSegment.lastIndexOf('.');
+  if (dotIdx <= 0) {
+    return false;
+  }
+  return STATIC_ASSET_EXTENSIONS.has(lastSegment.slice(dotIdx));
 }
 
 /**

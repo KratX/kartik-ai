@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Kartik.ai">
-  <rect width="64" height="64" rx="16" fill="#ffffff"/>
-  <path d="M21 15h7.5v14.8L41.8 15H51L36.2 31.2 52 49h-9.4L28.5 33.4V49H21V15z" fill="#09090b"/>
-  <circle cx="48.5" cy="17.5" r="3.5" fill="#10b981"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="Kartik.ai">
+  <rect width="96" height="96" rx="24" fill="#ffffff"/>
+  <path d="M31.5 22.5h11.25v22.2L62.7 22.5h13.8L54.3 46.8 78 73.5H63.9L42.75 50.1V73.5H31.5V22.5z" fill="#09090b"/>
+  <circle cx="72.75" cy="26.25" r="5.25" fill="#10b981"/>
 </svg>

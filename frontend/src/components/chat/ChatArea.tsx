@@ -354,12 +354,12 @@ export function ChatArea({
               <ObsidianBrandMark size="lg" />
             </div>
 
-            <h2
+            <h1
               className="text-2xl sm:text-4xl font-semibold tracking-tight text-white text-center"
               style={{ textWrap: 'balance' }}
             >
               {greeting}. What are we building?
-            </h2>
+            </h1>
 
             <MotionScrambleText
               lines={HERO_SCRAMBLE_LINES}

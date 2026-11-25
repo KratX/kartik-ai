@@ -1,18 +1,21 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   buildRobotsTxt,
   buildSitemapXml,
   buildWebManifest,
   DEFAULT_PRODUCTION_SITE_URL,
   injectSeoIntoHtml,
+  isStaticAssetRequestPath,
   normalizeGoogleSiteVerificationToken,
   resolvePublicSiteUrl,
   SEO_DESCRIPTION,
   SEO_TITLE,
 } from './seo.ts';
 
-describe('SEO, Sitemap, Robots.txt & Render Canonical Origin Helpers (Fix #38)', () => {
+describe('SEO, Sitemap, Robots.txt, Icons & Rich Results Helpers (Fix #38 / #42)', () => {
   it('enforces optimal Google snippet lengths for title (30-60 chars) and description (120-160 chars)', () => {
     assert.ok(
       SEO_TITLE.length >= 30 && SEO_TITLE.length <= 60,
@@ -117,10 +120,61 @@ describe('SEO, Sitemap, Robots.txt & Render Canonical Origin Helpers (Fix #38)',
     );
   });
 
-  it('builds a valid web manifest referencing /favicon.svg', () => {
-    const manifest = buildWebManifest('https://kartik-ai.onrender.com');
+  it('builds a valid web manifest with SVG + 192x192 + 512x512 PNG icons', () => {
+    const manifest = buildWebManifest('https://kartik-ai-app.onrender.com');
     assert.equal(manifest.short_name, 'Kartik.ai');
     assert.equal(manifest.display, 'standalone');
     assert.equal(manifest.theme_color, '#09090b');
+    const icons = manifest.icons as Array<{ src: string; sizes: string; type: string }>;
+    assert.ok(icons.some((i) => i.src === '/favicon.svg' && i.type === 'image/svg+xml'));
+    assert.ok(icons.some((i) => i.src === '/icon-192.png' && i.sizes === '192x192'));
+    assert.ok(icons.some((i) => i.src === '/icon-512.png' && i.sizes === '512x512'));
+  });
+
+  it('identifies static asset paths so SPA fallback prevents Soft-404s on missing files', () => {
+    assert.equal(isStaticAssetRequestPath('/favicon.ico'), true);
+    assert.equal(isStaticAssetRequestPath('/missing-image.png'), true);
+    assert.equal(isStaticAssetRequestPath('/wp-login.php'), true);
+    assert.equal(isStaticAssetRequestPath('/assets/nonexistent.js'), true);
+    assert.equal(isStaticAssetRequestPath('/'), false);
+    assert.equal(isStaticAssetRequestPath('/chat/conv_123'), false);
+    assert.equal(isStaticAssetRequestPath('/workspace'), false);
+  });
+
+  it('ships valid, policy-compliant JSON-LD and synced canonical metadata in index.html and frontend/index.html', () => {
+    for (const rel of ['index.html', 'frontend/index.html']) {
+      const html = fs.readFileSync(path.resolve(process.cwd(), rel), 'utf8');
+      assert.match(html, /<link rel="canonical" href="https:\/\/kartik-ai-app\.onrender\.com\/" \/>/);
+      assert.match(html, /<link rel="icon" href="\/favicon\.ico" sizes="48x48" \/>/);
+      assert.match(html, /<link rel="apple-touch-icon" sizes="180x180" href="\/apple-touch-icon\.png" \/>/);
+      assert.match(html, /<meta property="og:image:width" content="1376" \/>/);
+      assert.match(html, /<meta property="og:image:height" content="768" \/>/);
+
+      const ldMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+      assert.ok(ldMatch?.[1], `Missing JSON-LD in ${rel}`);
+      const parsed = JSON.parse(ldMatch[1]) as { '@graph': Array<Record<string, unknown>> };
+      const types = parsed['@graph'].map((node) => node['@type']);
+      assert.deepEqual(types, ['WebApplication', 'WebSite', 'Organization']);
+      const org = parsed['@graph'].find((n) => n['@type'] === 'Organization') as {
+        logo: { url: string; width: number; height: number };
+      };
+      assert.equal(org.logo.url, 'https://kartik-ai-app.onrender.com/icon-512.png');
+      assert.equal(org.logo.width, 512);
+      assert.equal(org.logo.height, 512);
+    }
+
+    // Verify all declared public icon & OG assets exist on disk
+    for (const asset of [
+      'public/favicon.ico',
+      'public/favicon.svg',
+      'public/favicon-48.png',
+      'public/apple-touch-icon.png',
+      'public/icon-192.png',
+      'public/icon-512.png',
+      'public/og-image.jpg',
+    ]) {
+      const stat = fs.statSync(path.resolve(process.cwd(), asset));
+      assert.ok(stat.size > 100, `Expected ${asset} to be non-empty`);
+    }
   });
 });
