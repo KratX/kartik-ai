@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   ArrowUp,
+  Check,
   ChevronDown,
   Code2,
   Eye,
@@ -125,6 +126,8 @@ export function ChatInput({
   const [prompt, setPrompt] = useState('');
   const [isFocused, setIsFocused] = useState(false);
   const [isSpecialistOpen, setIsSpecialistOpen] = useState(false);
+  const [isDepthOpen, setIsDepthOpen] = useState(false);
+  const [isImageOptsOpen, setIsImageOptsOpen] = useState(false);
   const [imageAspectRatio, setImageAspectRatio] =
     useState<(typeof IMAGE_ASPECT_OPTIONS)[number]>('16:9');
   const [imageStyle, setImageStyle] =
@@ -136,10 +139,15 @@ export function ChatInput({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const specialistBtnRef = useRef<HTMLButtonElement | null>(null);
+  const depthBtnRef = useRef<HTMLButtonElement | null>(null);
+  const imageOptsBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const activePill =
     AGENT_SELECTOR_PILLS.find((p) => p.id === selectedAgent) ??
     AGENT_SELECTOR_PILLS[0]!;
+  const activeDepth =
+    CHAT_RESPONSE_DEPTH_OPTIONS.find((opt) => opt.id === responseDepth) ??
+    CHAT_RESPONSE_DEPTH_OPTIONS[1]!;
 
   const slashMatches = useMemo(() => matchSlashCommands(prompt), [prompt]);
   const isSlashMenuVisible = slashMatches.length > 0;
@@ -288,7 +296,7 @@ export function ChatInput({
   const beamIntensity = isLoading ? 'thinking' : isFocused ? 'focus' : 'idle';
 
   const composerBody = (
-    <div className="w-full max-w-3xl mx-auto relative">
+    <div className="w-full max-w-3xl mx-auto relative z-30">
       {/* Alerts */}
       {uploadError && (
         <div className="mb-2.5 px-3.5 py-2 rounded-xl bg-rose-500/12 border border-rose-500/30 text-xs text-rose-200 flex items-center justify-between">
@@ -316,7 +324,7 @@ export function ChatInput({
           >
             <div className="px-3.5 py-2 border-b border-white/[0.06] flex items-center justify-between text-[11px] text-zinc-500">
               <span>Slash Commands</span>
-              <span className="font-mono text-[10px]">↑↓ · Enter to apply</span>
+              <span className="hidden sm:inline font-mono text-[10px]">↑↓ · Enter to apply</span>
             </div>
             <div className="max-h-60 overflow-y-auto p-1.5 space-y-0.5">
               {slashMatches.map((item, idx) => {
@@ -368,6 +376,198 @@ export function ChatInput({
         )}
       </AnimatePresence>
 
+      {/* Mobile-Only Compact Response Depth Dropdown (Top-Right Just Above Chatbox) */}
+      {selectedAgent === 'chat' && (
+        <div className="sm:hidden relative z-40 flex items-center justify-end mb-1.5 pr-0.5">
+          <div className="relative">
+            <button
+              ref={depthBtnRef}
+              type="button"
+              data-mobile-depth-trigger="true"
+              data-active-depth={responseDepth}
+              aria-label={`Chat response depth: ${activeDepth.label}`}
+              aria-expanded={isDepthOpen}
+              onClick={() => {
+                setIsSpecialistOpen(false);
+                setIsDepthOpen((prev) => !prev);
+              }}
+              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg bg-[#111114]/95 hover:bg-[#18181c] border border-white/[0.09] hover:border-white/[0.18] text-[11px] font-medium text-zinc-200 transition-colors cursor-pointer"
+            >
+              <SlidersHorizontal className="w-3 h-3 text-zinc-400 shrink-0" />
+              <span>{activeDepth.label}</span>
+              <ChevronDown
+                className={`w-3 h-3 text-zinc-500 shrink-0 transition-transform duration-150 ${
+                  isDepthOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            <MorphingPopover
+              isOpen={isDepthOpen}
+              onClose={() => setIsDepthOpen(false)}
+              align="right"
+              side={variant === 'hero' ? 'bottom' : 'top'}
+              triggerRef={depthBtnRef}
+              className="w-60 p-1.5"
+            >
+              <div className="px-2.5 py-1.5 flex items-center justify-between text-[11px] text-zinc-500 border-b border-white/[0.06] mb-1">
+                <span>Response Depth</span>
+                <span className="font-mono text-[10px]">Chat</span>
+              </div>
+              <div
+                className="space-y-0.5"
+                role="menu"
+                aria-label="Chat response depth options"
+              >
+                {CHAT_RESPONSE_DEPTH_OPTIONS.map((opt) => {
+                  const active = responseDepth === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={active}
+                      data-mobile-depth-option={opt.id}
+                      onClick={() => {
+                        onSelectResponseDepth(opt.id);
+                        setIsDepthOpen(false);
+                      }}
+                      className={`w-full flex items-start justify-between gap-2 px-2.5 py-2 rounded-lg text-left transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-white/[0.1] text-white'
+                          : 'text-zinc-300 hover:bg-white/[0.05] hover:text-white'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium">{opt.label}</div>
+                        <div className="text-[10px] text-zinc-500 leading-snug">
+                          {opt.description}
+                        </div>
+                      </div>
+                      {active && (
+                        <Check className="w-3.5 h-3.5 text-white shrink-0 mt-0.5" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </MorphingPopover>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile-Only Compact Image Options Dropdown (Top-Right Just Above Chatbox) */}
+      {selectedAgent === 'image' && (
+        <div className="sm:hidden relative z-40 flex items-center justify-end mb-1.5 pr-0.5">
+          <div className="relative">
+            <button
+              ref={imageOptsBtnRef}
+              type="button"
+              data-mobile-image-options-trigger="true"
+              data-active-aspect={imageAspectRatio}
+              data-active-style={imageStyle}
+              aria-label={`Image options: ${imageAspectRatio}, ${imageStyle}`}
+              aria-expanded={isImageOptsOpen}
+              onClick={() => {
+                setIsSpecialistOpen(false);
+                setIsImageOptsOpen((prev) => !prev);
+              }}
+              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg bg-[#111114]/95 hover:bg-[#18181c] border border-white/[0.09] hover:border-white/[0.18] text-[11px] font-medium text-zinc-200 transition-colors cursor-pointer"
+            >
+              <SlidersHorizontal className="w-3 h-3 text-zinc-400 shrink-0" />
+              <span className="font-mono tabular-nums">{imageAspectRatio}</span>
+              <span className="text-zinc-500">·</span>
+              <span>{imageStyle}</span>
+              <ChevronDown
+                className={`w-3 h-3 text-zinc-500 shrink-0 transition-transform duration-150 ${
+                  isImageOptsOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            <MorphingPopover
+              isOpen={isImageOptsOpen}
+              onClose={() => setIsImageOptsOpen(false)}
+              align="right"
+              side={variant === 'hero' ? 'bottom' : 'top'}
+              triggerRef={imageOptsBtnRef}
+              className="w-64 p-2.5"
+            >
+              <div className="pb-1.5 mb-2 flex items-center justify-between text-[11px] text-zinc-500 border-b border-white/[0.06]">
+                <span>Image Settings</span>
+                <span className="font-mono text-[10px]">
+                  {imageAspectRatio} · {imageStyle}
+                </span>
+              </div>
+
+              <div className="space-y-2.5">
+                <div>
+                  <div className="text-[10px] font-medium uppercase tracking-wider text-zinc-500 mb-1.5">
+                    Aspect Ratio
+                  </div>
+                  <div
+                    role="group"
+                    aria-label="Mobile image aspect ratio"
+                    className="grid grid-cols-4 gap-1 p-0.5 rounded-lg bg-[#18181c] border border-white/[0.07]"
+                  >
+                    {IMAGE_ASPECT_OPTIONS.map((ratio) => {
+                      const active = imageAspectRatio === ratio;
+                      return (
+                        <button
+                          key={ratio}
+                          type="button"
+                          data-mobile-image-aspect-option={ratio}
+                          aria-pressed={active}
+                          onClick={() => setImageAspectRatio(ratio)}
+                          className={`py-1 rounded-md text-[10.5px] font-mono tabular-nums text-center transition-colors cursor-pointer ${
+                            active
+                              ? 'bg-white text-zinc-950 font-semibold'
+                              : 'text-zinc-400 hover:text-zinc-100'
+                          }`}
+                        >
+                          {ratio}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] font-medium uppercase tracking-wider text-zinc-500 mb-1.5">
+                    Art Style
+                  </div>
+                  <div
+                    role="group"
+                    aria-label="Mobile image art style"
+                    className="flex flex-wrap gap-1"
+                  >
+                    {IMAGE_STYLE_OPTIONS.map((styleOpt) => {
+                      const active = imageStyle === styleOpt;
+                      return (
+                        <button
+                          key={styleOpt}
+                          type="button"
+                          data-mobile-image-style-option={styleOpt.toLowerCase()}
+                          aria-pressed={active}
+                          onClick={() => setImageStyle(styleOpt)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors cursor-pointer ${
+                            active
+                              ? 'bg-white text-zinc-950 border-white font-semibold'
+                              : 'bg-[#18181c] text-zinc-300 border-white/[0.07] hover:text-white hover:border-white/[0.16]'
+                          }`}
+                        >
+                          {styleOpt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </MorphingPopover>
+          </div>
+        </div>
+      )}
+
       {/* Floating 21st.dev BorderBeam Obsidian Composer Card */}
       <form
         onSubmit={handleSubmit}
@@ -387,7 +587,7 @@ export function ChatInput({
 
         {/* Attached File Preview Strip Inside Composer */}
         {attachedFiles.length > 0 && (
-          <div className="relative z-10 px-3.5 pt-3 flex flex-wrap gap-2">
+          <div className="relative z-10 px-3 pt-2.5 sm:px-3.5 sm:pt-3 flex flex-wrap gap-2">
             {attachedFiles.map((file) => {
               const isImage = file.mimeType.startsWith('image/');
               if (isImage) {
@@ -395,13 +595,13 @@ export function ChatInput({
                   <div
                     key={file.fileId}
                     data-attached-image-chip="true"
-                    className="inline-flex items-center gap-2 pl-1.5 pr-2 py-1.5 rounded-xl bg-[#18181c] border border-white/[0.12] hover:border-white/[0.22] text-xs text-zinc-100 transition-colors"
+                    className="inline-flex items-center gap-2 pl-1.5 pr-2 py-1.5 rounded-xl bg-[#18181c] border border-white/[0.12] hover:border-white/[0.22] text-xs text-zinc-100 transition-colors max-w-full"
                   >
                     <button
                       type="button"
                       onClick={() => onOpenAttachment?.(file)}
                       title={`Inspect ${file.originalFilename}`}
-                      className="inline-flex items-center gap-2.5 text-left cursor-pointer"
+                      className="inline-flex items-center gap-2.5 text-left cursor-pointer min-w-0"
                     >
                       <div className="w-8 h-8 rounded-lg overflow-hidden border border-white/10 bg-[#09090b] flex items-center justify-center shrink-0">
                         <img
@@ -411,7 +611,7 @@ export function ChatInput({
                         />
                       </div>
                       <div className="min-w-0">
-                        <div className="font-medium text-zinc-100 max-w-[180px] truncate text-xs">
+                        <div className="font-medium text-zinc-100 max-w-[150px] sm:max-w-[180px] truncate text-xs">
                           {file.originalFilename}
                         </div>
                         <div className="text-[10px] font-mono tabular-nums text-zinc-400">
@@ -426,7 +626,7 @@ export function ChatInput({
                         e.stopPropagation();
                         onRemoveAttachedFile(file.fileId);
                       }}
-                      className="p-1 rounded-md hover:bg-white/[0.08] text-zinc-400 hover:text-white cursor-pointer"
+                      className="p-1 rounded-md hover:bg-white/[0.08] text-zinc-400 hover:text-white cursor-pointer shrink-0"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -438,19 +638,19 @@ export function ChatInput({
                 <div
                   key={file.fileId}
                   data-attached-pdf-chip="true"
-                  className="inline-flex items-center gap-1.5 pl-2.5 pr-2 py-1.5 rounded-xl bg-[#18181c] border border-white/[0.1] hover:border-white/[0.22] text-xs text-zinc-200 transition-colors"
+                  className="inline-flex items-center gap-1.5 pl-2.5 pr-2 py-1.5 rounded-xl bg-[#18181c] border border-white/[0.1] hover:border-white/[0.22] text-xs text-zinc-200 transition-colors max-w-full"
                 >
                   <button
                     type="button"
                     onClick={() => onOpenAttachment?.(file)}
                     title={`Inspect ${file.originalFilename}`}
-                    className="inline-flex items-center gap-2 text-left cursor-pointer"
+                    className="inline-flex items-center gap-2 text-left cursor-pointer min-w-0"
                   >
                     <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span className="font-medium max-w-[180px] truncate">
+                    <span className="font-medium max-w-[140px] sm:max-w-[180px] truncate">
                       {file.originalFilename}
                     </span>
-                    <span className="text-[10px] font-mono tabular-nums text-zinc-400">
+                    <span className="text-[10px] font-mono tabular-nums text-zinc-400 shrink-0">
                       {file.pageCount ? `${file.pageCount}p · ${file.chunkCount} ch` : 'ready'}
                     </span>
                   </button>
@@ -506,7 +706,7 @@ export function ChatInput({
           )}
 
         {/* Auto-Expanding Prompt Textarea */}
-        <div className="relative z-10 px-4 pt-3.5 pb-2">
+        <div className="relative z-10 px-3.5 pt-2.5 pb-1 sm:px-4 sm:pt-3.5 sm:pb-2">
           <textarea
             ref={textareaRef}
             rows={variant === 'hero' ? 2 : 1}
@@ -551,142 +751,146 @@ export function ChatInput({
                 ? 'Ask anything, or type / for specialists (Code, PDF, Slides, Search, Image)…'
                 : activePill.placeholder
             }
-            className="w-full bg-transparent text-sm sm:text-[15px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none resize-none leading-relaxed"
+            className="w-full bg-transparent text-base sm:text-[15px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none resize-none leading-relaxed"
           />
         </div>
 
-        {/* Integrated Bottom Action Bar */}
-        <div className="relative z-10 px-3 pb-2.5 pt-1 flex flex-wrap items-center justify-between gap-2">
-          {/* Left Tools: Attach, Voice & Compact Specialist MorphingPopover */}
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
-              title="Attach PDF (RAG) or Image (Vision OCR)"
-              aria-label="Attach file"
-              className="h-8 w-8 rounded-lg bg-transparent hover:bg-white/[0.07] text-zinc-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-40 cursor-pointer shrink-0"
-            >
-              {isUploading ? (
-                <Loader2 className="w-4 h-4 animate-spin text-white" />
-              ) : (
-                <Paperclip className="w-4 h-4" />
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={handleToggleVoice}
-              title="Voice dictation"
-              aria-label="Voice dictation"
-              className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer shrink-0 ${
-                isRecordingVoice
-                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                  : 'bg-transparent hover:bg-white/[0.07] text-zinc-400 hover:text-white'
-              }`}
-            >
-              {isRecordingVoice ? (
-                <MicOff className="w-4 h-4" />
-              ) : (
-                <Mic className="w-4 h-4" />
-              )}
-            </button>
-
-            <span aria-hidden="true" className="h-4 w-px bg-white/[0.08] mx-0.5" />
-
-            {/* Compact Specialist Mode Switcher (MorphingPopover) */}
-            <div className="relative" data-agent-selector-bar="true">
+        {/* Integrated Bottom Action Bar: compact mode strip + clean primary row on mobile, single row on sm+ desktop */}
+        <div className="relative z-10 px-3 pb-2.5 pt-1">
+          <div className="relative flex flex-wrap items-center justify-between gap-y-2 gap-x-2">
+            {/* Left Tools: Attach, Voice & Compact Specialist MorphingPopover */}
+            <div className="order-2 sm:order-1 flex items-center gap-1 sm:gap-1.5 min-w-0">
               <button
-                ref={specialistBtnRef}
                 type="button"
-                data-specialist-menu-trigger="true"
-                data-active-agent={selectedAgent}
-                aria-expanded={isSpecialistOpen}
-                onClick={() => setIsSpecialistOpen((prev) => !prev)}
-                className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-[#18181c] hover:bg-[#202026] border border-white/[0.09] hover:border-white/[0.18] text-xs font-medium text-zinc-100 transition-colors whitespace-nowrap cursor-pointer"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+                title="Attach PDF (RAG) or Image (Vision OCR)"
+                aria-label="Attach file"
+                className="h-8 w-8 rounded-lg bg-transparent hover:bg-white/[0.07] text-zinc-400 hover:text-white flex items-center justify-center transition-colors disabled:opacity-40 cursor-pointer shrink-0"
               >
-                <span className="text-zinc-200">
-                  {getSpecialistIcon(selectedAgent, 'w-3.5 h-3.5')}
-                </span>
-                <span>{activePill.label}</span>
-                <span className="text-[10px] font-mono tabular-nums text-zinc-400">
-                  {activePill.creditCostLabel}
-                </span>
-                <ChevronDown
-                  className={`w-3 h-3 text-zinc-500 transition-transform duration-150 ${
-                    isSpecialistOpen ? 'rotate-180' : ''
-                  }`}
-                />
+                {isUploading ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                ) : (
+                  <Paperclip className="w-4 h-4" />
+                )}
               </button>
 
-              <MorphingPopover
-                isOpen={isSpecialistOpen}
-                onClose={() => setIsSpecialistOpen(false)}
-                align="left"
-                side="top"
-                triggerRef={specialistBtnRef}
-                className="w-80 p-1.5"
+              <button
+                type="button"
+                onClick={handleToggleVoice}
+                title="Voice dictation"
+                aria-label="Voice dictation"
+                className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer shrink-0 ${
+                  isRecordingVoice
+                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                    : 'bg-transparent hover:bg-white/[0.07] text-zinc-400 hover:text-white'
+                }`}
               >
-                <div className="px-2.5 py-1.5 flex items-center justify-between text-[11px] text-zinc-500 border-b border-white/[0.06] mb-1">
-                  <span>Select Specialist Mode</span>
-                  <span className="font-mono text-[10px]">or type /</span>
-                </div>
-                <div className="space-y-0.5 max-h-72 overflow-y-auto">
-                  {AGENT_SELECTOR_PILLS.map((pill) => {
-                    const isSelected = pill.id === selectedAgent;
-                    return (
-                      <button
-                        key={pill.id}
-                        type="button"
-                        data-agent-pill={pill.id}
-                        aria-pressed={isSelected}
-                        onClick={() => {
-                          onSelectAgent(pill.id);
-                          setIsSpecialistOpen(false);
-                          requestAnimationFrame(() => textareaRef.current?.focus());
-                        }}
-                        className={`w-full flex items-center justify-between gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors cursor-pointer ${
-                          isSelected
-                            ? 'bg-white/[0.1] text-white'
-                            : 'text-zinc-300 hover:bg-white/[0.05] hover:text-white'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <span
-                            className={`shrink-0 ${
-                              isSelected ? 'text-white' : 'text-zinc-400'
-                            }`}
-                          >
-                            {getSpecialistIcon(pill.id, 'w-3.5 h-3.5')}
-                          </span>
-                          <div className="min-w-0">
-                            <div className="text-xs font-medium truncate">
-                              {pill.label}
-                            </div>
-                            <div className="text-[10px] text-zinc-500 truncate">
-                              {pill.id === 'chat'
-                                ? 'Smart auto-routing + 5-mode reasoning'
-                                : pill.placeholder}
+                {isRecordingVoice ? (
+                  <MicOff className="w-4 h-4" />
+                ) : (
+                  <Mic className="w-4 h-4" />
+                )}
+              </button>
+
+              <span aria-hidden="true" className="h-4 w-px bg-white/[0.08] mx-0.5 shrink-0" />
+
+              {/* Compact Specialist Mode Switcher (MorphingPopover) */}
+              <div className="sm:relative min-w-0" data-agent-selector-bar="true">
+                <button
+                  ref={specialistBtnRef}
+                  type="button"
+                  data-specialist-menu-trigger="true"
+                  data-active-agent={selectedAgent}
+                  aria-expanded={isSpecialistOpen}
+                  onClick={() => {
+                    setIsDepthOpen(false);
+                    setIsImageOptsOpen(false);
+                    setIsSpecialistOpen((prev) => !prev);
+                  }}
+                  className="inline-flex items-center gap-1.5 h-8 max-w-full px-2.5 rounded-lg bg-[#18181c] hover:bg-[#202026] border border-white/[0.09] hover:border-white/[0.18] text-xs font-medium text-zinc-100 transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <span className="text-zinc-200 shrink-0">
+                    {getSpecialistIcon(selectedAgent, 'w-3.5 h-3.5')}
+                  </span>
+                  <span className="truncate">{activePill.label}</span>
+                  <span className="hidden min-[360px]:inline text-[10px] font-mono tabular-nums text-zinc-400 shrink-0">
+                    {activePill.creditCostLabel}
+                  </span>
+                  <ChevronDown
+                    className={`w-3 h-3 text-zinc-500 shrink-0 transition-transform duration-150 ${
+                      isSpecialistOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+
+                <MorphingPopover
+                  isOpen={isSpecialistOpen}
+                  onClose={() => setIsSpecialistOpen(false)}
+                  align="left"
+                  side={variant === 'hero' ? 'bottom' : 'top'}
+                  triggerRef={specialistBtnRef}
+                  className="w-full sm:w-80 p-1.5"
+                >
+                  <div className="px-2.5 py-1.5 flex items-center justify-between text-[11px] text-zinc-500 border-b border-white/[0.06] mb-1">
+                    <span>Select Specialist Mode</span>
+                    <span className="font-mono text-[10px]">or type /</span>
+                  </div>
+                  <div className="space-y-0.5 max-h-64 sm:max-h-72 overflow-y-auto">
+                    {AGENT_SELECTOR_PILLS.map((pill) => {
+                      const isSelected = pill.id === selectedAgent;
+                      return (
+                        <button
+                          key={pill.id}
+                          type="button"
+                          data-agent-pill={pill.id}
+                          aria-pressed={isSelected}
+                          onClick={() => {
+                            onSelectAgent(pill.id);
+                            setIsSpecialistOpen(false);
+                            requestAnimationFrame(() => textareaRef.current?.focus());
+                          }}
+                          className={`w-full flex items-center justify-between gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors cursor-pointer ${
+                            isSelected
+                              ? 'bg-white/[0.1] text-white'
+                              : 'text-zinc-300 hover:bg-white/[0.05] hover:text-white'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span
+                              className={`shrink-0 ${
+                                isSelected ? 'text-white' : 'text-zinc-400'
+                              }`}
+                            >
+                              {getSpecialistIcon(pill.id, 'w-3.5 h-3.5')}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium truncate">
+                                {pill.label}
+                              </div>
+                              <div className="text-[10px] text-zinc-500 truncate">
+                                {pill.id === 'chat'
+                                  ? 'Smart auto-routing + 5-mode reasoning'
+                                  : pill.placeholder}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                        <span className="text-[10px] font-mono tabular-nums text-zinc-400 shrink-0">
-                          {pill.creditCostLabel}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </MorphingPopover>
+                          <span className="text-[10px] font-mono tabular-nums text-zinc-400 shrink-0">
+                            {pill.creditCostLabel}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </MorphingPopover>
+              </div>
             </div>
-          </div>
 
-          {/* Right Controls: Spring Depth Switcher + Pure White Circular Send */}
-          <div className="flex items-center gap-2">
+            {/* Mode Options: Inline right on sm+ desktop (moved to compact top-right dropdown on mobile) */}
             {selectedAgent === 'image' && (
               <div
                 data-image-aspect-picker="true"
-                className="flex flex-wrap items-center gap-1.5"
+                className="hidden sm:flex sm:order-2 sm:w-auto sm:ml-auto flex-wrap items-center gap-1.5"
               >
                 <div
                   role="group"
@@ -702,7 +906,7 @@ export function ChatInput({
                         data-image-aspect-option={ratio}
                         aria-pressed={active}
                         onClick={() => setImageAspectRatio(ratio)}
-                        className={`px-2 py-1 rounded-md text-[10px] font-mono tabular-nums transition-colors cursor-pointer ${
+                        className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md text-[10px] font-mono tabular-nums text-center transition-colors cursor-pointer ${
                           active
                             ? 'bg-white text-zinc-950 font-semibold'
                             : 'text-zinc-400 hover:text-zinc-100'
@@ -717,7 +921,7 @@ export function ChatInput({
                 <div
                   role="group"
                   aria-label="Image art style"
-                  className="hidden sm:inline-flex items-center p-0.5 rounded-lg bg-[#18181c] border border-white/[0.07]"
+                  className="inline-flex items-center p-0.5 rounded-lg bg-[#18181c] border border-white/[0.07] max-w-full overflow-x-auto"
                 >
                   {IMAGE_STYLE_OPTIONS.map((styleOpt) => {
                     const active = imageStyle === styleOpt;
@@ -728,7 +932,7 @@ export function ChatInput({
                         data-image-style-option={styleOpt.toLowerCase()}
                         aria-pressed={active}
                         onClick={() => setImageStyle(styleOpt)}
-                        className={`px-2 py-1 rounded-md text-[10px] font-medium transition-colors cursor-pointer ${
+                        className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md text-[10px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
                           active
                             ? 'bg-white text-zinc-950 font-semibold'
                             : 'text-zinc-400 hover:text-zinc-100'
@@ -743,78 +947,83 @@ export function ChatInput({
             )}
 
             {selectedAgent === 'chat' && (
-              <div
-                role="group"
-                aria-label="Chat response depth"
-                data-chat-depth-selector="true"
-                className="inline-flex items-center p-0.5 rounded-lg bg-[#18181c] border border-white/[0.07]"
-              >
-                {CHAT_RESPONSE_DEPTH_OPTIONS.map((opt) => {
-                  const active = responseDepth === opt.id;
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      data-depth-option={opt.id}
-                      aria-pressed={active}
-                      title={opt.description}
-                      onClick={() => onSelectResponseDepth(opt.id)}
-                      className="group relative isolate px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap cursor-pointer"
-                    >
-                      {active && (
-                        <motion.span
-                          layoutId={`chat-depth-pill-${variant}`}
-                          transition={{
-                            type: 'spring',
-                            stiffness: 500,
-                            damping: 36,
-                          }}
-                          className="absolute inset-0 z-0 rounded-md bg-white shadow-sm"
-                        />
-                      )}
-                      <span
-                        className={`relative z-10 ${
-                          active
-                            ? 'text-[#09090b] font-semibold'
-                            : 'text-zinc-400 group-hover:text-zinc-100'
-                        }`}
+              <div className="hidden sm:flex sm:order-2 sm:w-auto sm:ml-auto items-center justify-end">
+                <div
+                  role="group"
+                  aria-label="Chat response depth"
+                  data-chat-depth-selector="true"
+                  className="inline-flex items-center p-0.5 rounded-lg bg-[#18181c] border border-white/[0.07]"
+                >
+                  {CHAT_RESPONSE_DEPTH_OPTIONS.map((opt) => {
+                    const active = responseDepth === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        data-depth-option={opt.id}
+                        aria-pressed={active}
+                        title={opt.description}
+                        onClick={() => onSelectResponseDepth(opt.id)}
+                        className="group relative isolate flex items-center justify-center px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-md text-[10.5px] sm:text-[11px] leading-tight font-medium whitespace-nowrap cursor-pointer"
                       >
-                        {opt.label}
-                      </span>
-                    </button>
-                  );
-                })}
+                        {active && (
+                          <motion.span
+                            layoutId={`chat-depth-pill-${variant}`}
+                            transition={{
+                              type: 'spring',
+                              stiffness: 500,
+                              damping: 36,
+                            }}
+                            className="absolute inset-0 z-0 rounded-md bg-white shadow-sm"
+                          />
+                        )}
+                        <span
+                          className={`relative z-10 ${
+                            active
+                              ? 'text-[#09090b] font-semibold'
+                              : 'text-zinc-400 group-hover:text-zinc-100'
+                          }`}
+                        >
+                          {opt.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
-            {isLoading && onStopGeneration ? (
-              <button
-                type="button"
-                onClick={onStopGeneration}
-                aria-label="Stop generating"
-                title="Stop generating"
-                data-composer-stop="true"
-                className="inline-flex items-center gap-1.5 h-8 px-3 rounded-full bg-white hover:bg-zinc-200 text-zinc-950 text-xs font-semibold transition-colors cursor-pointer shrink-0"
-              >
-                <Square className="w-3 h-3 fill-current" />
-                <span>Stop</span>
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!prompt.trim() || isLoading || isUploading}
-                aria-label="Send message"
-                title={isUploading ? 'Indexing attachment…' : 'Send message'}
-                data-composer-send="true"
-                className="h-8 w-8 rounded-full bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 flex items-center justify-center transition-colors cursor-pointer disabled:cursor-not-allowed shrink-0"
-              >
-                {isLoading || isUploading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <ArrowUp className="w-4 h-4 stroke-[2.5]" />
-                )}
-              </button>
-            )}
+            {/* Primary CTA: Pinned flush bottom-right on all screen sizes */}
+            <div className="order-3 ml-auto sm:ml-0 flex items-center shrink-0">
+              {isLoading && onStopGeneration ? (
+                <button
+                  type="button"
+                  onClick={onStopGeneration}
+                  aria-label="Stop generating"
+                  title="Stop generating"
+                  data-composer-stop="true"
+                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-full bg-white hover:bg-zinc-200 text-zinc-950 text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                >
+                  <Square className="w-3 h-3 fill-current" />
+                  <span>Stop</span>
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={!prompt.trim() || isLoading || isUploading}
+                  aria-label="Send message"
+                  title={isUploading ? 'Indexing attachment…' : 'Send message'}
+                  data-composer-send="true"
+                  className="h-8 w-8 rounded-full bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-500 text-zinc-950 flex items-center justify-center transition-colors cursor-pointer disabled:cursor-not-allowed shrink-0"
+                >
+                  {isLoading || isUploading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                  )}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </form>
@@ -826,7 +1035,7 @@ export function ChatInput({
   }
 
   return (
-    <div className="shrink-0 px-4 sm:px-6 pb-4 pt-2 bg-gradient-to-t from-[#09090b] via-[#09090b]/95 to-transparent">
+    <div className="shrink-0 px-3 sm:px-6 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:pb-4 pt-2 bg-gradient-to-t from-[#09090b] via-[#09090b]/95 to-transparent">
       {composerBody}
     </div>
   );
