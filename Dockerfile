@@ -4,7 +4,7 @@ FROM node:22-slim AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm install --include=dev
+RUN npm install --include=dev --legacy-peer-deps
 
 COPY . .
 RUN npm run build && npm run build:workspaces
@@ -23,6 +23,7 @@ COPY --from=builder /app/server.ts ./server.ts
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/backend ./backend
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
+COPY --from=builder /app/tsconfig.base.json ./tsconfig.base.json
 
 EXPOSE 3000
 

@@ -29,16 +29,16 @@ describe('SEO, Sitemap, Robots.txt & Render Canonical Origin Helpers (Fix #38)',
       resolvePublicSiteUrl({
         PUBLIC_APP_URL: 'https://kartik.ai/',
         APP_URL: 'https://app.kartik.ai',
-        RENDER_EXTERNAL_URL: 'https://kartik-ai.onrender.com',
+        RENDER_EXTERNAL_URL: 'https://kartik-ai-app.onrender.com',
       }),
       'https://kartik.ai',
     );
 
     assert.equal(
       resolvePublicSiteUrl({
-        RENDER_EXTERNAL_URL: 'https://kartik-ai.onrender.com/',
+        RENDER_EXTERNAL_URL: 'https://kartik-ai-app.onrender.com/',
       }),
-      'https://kartik-ai.onrender.com',
+      'https://kartik-ai-app.onrender.com',
     );
 
     assert.equal(
@@ -56,22 +56,22 @@ describe('SEO, Sitemap, Robots.txt & Render Canonical Origin Helpers (Fix #38)',
   });
 
   it('builds a valid robots.txt blocking private API/download routes and declaring sitemap', () => {
-    const txt = buildRobotsTxt('https://kartik-ai.onrender.com/');
+    const txt = buildRobotsTxt('https://kartik-ai-app.onrender.com/');
     assert.match(txt, /User-agent: \*/);
     assert.match(txt, /Allow: \//);
     assert.match(txt, /Disallow: \/api\//);
     assert.match(txt, /Disallow: \/__downloads\//);
-    assert.match(txt, /Sitemap: https:\/\/kartik-ai\.onrender\.com\/sitemap\.xml/);
+    assert.match(txt, /Sitemap: https:\/\/kartik-ai-app\.onrender\.com\/sitemap\.xml/);
   });
 
   it('builds valid XML sitemap with canonical loc and image preview metadata', () => {
-    const xml = buildSitemapXml('https://kartik-ai.onrender.com', '2026-11-24');
+    const xml = buildSitemapXml('https://kartik-ai-app.onrender.com', '2026-11-24');
     assert.match(xml, /^<\?xml version="1\.0" encoding="UTF-8"\?>/);
-    assert.match(xml, /<loc>https:\/\/kartik-ai\.onrender\.com\/<\/loc>/);
+    assert.match(xml, /<loc>https:\/\/kartik-ai-app\.onrender\.com\/<\/loc>/);
     assert.match(xml, /<lastmod>2026-11-24<\/lastmod>/);
     assert.match(
       xml,
-      /<image:loc>https:\/\/kartik-ai\.onrender\.com\/og-image\.jpg<\/image:loc>/,
+      /<image:loc>https:\/\/kartik-ai-app\.onrender\.com\/og-image\.jpg<\/image:loc>/,
     );
   });
 
@@ -93,8 +93,8 @@ describe('SEO, Sitemap, Robots.txt & Render Canonical Origin Helpers (Fix #38)',
   it('rewrites canonical URLs and injects google-site-verification safely into HTML', () => {
     const baseHtml = [
       '<html><head>',
-      '<link rel="canonical" href="https://kartik-ai.onrender.com/" />',
-      '<meta property="og:image" content="https://kartik-ai.onrender.com/og-image.jpg" />',
+      '<link rel="canonical" href="https://kartik-ai-app.onrender.com/" />',
+      '<meta property="og:image" content="https://kartik-ai-app.onrender.com/og-image.jpg" />',
       '</head><body></body></html>',
     ].join('\n');
 

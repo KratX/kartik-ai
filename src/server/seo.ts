@@ -6,7 +6,7 @@
  * Pure, decoupled helpers verified by unit tests (`src/server/seo.test.ts`).
  */
 
-export const DEFAULT_PRODUCTION_SITE_URL = 'https://kartik-ai.onrender.com';
+export const DEFAULT_PRODUCTION_SITE_URL = 'https://kartik-ai-app.onrender.com';
 
 export const SEO_BRAND_NAME = 'Kartik.ai';
 export const SEO_TITLE = 'Kartik.ai — Multi-Agent AI Workspace';
