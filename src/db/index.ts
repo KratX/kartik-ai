@@ -4,7 +4,7 @@ import { Pool } from 'pg';
 import { resolvePostgresTlsConfig } from '../../backend/shared/database/index.js';
 import * as schema from './schema.ts';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 declare global {
   // eslint-disable-next-line no-var

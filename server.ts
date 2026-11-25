@@ -967,6 +967,9 @@ async function startServer() {
     console.log(
       `[Kartik.ai] Demo/local full-stack platform server ready at http://localhost:${port}`,
     );
+    console.log(
+      `[Kartik.ai] Active providers: ${sharedPlatformRuntime.getStartupDiagnosticsSummary()}`,
+    );
   });
 }
 

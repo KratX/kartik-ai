@@ -5,6 +5,7 @@ import {
   RedisKeys,
   REDIS_TTL_SECONDS,
   resolveRedisTlsOptions,
+  formatRedisConnectionError,
   parseRespFrame,
   RespRedisClient,
   ResilientRedisClient,
@@ -216,6 +217,20 @@ describe('@kartik/shared/redis key contract & TTL builders (1.5.a)', () => {
 
     const health = await resilient.checkPrimaryHealth();
     assert.equal(health.ok, false);
+    assert.ok(health.error && health.error.length > 0);
     await resilient.close();
+  });
+
+  it('Fix #36: formatRedisConnectionError unwraps Node AggregateError with empty message cleanly', () => {
+    const inner1 = Object.assign(new Error('connect ECONNREFUSED ::1:6379'), {
+      code: 'ECONNREFUSED',
+    });
+    const inner2 = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:6379'), {
+      code: 'ECONNREFUSED',
+    });
+    const agg = new AggregateError([inner1, inner2], '');
+    const formatted = formatRedisConnectionError(agg);
+    assert.ok(formatted.includes('ECONNREFUSED'));
+    assert.ok(formatted.includes('127.0.0.1:6379'));
   });
 });

@@ -311,6 +311,39 @@ export interface RedisHealthResult {
 }
 
 /**
+ * Formats Node.js socket / TLS / AggregateError failures without ever returning an empty string.
+ * (Node 20+ throws `AggregateError` with `message === ""` when connecting to dual-stack or multi-IP hosts.)
+ */
+export function formatRedisConnectionError(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const maybeAgg = err as {
+      readonly message?: unknown;
+      readonly code?: unknown;
+      readonly errors?: ReadonlyArray<unknown>;
+    };
+    if (Array.isArray(maybeAgg.errors) && maybeAgg.errors.length > 0) {
+      const parts = maybeAgg.errors
+        .slice(0, 3)
+        .map((inner) => formatRedisConnectionError(inner))
+        .filter((s) => s.length > 0);
+      if (parts.length > 0) {
+        return parts.join('; ');
+      }
+    }
+    const msg = typeof maybeAgg.message === 'string' ? maybeAgg.message.trim() : '';
+    const code = typeof maybeAgg.code === 'string' ? maybeAgg.code.trim() : '';
+    if (msg) {
+      return code && !msg.includes(code) ? `${code}: ${msg}` : msg;
+    }
+    if (code) {
+      return code;
+    }
+  }
+  const str = String(err ?? '').trim();
+  return str && str !== '[object Object]' ? str : 'Redis connection failed';
+}
+
+/**
  * Zero-dependency RESP2 TCP/TLS Redis client using `node:net` and `node:tls`.
  * Reuses an authenticated persistent socket across pipelined commands (cutting
  * remote TLS latency ~3.5x and eliminating redundant AUTH round-trips on Upstash),
@@ -345,7 +378,11 @@ export class RespRedisClient implements RedisClient {
     this.password = parsed.password ? decodeURIComponent(parsed.password) : null;
     const pathDb = parsed.pathname.replace(/^\/+/, '');
     this.dbIndex = pathDb ? Number.parseInt(pathDb, 10) || 0 : 0;
-    this.timeoutMs = options.timeoutMs ?? (this.useTls ? 5_000 : 4_000);
+    this.timeoutMs = options.timeoutMs ?? (this.useTls ? 8_000 : 4_000);
+  }
+
+  public get endpointSummary(): string {
+    return `${this.host}:${this.port}${this.useTls ? ' (TLS)' : ''}`;
   }
 
   private destroySocket(reason?: Error): void {
@@ -874,13 +911,17 @@ export class ResilientRedisClient implements RedisClient {
     return this.nowFn() >= this.primaryDegradedUntilMs;
   }
 
+  public get endpointSummary(): string {
+    return this.primary.endpointSummary;
+  }
+
   private markPrimaryDegraded(err: unknown): void {
     const wasHealthy = this.shouldUsePrimary();
     this.primaryDegradedUntilMs = this.nowFn() + this.retryCooldownMs;
     if (wasHealthy && this.retryCooldownMs > 0) {
-      const msg = err instanceof Error ? err.message : 'Redis command failed';
+      const detail = formatRedisConnectionError(err);
       console.warn(
-        `[kartik-redis] primary unreachable (${msg}); using in-memory fallback for ${Math.round(this.retryCooldownMs / 1000)}s.`,
+        `[kartik-redis] primary ${this.primary.endpointSummary} unreachable (${detail}); using in-memory fallback for ${Math.round(this.retryCooldownMs / 1000)}s.`,
       );
     }
   }
@@ -898,7 +939,7 @@ export class ResilientRedisClient implements RedisClient {
       return {
         ok: false,
         latencyMs: Math.max(0, this.nowFn() - started),
-        error: err instanceof Error ? err.message : 'Redis PING failed',
+        error: formatRedisConnectionError(err),
       };
     }
   }
@@ -1036,7 +1077,7 @@ export function createRedisClientFromUrl(
   if (options?.forceInMemory || cleanUrl.length === 0) {
     return new InMemoryRedisClient();
   }
-  const defaultTimeout = cleanUrl.startsWith('rediss://') ? 5_000 : 2_500;
+  const defaultTimeout = cleanUrl.startsWith('rediss://') ? 8_000 : 2_500;
   return new ResilientRedisClient(cleanUrl, {
     timeoutMs: options?.timeoutMs ?? defaultTimeout,
     ...(options?.retryCooldownMs !== undefined

@@ -363,17 +363,21 @@ export class KartikPlatformRuntime {
         !lower.includes('0123456789abcdef')
       );
     };
+    const cleanEnv = (v?: string) =>
+      (v ?? '').trim().replace(/^["']|["']$/g, '').toLowerCase();
     const explicitMockAi =
-      process.env.MOCK_AI === 'true' || process.env.AI_PROVIDER_MODE === 'mock';
+      cleanEnv(process.env.MOCK_AI) === 'true' ||
+      cleanEnv(process.env.AI_PROVIDER_MODE) === 'mock';
     const hasLiveAiKey =
       !explicitMockAi && isUsableApiKey(process.env.GEMINI_API_KEY);
     const hasCloudflareImage = hasCloudflareImageCredentials(process.env);
+    const normalizedImageProvider = cleanEnv(process.env.IMAGE_PROVIDER);
     const configuredImageProvider: 'mock' | 'live' | 'cloudflare' =
-      process.env.IMAGE_PROVIDER === 'mock'
+      normalizedImageProvider === 'mock'
         ? 'mock'
-        : process.env.IMAGE_PROVIDER === 'cloudflare'
+        : normalizedImageProvider === 'cloudflare'
           ? 'cloudflare'
-          : process.env.IMAGE_PROVIDER === 'live'
+          : normalizedImageProvider === 'live'
             ? 'live'
             : hasCloudflareImage
               ? 'cloudflare'
@@ -445,6 +449,43 @@ export class KartikPlatformRuntime {
         return obj.body;
       },
     });
+  }
+
+  /**
+   * Returns a single redacted, secret-free summary of active providers for startup logs.
+   */
+  public getStartupDiagnosticsSummary(): string {
+    const clean = (v?: string) => (v ?? '').trim().replace(/^["']|["']$/g, '');
+    const aiMode =
+      clean(process.env.MOCK_AI).toLowerCase() === 'true' ||
+      clean(process.env.AI_PROVIDER_MODE).toLowerCase() === 'mock'
+        ? 'mock'
+        : 'live';
+    const imgProvider =
+      (
+        this.graphExecutor as unknown as {
+          deps?: { imageProvider?: { providerName?: string } };
+        }
+      ).deps?.imageProvider?.providerName ?? 'unknown';
+    const redisSummary =
+      (this.redisClient as unknown as { endpointSummary?: string }).endpointSummary ??
+      'in-memory';
+    const qdrantHost = (() => {
+      const rawUrl = clean(process.env.QDRANT_URL);
+      if (!rawUrl) return 'local-disk';
+      try {
+        return new URL(rawUrl).hostname;
+      } catch {
+        return 'configured';
+      }
+    })();
+    let billingMode = 'mock';
+    try {
+      billingMode = this.resolveRazorpayBillingConfig().billingMode;
+    } catch {
+      billingMode = 'invalid';
+    }
+    return `ai=${aiMode}, image=${imgProvider}, redis=${redisSummary}, qdrant=${qdrantHost}, billing=${billingMode}`;
   }
 
   private trackPersistence(task: () => Promise<void>): void {
