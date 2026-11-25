@@ -250,7 +250,7 @@ function describeFirebasePopupError(err: unknown): {
     const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
     return {
       code,
-      message: `Domain "${host}" is not yet authorized in Firebase Console (gen-lang-client-0503610321 → Authentication → Settings → Authorized domains). Add "${host}" there to enable Google popup sign-in.`,
+      message: `Domain "${host}" is not yet authorized in Firebase Console (Authentication → Settings → Authorized domains). Add "${host}" there to enable Google popup sign-in.`,
     };
   }
 

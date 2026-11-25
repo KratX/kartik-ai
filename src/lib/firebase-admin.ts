@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { initializeApp, getApps } from 'firebase-admin/app';
+import { cert, getApps, initializeApp, type AppOptions } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 
 const PLACEHOLDER_PROJECT_IDS = new Set([
@@ -44,9 +44,40 @@ export function resolveFirebaseProjectId(): string | undefined {
   return undefined;
 }
 
-if (!getApps().length) {
+function buildFirebaseAdminOptions(): AppOptions | undefined {
   const projectId = resolveFirebaseProjectId();
-  initializeApp(projectId ? { projectId } : undefined);
+  const clientEmail = stripQuotes(process.env.FIREBASE_CLIENT_EMAIL);
+  const rawPrivateKey = stripQuotes(process.env.FIREBASE_PRIVATE_KEY);
+  const normalizedPrivateKey = rawPrivateKey.replace(/\\n/g, '\n');
+
+  const hasUsableServiceAccount =
+    Boolean(projectId) &&
+    clientEmail.includes('@') &&
+    !clientEmail.toLowerCase().includes('placeholder') &&
+    normalizedPrivateKey.includes('BEGIN PRIVATE KEY') &&
+    !normalizedPrivateKey.includes('REPLACE_WITH') &&
+    !normalizedPrivateKey.includes('placeholder');
+
+  if (hasUsableServiceAccount) {
+    try {
+      return {
+        projectId,
+        credential: cert({
+          projectId,
+          clientEmail,
+          privateKey: normalizedPrivateKey,
+        }),
+      };
+    } catch {
+      // Fall back to projectId-only mode for public-key ID token verification
+    }
+  }
+
+  return projectId ? { projectId } : undefined;
+}
+
+if (!getApps().length) {
+  initializeApp(buildFirebaseAdminOptions());
 }
 
 export const adminAuth = getAuth();

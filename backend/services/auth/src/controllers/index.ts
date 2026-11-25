@@ -94,16 +94,13 @@ export class AuthController {
       this.config.FIREBASE_PROJECT_ID !== 'kartik-mock-project' &&
       this.config.FIREBASE_PROJECT_ID !== 'your-firebase-project'
         ? this.config.FIREBASE_PROJECT_ID
-        : (process.env.VITE_FIREBASE_PROJECT_ID ?? 'gen-lang-client-0503610321');
+        : (process.env.VITE_FIREBASE_PROJECT_ID ?? '');
     const apiKey = process.env.VITE_FIREBASE_API_KEY ?? '';
     const authDomain =
-      process.env.VITE_FIREBASE_AUTH_DOMAIN ?? `${projectId}.firebaseapp.com`;
-    const appId =
-      process.env.VITE_FIREBASE_APP_ID ??
-      '1:1060248531936:web:d24b2cf4edc6e2e0e17185';
-    const oAuthClientId =
-      process.env.VITE_GOOGLE_OAUTH_CLIENT_ID ??
-      '1060248531936-vjt6g932mdfmsqrg5q9eos68iqpgep2p.apps.googleusercontent.com';
+      process.env.VITE_FIREBASE_AUTH_DOMAIN ??
+      (projectId ? `${projectId}.firebaseapp.com` : '');
+    const appId = process.env.VITE_FIREBASE_APP_ID ?? '';
+    const oAuthClientId = process.env.VITE_GOOGLE_OAUTH_CLIENT_ID ?? '';
 
     res.status(200).json(
       createSuccessEnvelope(traceId, {
