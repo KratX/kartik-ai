@@ -1,54 +1,41 @@
-# Cost and quota model
+# Cost and Quota Model
 
-**Verified:** 9 November 2026. **Re-check every figure in the provider console before provisioning** — free allowances change without notice, including mid-project.
+**Last Verified:** 25 November 2026 (live production deployment at [https://kartik-ai-app.onrender.com/](https://kartik-ai-app.onrender.com/)).
+**Note:** Always re-verify free-tier limits in each provider console — allowances can change without notice.
 
 ## Headline
 
-| | |
+| Metric | Value |
 |---|---|
-| Recurring infrastructure cost | **₹0** |
-| Optional spend | Domain, ~₹800/year |
-| Binding constraint | **Provider quota**, not money |
-| Billable exercise | AWS sprint, ~$35–40 for 14 days, then torn down |
+| Recurring monthly infrastructure cost | **₹0 / $0** |
+| Optional spend | Custom domain (~₹800/year, optional) |
+| Binding constraint | **Provider quotas & free-tier sleep timers**, not monthly hosting bills |
+| Billing safety | Razorpay **Test Mode only** (`rzp_test_*`); `rzp_live_*` is rejected in demo mode |
 
-## Architecture choice
+## Active Production Free-Tier Stack (`kartik-ai-app.onrender.com`)
 
-AWS cannot host the permanent demo: new accounts get a 6-month / $100–200 credit Free plan, and the tutorial's ECS stack runs ~$110–130/month — about 7–8 weeks of credits. The permanent demo therefore runs on one Oracle Always Free ARM VM (2 OCPU / 12 GB), with a managed-free profile as fallback and a bounded AWS sprint for the ECS artifacts.
-
-Full reasoning: [ADR 0003](decisions/0003-free-tier-deployment.md).
-
-## Verified inventory
-
-| Layer | Free option | Allowance | Main caveat |
+| Layer | Active Provider | Free-Tier Posture | Main Caveat & Mitigation |
 |---|---|---|---|
-| Compute | Oracle Always Free A1 | 2 OCPU / 12 GB ARM, 200 GB disk, ~10 TB/mo egress | Card required (not charged); idle reclamation; capacity at creation |
-| Compute | AWS Free plan | $100 credits (+$100), **6 months max** | Account closes after 6 months or when credits end |
-| Compute | Render free | 512 MB / 0.1 CPU, 750 h/mo | Sleeps after 15 min idle |
-| Database | Neon Postgres free (0.5 GB, 100 CU-hours/mo) | Compute-bound, not storage-bound | Scale-to-zero keeps it free; an always-open pool does not |
-| Database | Atlas Free (M0) | 512 MB, 100 ops/s | Shared tier; not used for Billing |
-| Cache/session | Redis on the VM | RAM-bound | You own persistence config |
-| Cache/session | Upstash free | 500 K commands/mo | Sessions + rate limits consume this quickly |
-| Vectors | Qdrant on the VM | RAM/disk-bound | — |
-| Vectors | Qdrant Cloud free | 1 GB, ~250 K vectors @768 | Suspends after ~1 week idle |
-| Objects | Cloudflare R2 | 10 GB, 1 M writes, 10 M reads, **$0 egress** | Standard class only |
-| DNS/TLS/CDN | Cloudflare free | DNS, universal TLS, CDN, basic WAF | — |
-| Chat/router | Groq free | ~30 RPM, ~1,000 req/day, ~200 K tokens/day per model | Limits vary per model |
-| Embeddings + images | Cloudflare Workers AI | 10,000 Neurons/day | Shared daily pool |
-| Search | Tavily | Free plan with a monthly credit cap | Confirm the current cap in the dashboard |
-| Payments | Razorpay test mode | Free and unlimited | Live mode has fees; never enabled on a public demo |
+| **App Compute & TLS** | **Render Free Web Service** (Node 22 multi-stage Docker) | 512 MB RAM, 750 hrs/mo, automatic HTTPS | Sleeps after 15 min idle; `/healthz` ready for optional UptimeRobot keep-alive |
+| **Database + Private Object Storage** | **Neon PostgreSQL Free** (`ap-southeast-1`) | 0.5 GB storage, scale-to-zero compute | Stores users, conversations, messages, ledger, **and** private file binaries (`private_objects` via `OBJECT_STORAGE_MODE=neon`) — eliminates needing S3/R2 |
+| **Cache & Rate / Budget Guard** | **Upstash Redis Free** (`rediss://` TLS) | 500K commands/mo | Wrapped by `ResilientRedisClient` with circuit-breaker cooldown & automatic in-memory fallback |
+| **Vector Search (PDF RAG)** | **Qdrant Cloud Free** | 1 GB cluster (`kartik_rag_chunks`) | Strict per-user & per-conversation payload filters; idle clusters wake/re-provision easily |
+| **Text, Router, Search & Embeddings** | **Google Gemini** (`gemini-3.1-flash-lite`, Search Grounding, `gemini-embedding-2`) | Free tier RPM/RPD | Guarded by `DAILY_LIVE_CALL_BUDGET`, `DAILY_PROVIDER_BUDGET_*`, and clean refund-on-error |
+| **Image Generation** | **Cloudflare Workers AI Free** (`@cf/black-forest-labs/flux-1-schnell`) | 10,000 Neurons/day | Generates live 16:9 PNGs; refunds reserved 10 credits automatically on provider error |
+| **Authentication** | **Firebase Authentication Spark (Free)** (`kartik-ai-app`) | Generous MAU allowance | Service-account Admin SDK (`cert`) verification + isolated guest workspaces |
+| **Payments** | **Razorpay Test Mode** | Free & unlimited simulated orders | Server-priced `planId`-only checkout + strict HMAC-SHA256 verification |
 
-## Quota policy (the part that actually protects the demo)
+*(Alternative self-hosted topologies — Oracle Always Free ARM VM + Docker Compose + Nginx, and the bounded AWS ECS Fargate exercise — remain documented in [ADR 0003](decisions/0003-free-tier-deployment.md) and [`docs/architecture/aws-sprint/`](architecture/aws-sprint/README.md).)*
 
-1. `AI_PROVIDER_MODE=mock` is the default for every request.
-2. Global per-provider daily budget counters, hard-capped in config, checked before each live call.
-3. Layered limits: per-IP (unauthenticated) → per-user → per-agent → global.
-4. `DEMO_READ_ONLY=true` kill switch for mutating endpoints.
-5. Seeded demo tenant so a first visit never waits on a live model.
-6. Upload caps, per-user daily ingestion cap, artifact expiry and a cleanup job.
-7. Separate API keys for demo and local development; rotate anything that appears in a screenshot, log or commit.
+## Quota & Abuse Guardrails
 
-## Review cadence
+1. **Bounded Daily Provider Budgets:** `DAILY_LIVE_CALL_BUDGET`, `DAILY_PROVIDER_BUDGET_CHAT`, `DAILY_PROVIDER_BUDGET_EMBEDDING`, and `DAILY_PROVIDER_BUDGET_SEARCH` cap runaway spend/quota consumption.
+2. **Input & Upload Caps:** `MAX_INPUT_CHARS=8000`, `MAX_PROMPT_CHARS=16000`, `MAX_OUTPUT_TOKENS=8192`, `MAX_ATTACHMENTS=5`, `MAX_UPLOAD_BYTES=10485760` (10 MB), and `MAX_PDF_PAGES=25`.
+3. **Kill Switch & Offline Mode:** Set `DEMO_READ_ONLY=true` to freeze mutations or `AI_PROVIDER_MODE=mock` / `MOCK_AI=true` to run zero-cost offline tests.
+4. **Two-Phase Credit Accounting:** Every user starts with 250 starter credits; failed upstream calls release reserved credits cleanly rather than stranding balances.
+5. **Secret Hygiene:** Live credentials live strictly in Render Environment variables (never committed to Git or baked into Docker images).
 
-- Daily for the first week after deployment, then weekly.
-- Check the provider dashboards (Groq, Tavily, Cloudflare), the VM's disk and memory, and the R2 usage.
-- During the AWS sprint only: check AWS Budgets and Cost Explorer daily; verify $0 the day after teardown and again three days later.
+## Operational Review Cadence
+
+- Check **Neon** compute/storage, **Upstash** command count, **Qdrant Cloud** cluster status, **Cloudflare Workers AI** daily neurons, and **Gemini** quota weekly.
+- Monitor **Google Search Console** (`https://kartik-ai-app.onrender.com/`) for sitemap crawl status and zero Soft-404s.

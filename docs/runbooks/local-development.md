@@ -1,55 +1,68 @@
-# Local development runbook
+# Local Development Runbook
 
-Authoritative local development workflow for **Kartik.ai** (Blueprint v4.4 §4.6, §4.7, §8.5).
+Practical local setup and verification workflow for **Kartik.ai**.
 
 ## Prerequisites
 
-- **Node 26** (see `.nvmrc`; Active LTS since 28 October 2026). Node 24 is admitted by `engines` as an advisory fallback.
-- **pnpm 12.18.0** pinned in `package.json#packageManager`. Run `pnpm -v` to confirm.
-- **Docker Engine 29+** and **Docker Compose v5+** (required only when running external containers; all 35 automated test suites and `scripts/start-local-stack.mjs` run zero-cost in-memory without Docker).
-- **Git 2.39+**.
+- **Node.js `>=22`** (LTS) and **npm** (or `pnpm`)
+- **Git 2.39+**
+- **Docker** *(optional — only needed if running local PostgreSQL/Redis/Qdrant containers; all 267 automated tests and `npm run dev` run cleanly without Docker using either live cloud providers or mock mode)*
 
-Run `pnpm toolchain` first — it verifies your local toolchain against Blueprint §4.7 and prints a status table.
-
-## Option A — Instant In-Memory Local Stack (Zero External Dependencies)
-
-You can build, verify all 35 test suites, and run the complete 5-service HTTP stack on `:8000` with zero Docker containers or API keys:
+## Option A — Full-Stack App Server on `http://localhost:3000` (Recommended)
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm test
+# 1. Install dependencies
+npm install --include=dev --legacy-peer-deps
+
+# 2. Create your local .env from template
+cp .env.example .env
+
+# 3. Validate environment variables
+npm run check:env
+
+# 4. Start the full-stack Express + Vite dev server on http://localhost:3000
+npm run dev
+```
+
+- **Offline / zero-cost mode:** Keep `AI_PROVIDER_MODE=mock`, `MOCK_AI=true`, `IMAGE_PROVIDER=mock`, and `BILLING_MODE=mock` in `.env`.
+- **Live provider mode:** Configure Neon PostgreSQL (`DATABASE_URL`, `OBJECT_STORAGE_MODE=neon`), Upstash Redis (`REDIS_URL`), Qdrant Cloud (`QDRANT_URL`, `QDRANT_API_KEY`), Gemini (`GEMINI_API_KEY`), Cloudflare Workers AI (`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `IMAGE_PROVIDER=cloudflare`), Firebase (`kartik-ai-app`), and Razorpay Test Mode (`rzp_test_*`).
+- **Windows PowerShell tip:** `dotenv` does not overwrite shell variables already exported in your terminal. If `.env` changes don't appear to take effect, clear stale terminal vars first (e.g., `Remove-Item Env:FIREBASE_PROJECT_ID,Env:REDIS_URL,Env:QDRANT_URL,Env:IMAGE_PROVIDER -ErrorAction SilentlyContinue`).
+
+## Verification & Test Commands
+
+```bash
+# Core workspace unit & service suites (49 suites, 245 tests)
+npm test
+
+# Multi-user isolation, verified Firebase auth, idempotency, RAG & Razorpay integration tests (13 tests)
+npx tsx --test src/server/platform-multi-user-isolation.test.ts
+
+# SEO, canonical origin, robots.txt, sitemap, manifest & JSON-LD tests (9 tests)
+npx tsx --test src/server/seo.test.ts
+
+# Full workspace build, TypeScript typecheck & 188-file architectural lint
+npm run lint
+```
+
+## Option B — 5-Service Local HTTP Stack (`:8000`)
+
+Run the isolated microservice gateway + service adapters locally in-memory without Docker:
+
+```bash
 node scripts/start-local-stack.mjs
-```
-
-Once started, test the live endpoints:
-
-```bash
 curl -s http://127.0.0.1:8000/healthz
-curl -s -H "Cookie: kartik_session=sess_demo_local_001" http://127.0.0.1:8000/api/v1/conversations
-curl -s -H "Cookie: kartik_session=sess_demo_local_001" http://127.0.0.1:8000/api/v1/billing/balance
 ```
 
-## Option B — Full Docker Compose Dependency Stack
+## Option C — Local Docker Compose Dependencies
 
-1. Copy `.env.example` → `.env` and review the local defaults (`MOCK_AI=true`, `IMAGE_PROVIDER=mock`, `BILLING_MODE=mock`).
-2. Start PostgreSQL 17, Redis 7.4, `pgsty/silo` (MinIO-compatible S3), and Qdrant v1.20:
-   ```bash
-   sh infra/scripts/local-up.sh
-   ```
-3. Inspect running containers and schemas:
-   - `docker compose -f infra/compose/docker-compose.yml ps`
-   - `node scripts/check-env.mjs`
-   - `node scripts/migrate.mjs`
-   - `node scripts/seed-dev-data.mjs`
-
-## Reset
-
-Removing volumes destroys local container data. Do it deliberately:
+If you prefer local containerized PostgreSQL, Redis, MinIO/Silo, and Qdrant instead of cloud free tiers:
 
 ```bash
+sh infra/scripts/local-up.sh
+node scripts/check-env.mjs
+node scripts/migrate.mjs
+node scripts/seed-dev-data.mjs
+
+# Reset volumes (destroys local container data)
 docker compose -f infra/compose/docker-compose.yml down -v
 ```
-
-## Provider mode
-
-`MOCK_AI=true`, `IMAGE_PROVIDER=mock`, and `BILLING_MODE=mock` are the defaults. Never set live credentials for routine development — live calls consume daily budget counters (`DAILY_LIVE_CALL_BUDGET`).
