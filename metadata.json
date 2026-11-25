@@ -1,0 +1,6 @@
+{
+  "name": "Kartik.ai — Multi-Agent AI Workspace",
+  "description": "Build live code, PDF reports, 16:9 slide decks, cited web research, and FLUX images in Kartik.ai — the all-in-one multi-agent AI workspace. Start free.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -47,6 +47,13 @@ import {
   type AuthRequest,
   type VerifiedRequestIdentity,
 } from './src/middleware/auth.ts';
+import {
+  buildRobotsTxt,
+  buildSitemapXml,
+  buildWebManifest,
+  injectSeoIntoHtml,
+  resolvePublicSiteUrl,
+} from './src/server/seo.ts';
 
 function readHeaderString(req: Request, headerName: string): string | undefined {
   const raw = req.headers[headerName.toLowerCase()];
@@ -93,6 +100,11 @@ export function createKartikExpressApp(
 
   const app = express();
   app.set('trust proxy', 1);
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
   app.use(
     express.json({
       limit: '20mb',
@@ -167,6 +179,28 @@ export function createKartikExpressApp(
         billing: 'ready',
       },
     });
+  });
+
+  // 1b. Public SEO & Search Indexing Endpoints (/robots.txt, /sitemap.xml, /site.webmanifest)
+  app.get('/robots.txt', (req, res) => {
+    const siteUrl = resolvePublicSiteUrl(env, req.headers);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.status(200).send(buildRobotsTxt(siteUrl));
+  });
+
+  app.get('/sitemap.xml', (req, res) => {
+    const siteUrl = resolvePublicSiteUrl(env, req.headers);
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.status(200).send(buildSitemapXml(siteUrl));
+  });
+
+  app.get('/site.webmanifest', (req, res) => {
+    const siteUrl = resolvePublicSiteUrl(env, req.headers);
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.status(200).json(buildWebManifest(siteUrl));
   });
 
   // 2. Auth Routes (/api/v1/auth/firebase-config, /api/v1/auth/google, /api/v1/auth/me, /api/v1/auth/logout)
@@ -870,7 +904,14 @@ export function createKartikExpressApp(
 
 const ALLOWED_DEV_DOWNLOAD_ROOT_FILES = new Set([
   '.env.example',
+  '.dockerignore',
+  'Dockerfile',
+  'index.html',
+  'metadata.json',
   'package.json',
+  'public/favicon.svg',
+  'public/og-image.jpg',
+  'render.yaml',
   'server.ts',
   'pnpm-workspace.yaml',
   'tsconfig.json',
@@ -957,9 +998,37 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*all', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    const distIndexPath = path.join(distPath, 'index.html');
+    const rawDistIndexHtml = fs.existsSync(distIndexPath)
+      ? fs.readFileSync(distIndexPath, 'utf8')
+      : null;
+
+    app.use(
+      '/assets',
+      express.static(path.join(distPath, 'assets'), {
+        immutable: true,
+        maxAge: '1y',
+      }),
+    );
+    app.use(
+      express.static(distPath, {
+        index: false,
+        maxAge: '1d',
+      }),
+    );
+    app.get('*', (req, res) => {
+      if (rawDistIndexHtml) {
+        const siteUrl = resolvePublicSiteUrl(process.env, req.headers);
+        const renderedHtml = injectSeoIntoHtml(rawDistIndexHtml, {
+          siteUrl,
+          googleSiteVerification: process.env.GOOGLE_SITE_VERIFICATION,
+        });
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.status(200).send(renderedHtml);
+        return;
+      }
+      res.sendFile(distIndexPath);
     });
   }
 
