@@ -1,73 +1,171 @@
-# Kartik.ai
+<div align="center">
 
-A multi-agent AI workspace: Google sign-in, persistent conversations, a LangGraph-style router that dispatches to six specialist capabilities (`chat`, `search`, `coding`, `rag`, `vision`, `image`), sandboxed code artifacts (`iframe sandbox="allow-scripts"`), document-grounded RAG citations, and an integer-paise credit ledger with idempotent `SELECT ... FOR UPDATE` reservations.
+<img src="public/og-image.jpg" alt="Kartik.ai — Multi-Agent AI Workspace" width="100%" />
 
-Five backend services (`gateway`, `auth`, `chat`, `agent`, `billing`), a shared foundation (`@kartik/shared`), and a typed frontend workspace (`@kartik/frontend`), built and verified in controlled micro-steps.
+# Kartik.ai — Multi-Agent AI Workspace
 
-## Status
+**Live App: [https://kartik-ai-app.onrender.com/](https://kartik-ai-app.onrender.com/)**
 
-**All Phases Complete (Phase 0 through Phase 8 — v4.4).**
-- **Test Suites:** `34` suites, `126/126` passing tests (`0` failures).
-- **Architecture Invariants:** `20/20` verified across unit, integration, evaluation, and end-to-end suites.
-- **Live Progress & Evidence:** [`docs/implementation/BUILD_STATE.md`](docs/implementation/BUILD_STATE.md) · [`docs/implementation/TEST_EVIDENCE.md`](docs/implementation/TEST_EVIDENCE.md) · [`docs/implementation/PHASE_CHECKLIST.md`](docs/implementation/PHASE_CHECKLIST.md).
+[![Live on Render](https://img.shields.io/badge/Live_App-kartik--ai--app.onrender.com-10b981?style=for-the-badge)](https://kartik-ai-app.onrender.com/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-Strict-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![React 19](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)
+[![Node.js 22](https://img.shields.io/badge/Node.js-22-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Tests](https://img.shields.io/badge/Tests-267_Passing-10b981?style=for-the-badge)](#verification--testing)
 
-## Stack
+Build **live interactive code apps**, **editorial multi-page PDF reports**, **16:9 PowerPoint (`.pptx`) slide decks**, **cited real-time web research**, **private PDF RAG Q&A**, **multimodal vision analysis**, and **FLUX.1 studio images** inside one unified multi-agent AI studio.
 
-| Layer | Choice |
+</div>
+
+---
+
+## Live Workspace
+
+Try **Kartik.ai** immediately — no credit card required (every workspace starts with **250 free credits**):
+
+- **Production URL:** [https://kartik-ai-app.onrender.com/](https://kartik-ai-app.onrender.com/)
+- **Google Sign-In:** Powered by Firebase Authentication (`kartik-ai-app`) with isolated guest workspaces and instant sign-in hydration.
+
+---
+
+## Specialist AI Agents & Studio Capabilities
+
+Kartik.ai combines a **unified Chat Smart Hub** (automatic intent routing) with **7 direct specialist modes** accessible via slash commands (`/code`, `/pdf`, `/slides`, `/search`, `/rag`, `/vision`, `/image`) or the composer selector:
+
+| Specialist | What It Builds | Key Features |
+|---|---|---|
+| **Chat & Smart Router** | Structured answers, analysis, math & diagrams | Automatic specialist routing, Concise / Balanced / Deep response modes, LaTeX math, Mermaid diagrams, GFM tables with CSV export & sorting |
+| **Code Studio** | Live multi-file HTML, CSS, JS & React apps | Opaque-origin `iframe sandbox="allow-scripts"` live preview, multi-file editor, syntax highlighting, line diff viewer, standalone HTML & ZIP export |
+| **PDF Builder** | Native multi-page `%PDF-1.4` editorial reports | Domain-universal document layout engine with tables, metrics, callouts, live editorial preview, Markdown export & binary `.pdf` download |
+| **Slides Studio** | Custom 16:9 PowerPoint (`.pptx`) keynote decks | Editable 8-slide interactive deck preview, light/dark theme toggle, speaker notes, cover visual recompile, printable PDF handout & `.pptx` export |
+| **Cited Web Search** | Up-to-date grounded web research | Live Gemini Search Grounding with inline clickable citations (`[1]`, `[2]`) and verified source previews |
+| **Private PDF RAG** | Grounded multi-turn document Q&A | Attach PDFs (up to 25 pages / 10 MB), private per-user chunking & vector search in Qdrant Cloud with strict conversation & tenant scoping |
+| **Multimodal Vision** | Image inspection & follow-up Q&A | Private ownership-scoped image uploads streamed via signed/authenticated endpoints with multi-turn visual reasoning |
+| **Image Studio** | High-resolution 16:9 studio artwork | Live **Cloudflare Workers AI (`@cf/black-forest-labs/flux-1-schnell`)** generation with prompt inspection, PNG download & automatic credit refunds on failure |
+
+---
+
+## Production Architecture & Tech Stack
+
+| Layer | Technology |
 |---|---|
-| Language & Toolchain | TypeScript 7 (`strict`), Node.js `>=24`, `pnpm@12.18.0` (single lockfile) |
-| Frontend (`@kartik/frontend`) | Typed Gateway Client (`/api/v1/*`), WorkspaceStore, `sandbox="allow-scripts"` Preview Engine, Citation Sanitizer |
-| Backend Services | `@kartik/gateway`, `@kartik/auth`, `@kartik/chat`, `@kartik/agent`, `@kartik/billing`, `@kartik/shared` |
-| Data & Storage | PostgreSQL 17 (4 isolated schemas, ADR 0004), Redis 7.4, Qdrant, MinIO/Silo locally / Cloudflare R2 |
-| AI & Evaluation | Deterministic Mock Mode by default (`MOCK_AI=true`), Daily Redis Budget Guard, 8-case Specialist Evaluation Suite |
-| Auth & Identity | Firebase Google sign-in $\rightarrow$ opaque Redis session (`HttpOnly` cookie) $\rightarrow$ `aud`-scoped Ed25519 `x-user-context` assertions |
-| Payments & Ledger | Razorpay **test mode only**, integer paise accounting, `SELECT ... FOR UPDATE` reservations, 30-day money idempotency |
+| **Frontend (`@kartik/frontend`)** | React 19, TypeScript (strict), Tailwind CSS v4, Motion primitives, lazy-loaded Studio panels (`ArtifactPanel`, `SlideDeckPreview`, `PdfDocumentPreview`, `BillingDrawer`, `CommandPalette`), sticky `Idempotency-Key` API client |
+| **Backend & Services** | Full-stack Express + Vite platform runtime (`server.ts`) backed by modular workspaces (`@kartik/gateway`, `@kartik/auth`, `@kartik/chat`, `@kartik/agent`, `@kartik/billing`, `@kartik/shared`) |
+| **Primary Database & Object Storage** | **Neon PostgreSQL** (`Drizzle ORM` + `pg` pool) with `private_objects` binary storage (`OBJECT_STORAGE_MODE=neon`) and HMAC-signed private download URLs |
+| **Vector Search (RAG)** | **Qdrant Cloud** (`gemini-embedding-2` vectors, strict per-user & per-conversation payload filters) |
+| **Cache & Rate / Budget Guard** | **Upstash Redis** (`rediss://` TLS) with automatic resilient circuit-breaker fallback |
+| **AI Models** | **Google Gemini** (`gemini-3.1-flash-lite` + Search Grounding + `gemini-embedding-2`) and **Cloudflare Workers AI** (`@cf/black-forest-labs/flux-1-schnell`) |
+| **Authentication & Multi-Tenancy** | **Firebase Auth** (Google Sign-In + Admin SDK `cert` verification), `HttpOnly; Secure; SameSite` session cookies, strict zero-cross-tenant isolation |
+| **Billing & Credit Ledger** | **Razorpay (Test Mode)**, integer-paise server-side pricing (`planId`-only checkout), two-phase `Reserve -> Execute -> Settle/Release` credit accounting, SHA-256 idempotency replay protection |
+| **Deployment & SEO** | **Render** (multi-stage Node 22 Docker), dynamic `/robots.txt`, `/sitemap.xml`, `/site.webmanifest`, multi-size PNG/ICO/SVG favicons, `1376×768` OpenGraph card, and Schema.org JSON-LD (`WebApplication`, `WebSite`, `Organization`) |
 
-## Workspaces & Services
+---
 
-| Workspace | Path | Port | Owns | Test Suites |
-|---|---|---|---|---|
-| `@kartik/shared` | `backend/shared` | — | Config validator, 19-code error catalogue, redaction logger, Redis keys, Ed25519 assertions, DB/R2 adapters, middleware | `9` suites (`29` tests) |
-| `@kartik/auth` | `backend/services/auth` | `8001` | Identity, Google ID token verification, 7-day Redis sessions, `/internal/sessions/introspect` | `4` suites (`16` tests) |
-| `@kartik/gateway` | `backend/gateway` | `8000` | Public `/api/v1/*` front door, `/internal/*` `404` blocking, `Idempotency-Key` preservation, E2E & `node:http` server adapter | `6` suites (`21` tests) |
-| `@kartik/billing` | `backend/services/billing` | `8004` | Plans, credit accounts, `SELECT ... FOR UPDATE` reservations, ledger, Razorpay checkout & raw-body webhook HMAC verification | `4` suites (`16` tests) |
-| `@kartik/agent` | `backend/services/agent` | `8003` | Router & 6 specialists, daily Redis budget guard, magic-byte file uploads, `userId`-filtered RAG, 8-case evaluation suite | `5` suites (`20` tests) |
-| `@kartik/chat` | `backend/services/chat` | `8002` | Conversations, messages, `Reserve -> Execute -> Settle/Release` orchestrator, `execution_unknown` recovery, cascade purge | `3` suites (`12` tests) |
-| `@kartik/frontend` | `frontend` | `5173` | Gateway client, sticky `Idempotency-Key` store, isolated code sandbox (`sandbox="allow-scripts"`), `planId`-only checkout | `3` suites (`12` tests) |
+## Security & Reliability Highlights
 
-## Quickstart
+- **Verified Auth Only:** Never trusts caller-supplied UID/email or unverified JWT payloads; every authenticated request is verified via Firebase Admin SDK or signed server-side sessions.
+- **Strict Tenant Isolation:** Every conversation, uploaded file, Qdrant vector chunk, private Neon object, and billing ledger record is scoped strictly to the owning user (`404` on cross-tenant access).
+- **Idempotent Two-Phase Billing:** Client-owned `Idempotency-Key` headers with SHA-256 payload conflict detection (`409`) and automatic credit refund on upstream provider failure.
+- **Sandboxed Code Execution:** Generated web apps render inside opaque-origin `iframe sandbox="allow-scripts"` (never `allow-same-origin`) with strict CSP and `</script>` breakout protection.
+- **Crawl & Header Hygiene:** `X-Robots-Tag: noindex, nofollow` on `/api/*`, true `404` responses on missing static assets (preventing Soft-404s), `X-Content-Type-Options: nosniff`, and dev-only download routes hard-disabled in production.
+
+---
+
+## Local Quickstart
+
+### Prerequisites
+- **Node.js `>=22`** and **npm / pnpm**
+- Optional live providers: Neon PostgreSQL, Upstash Redis, Qdrant Cloud, Gemini API key, Cloudflare Workers AI token, Firebase project, Razorpay Test keys (all documented in [`.env.example`](.env.example)).
+
+### Run Locally
 
 ```bash
-# 1. Verify toolchain (Node, pnpm, Docker, Git)
-pnpm toolchain
+# 1. Clone the repository
+git clone https://github.com/KratX/kartik-ai.git
+cd kartik-ai
 
-# 2. Install dependencies (frozen lockfile)
-pnpm install --frozen-lockfile
+# 2. Install dependencies
+npm install --include=dev --legacy-peer-deps
 
-# 3. Typecheck, build, and run all 34 test suites (126 tests)
-pnpm typecheck
-pnpm test
-
-# 4. (Optional) Start local PostgreSQL 17, Redis 7.4, Silo/MinIO & Qdrant via Docker Compose
-docker compose --env-file infra/compose/.env.compose.example -f infra/compose/docker-compose.yml up -d
+# 3. Configure environment variables
 cp .env.example .env
-pnpm check:env
-pnpm db:migrate
-pnpm db:seed
+# Fill in your provider keys in .env (or leave MOCK_AI=true for offline testing)
+
+# 4. Validate environment configuration
+npm run check:env
+
+# 5. Start the full-stack server on http://localhost:3000
+npm run dev
 ```
 
-## Cost & Free-Tier Posture
+### Deploy to Render
 
-Designed to stay within available free allowances, subject to current eligibility and usage (`MOCK_AI=true`, `IMAGE_PROVIDER=mock`, `BILLING_MODE=mock` by default, bounded daily Redis live-call budgets, and `DEMO_READ_ONLY` kill switch). Full model: [`docs/COST.md`](docs/COST.md).
+This repository includes a production-ready [`Dockerfile`](Dockerfile) and [`render.yaml`](render.yaml):
+
+1. Connect your GitHub repository in **Render → New Web Service** (Docker runtime, health check `/healthz`).
+2. Add your production environment variables in **Render → Environment** (never commit `.env`).
+3. Authorize your Render hostname in **Firebase Console → Authentication → Settings → Authorized domains**.
+
+---
+
+## Verification & Testing
+
+The repository is backed by **267 automated tests** across unit, security, multi-user isolation, and SEO suites:
+
+```bash
+# Core workspace unit & service tests (49 suites, 245 tests)
+npm test
+
+# Multi-user isolation, Firebase auth, idempotency, RAG & Razorpay integration tests (13 tests)
+npx tsx --test src/server/platform-multi-user-isolation.test.ts
+
+# SEO, canonical origin, sitemap, robots.txt, manifest & JSON-LD tests (9 tests)
+npx tsx --test src/server/seo.test.ts
+
+# Typecheck & architectural lint across all workspaces
+npm run lint
+```
+
+---
+
+## Project Structure
+
+```text
+kartik-ai/
+├── server.ts                  # Full-stack Express + Vite / production dist server
+├── index.html                 # Canonical SEO, OpenGraph, icons & JSON-LD entry
+├── Dockerfile                 # Multi-stage Node 22 production container
+├── render.yaml                # Render Blueprint deployment spec
+├── public/                    # Favicon suite (.ico, .svg, 48/180/192/512 PNG) & og-image.jpg
+├── src/
+│   ├── db/                    # Drizzle ORM schema, Neon Postgres & private object storage
+│   ├── lib/                   # Firebase Admin SDK (service-account cert) & client helpers
+│   ├── middleware/            # Verified Firebase auth, session & isolated guest cookies
+│   └── server/                # Multi-agent platform runtime, SEO helpers & integration tests
+├── frontend/                  # @kartik/frontend React 19 UI, studios & sandbox preview
+├── backend/
+│   ├── gateway/               # @kartik/gateway public API front door
+│   ├── shared/                # @kartik/shared config, errors, Redis, DB & Ed25519 helpers
+│   └── services/              # @kartik/auth, @kartik/chat, @kartik/agent, @kartik/billing
+└── docs/                      # Architecture overview, OpenAPI 3.1 spec, ADRs & runbooks
+```
+
+---
 
 ## Documentation
 
-| Document | What it is |
+| Document | Description |
 |---|---|
-| [`docs/architecture/overview.md`](docs/architecture/overview.md) | Services, ownership, request flow, non-negotiables |
-| [`docs/api/openapi.yaml`](docs/api/openapi.yaml) | Public OpenAPI 3.1 contract |
+| [`docs/architecture/overview.md`](docs/architecture/overview.md) | Services, ownership boundaries, request flow, and non-negotiables |
+| [`docs/api/openapi.yaml`](docs/api/openapi.yaml) | Public OpenAPI 3.1 specification |
 | [`docs/decisions/`](docs/decisions/) | Architecture Decision Records (`0000`–`0004`) |
-| [`docs/implementation/`](docs/implementation/) | `BUILD_STATE.md`, `LEARNING_LOG.md`, `TEST_EVIDENCE.md`, `PHASE_CHECKLIST.md` |
-| [`docs/COST.md`](docs/COST.md) | Free-tier inventory and quota policy |
-| [`docs/PORTFOLIO.md`](docs/PORTFOLIO.md) | Engineering decisions worth explaining |
-| [`docs/runbooks/`](docs/runbooks/) | Local development, deployment, rollback, teardown |
+| [`docs/COST.md`](docs/COST.md) | Free-tier provider budgets and guardrail policy |
+| [`docs/PORTFOLIO.md`](docs/PORTFOLIO.md) | Key engineering trade-offs and design decisions |
+| [`docs/runbooks/`](docs/runbooks/) | Local development, deployment, rollback, and teardown guides |
+
+---
+
+<div align="center">
+
+Built by **[Kartik Rawat](https://github.com/KratX)** · Try it live at **[kartik-ai-app.onrender.com](https://kartik-ai-app.onrender.com/)**
+
+</div>
