@@ -246,14 +246,25 @@ export class KartikPlatformRuntime {
   private readonly redisClient = createRedisClientFromUrl(process.env.REDIS_URL);
   public readonly persistence: PlatformPersistenceAdapter;
   public readonly repository = new DrizzleCloudSqlAgentRepository();
-  public readonly objectStorage =
-    process.env.OBJECT_STORAGE_MODE === 'filesystem' ||
-    process.env.OBJECT_STORAGE_MODE === 'memory' ||
-    process.env.OBJECT_STORAGE_ENDPOINT ||
-    process.env.AWS_ENDPOINT_URL_S3 ||
-    process.env.R2_ENDPOINT
-      ? createObjectStorageFromEnv(process.env)
-      : new DrizzleCloudSqlObjectStorage();
+  public readonly objectStorage = (() => {
+    const mode = (process.env.OBJECT_STORAGE_MODE ?? '')
+      .trim()
+      .replace(/^["']|["']$/g, '')
+      .toLowerCase();
+    if (mode === 'postgres' || mode === 'neon') {
+      return new DrizzleCloudSqlObjectStorage();
+    }
+    if (
+      mode === 'filesystem' ||
+      mode === 'memory' ||
+      process.env.OBJECT_STORAGE_ENDPOINT?.trim() ||
+      process.env.AWS_ENDPOINT_URL_S3?.trim() ||
+      process.env.R2_ENDPOINT?.trim()
+    ) {
+      return createObjectStorageFromEnv(process.env);
+    }
+    return new DrizzleCloudSqlObjectStorage();
+  })();
   public readonly vectorStore = createVectorStoreFromEnv(
     process.env.NODE_ENV === 'test'
       ? {
@@ -479,13 +490,31 @@ export class KartikPlatformRuntime {
         return 'configured';
       }
     })();
+    const storageSummary = (() => {
+      if (this.objectStorage instanceof DrizzleCloudSqlObjectStorage) {
+        const dbUrl = clean(process.env.DATABASE_URL);
+        if (dbUrl) {
+          try {
+            return `neon-postgres (${new URL(dbUrl).hostname})`;
+          } catch {
+            return 'neon-postgres';
+          }
+        }
+        return 'neon-postgres';
+      }
+      const ctorName = this.objectStorage?.constructor?.name ?? 'unknown';
+      if (ctorName === 'S3CompatibleObjectStorage') return 's3-compatible';
+      if (ctorName === 'FileSystemObjectStorage') return 'filesystem';
+      if (ctorName === 'InMemoryObjectStorage') return 'memory';
+      return ctorName;
+    })();
     let billingMode = 'mock';
     try {
       billingMode = this.resolveRazorpayBillingConfig().billingMode;
     } catch {
       billingMode = 'invalid';
     }
-    return `ai=${aiMode}, image=${imgProvider}, redis=${redisSummary}, qdrant=${qdrantHost}, billing=${billingMode}`;
+    return `ai=${aiMode}, image=${imgProvider}, redis=${redisSummary}, qdrant=${qdrantHost}, storage=${storageSummary}, billing=${billingMode}`;
   }
 
   private trackPersistence(task: () => Promise<void>): void {

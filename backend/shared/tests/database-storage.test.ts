@@ -8,6 +8,7 @@ import {
   buildObjectStorageKey,
   computeMigrationChecksum,
   createLazyPostgresPool,
+  createObjectStorageFromEnv,
   InMemoryObjectStorage,
   PostgresObjectStorage,
   resolvePostgresTlsConfig,
@@ -498,6 +499,24 @@ describe('@kartik/shared/database & @kartik/shared/storage (1.8.a)', () => {
       () => s3Storage.getPrivateObject(key, 'usr_foreign_2'),
       (err: unknown) => (err as { code?: string }).code === 'NOT_FOUND',
     );
+  });
+
+  it('Fix #37: selects PostgresObjectStorage when OBJECT_STORAGE_MODE=neon or postgres even if OBJECT_STORAGE_DIR is set', () => {
+    const neonStorage = createObjectStorageFromEnv({
+      NODE_ENV: 'development',
+      OBJECT_STORAGE_MODE: 'neon',
+      OBJECT_STORAGE_DIR: '/tmp/ignored-when-neon',
+      DATABASE_URL: 'postgresql://user:pass@ep-example.aws.neon.tech/neondb?sslmode=require',
+    });
+    assert.equal(neonStorage instanceof PostgresObjectStorage, true);
+
+    const pgStorage = createObjectStorageFromEnv({
+      NODE_ENV: 'development',
+      OBJECT_STORAGE_MODE: '"postgres"',
+      OBJECT_STORAGE_DIR: '/tmp/ignored-when-postgres',
+      DATABASE_URL: 'postgresql://user:pass@ep-example.aws.neon.tech/neondb?sslmode=require',
+    });
+    assert.equal(pgStorage instanceof PostgresObjectStorage, true);
   });
 });
 

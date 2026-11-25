@@ -1052,28 +1052,17 @@ export class PostgresObjectStorage implements ObjectStorage {
 export function createObjectStorageFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): ObjectStorage {
-  if (env.NODE_ENV === 'test' || env.OBJECT_STORAGE_MODE === 'memory') {
-    return new InMemoryObjectStorage();
-  }
+  const storageMode = (stripEnvQuotes(env.OBJECT_STORAGE_MODE) ?? '').toLowerCase();
 
-  if (
-    env.OBJECT_STORAGE_MODE === 'filesystem' ||
-    env.OBJECT_STORAGE_DIR ||
-    env.OBJECT_STORAGE_ROOT_DIR
-  ) {
-    return new FileSystemObjectStorage({
-      rootDir:
-        env.OBJECT_STORAGE_DIR ??
-        env.OBJECT_STORAGE_ROOT_DIR ??
-        path.join(os.tmpdir(), 'kartik-ai-storage', 'object-storage'),
-    });
+  if (env.NODE_ENV === 'test' || storageMode === 'memory') {
+    return new InMemoryObjectStorage();
   }
 
   const endpoint = stripEnvQuotes(
     env.OBJECT_STORAGE_ENDPOINT ?? env.AWS_ENDPOINT_URL_S3 ?? env.R2_ENDPOINT,
   );
   const bucket =
-    stripEnvQuotes(env.OBJECT_STORAGE_BUCKET ?? env.AWS_S3_BUCKET) ?? 'assets';
+    stripEnvQuotes(env.OBJECT_STORAGE_BUCKET ?? env.AWS_S3_BUCKET ?? env.R2_BUCKET) ?? 'assets';
   const accessKeyId = stripEnvQuotes(
     env.OBJECT_STORAGE_ACCESS_KEY ?? env.AWS_ACCESS_KEY_ID ?? env.R2_ACCESS_KEY_ID,
   );
@@ -1082,25 +1071,43 @@ export function createObjectStorageFromEnv(
   );
   const region = stripEnvQuotes(env.OBJECT_STORAGE_REGION ?? env.AWS_REGION) ?? 'auto';
 
-  const pgStorage = new PostgresObjectStorage({
-    pool: createLazyPostgresPool({
-      schema: 'agent',
-      connectionString:
-        env.DATABASE_URL ??
-        env.BILLING_DATABASE_URL ??
-        'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
-    }),
-    fallbackStorage: new FileSystemObjectStorage({
-      rootDir: path.join(os.tmpdir(), 'kartik-ai-storage', 'object-storage'),
-    }),
-  });
+  const buildPgStorage = () =>
+    new PostgresObjectStorage({
+      pool: createLazyPostgresPool({
+        schema: 'agent',
+        connectionString:
+          env.DATABASE_URL ??
+          env.BILLING_DATABASE_URL ??
+          'postgresql://kartik:kartik@127.0.0.1:5432/kartik',
+      }),
+      fallbackStorage: new FileSystemObjectStorage({
+        rootDir:
+          stripEnvQuotes(env.OBJECT_STORAGE_DIR ?? env.OBJECT_STORAGE_ROOT_DIR) ??
+          path.join(os.tmpdir(), 'kartik-ai-storage', 'object-storage'),
+      }),
+    });
+
+  // Explicit Neon / PostgreSQL persistent object storage takes precedence over local cache dirs
+  if (storageMode === 'postgres' || storageMode === 'neon') {
+    return buildPgStorage();
+  }
 
   if (
-    endpoint &&
-    accessKeyId &&
-    secretAccessKey &&
-    env.OBJECT_STORAGE_MODE !== 'postgres'
+    storageMode === 'filesystem' ||
+    (storageMode !== 's3' &&
+      storageMode !== 'r2' &&
+      (stripEnvQuotes(env.OBJECT_STORAGE_DIR) || stripEnvQuotes(env.OBJECT_STORAGE_ROOT_DIR)))
   ) {
+    return new FileSystemObjectStorage({
+      rootDir:
+        stripEnvQuotes(env.OBJECT_STORAGE_DIR ?? env.OBJECT_STORAGE_ROOT_DIR) ??
+        path.join(os.tmpdir(), 'kartik-ai-storage', 'object-storage'),
+    });
+  }
+
+  const pgStorage = buildPgStorage();
+
+  if (endpoint && accessKeyId && secretAccessKey) {
     return new S3CompatibleObjectStorage({
       endpoint,
       bucket,

@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { and, asc, desc, eq } from 'drizzle-orm';
@@ -16,8 +17,10 @@ import {
 import type { SpecialistAgentName } from '../../backend/shared/contracts/index.js';
 import { AppError } from '../../backend/shared/errors/index.js';
 import {
+  DEFAULT_SIGNED_URL_TTL_SECONDS,
   FileSystemObjectStorage,
   InMemoryObjectStorage,
+  MAX_SIGNED_URL_TTL_SECONDS,
   type ObjectStorage,
   type PutPrivateObjectInput,
   type SignedDownloadUrlResult,
@@ -1496,14 +1499,55 @@ export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
   public async createSignedDownloadUrl(
     options: SignedUrlIssueOptions,
   ): Promise<SignedDownloadUrlResult> {
-    await this.headPrivateObject(options.key, options.requesterUserId);
-    return this.cache.createSignedDownloadUrl(options);
+    const metadata = await this.headPrivateObject(options.key, options.requesterUserId);
+    const ttlSeconds = options.ttlSeconds ?? DEFAULT_SIGNED_URL_TTL_SECONDS;
+    if (
+      !Number.isInteger(ttlSeconds) ||
+      ttlSeconds <= 0 ||
+      ttlSeconds > MAX_SIGNED_URL_TTL_SECONDS
+    ) {
+      throw new AppError(
+        'VALIDATION_FAILED',
+        `Signed URL ttlSeconds must be between 1 and ${MAX_SIGNED_URL_TTL_SECONDS}`,
+      );
+    }
+    const nowSeconds = options.nowSeconds ?? Math.floor(Date.now() / 1000);
+    const expiresEpoch = nowSeconds + ttlSeconds;
+    const signingSecret =
+      process.env.OBJECT_STORAGE_SIGNING_SECRET?.trim() ||
+      'kartik-private-storage-signing-secret';
+    const baseEndpoint = (
+      process.env.PUBLIC_APP_URL?.trim() ||
+      process.env.APP_URL?.trim() ||
+      'http://localhost:3000'
+    ).replace(/\/+$/, '');
+    const payload = `${metadata.key}:${metadata.ownerUserId}:${expiresEpoch}`;
+    const signature = createHmac('sha256', signingSecret)
+      .update(payload, 'utf8')
+      .digest('hex');
+
+    return Object.freeze({
+      signedUrl: `${baseEndpoint}/api/v1/objects/${metadata.key}?X-Amz-Expires=${ttlSeconds}&X-Amz-ExpiresAt=${expiresEpoch}&X-Amz-Signature=${signature}`,
+      expiresAt: new Date(expiresEpoch * 1000).toISOString(),
+      ttlSeconds,
+    });
   }
 
   public async deletePrivateObject(
     key: string,
     ownerUserId: string,
   ): Promise<boolean> {
+    let existsForOwner = false;
+    try {
+      await this.headPrivateObject(key, ownerUserId);
+      existsForOwner = true;
+    } catch (err) {
+      if (err instanceof AppError && err.code === 'NOT_FOUND') {
+        existsForOwner = false;
+      } else {
+        throw err;
+      }
+    }
     const deletedCache = await this.cache.deletePrivateObject(key, ownerUserId);
     if (!(await ensurePlatformSchemaReady())) {
       return deletedCache;
@@ -1517,7 +1561,7 @@ export class DrizzleCloudSqlObjectStorage implements ObjectStorage {
             eq(privateObjects.ownerUserUid, ownerUserId),
           ),
         );
-      return true;
+      return existsForOwner || deletedCache;
     } catch (error) {
       markDatabaseDegraded('ObjectStorage.deletePrivateObject', error);
       return deletedCache;
