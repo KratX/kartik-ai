@@ -862,8 +862,11 @@ export function createKartikExpressApp(
   );
 
   // 8. Static Fix & Step ZIP Downloads (/public/__downloads) & Hardened Dev-Only File Download
+  const isHostedRenderEnv = Boolean(
+    (env.RENDER ?? '').trim() || (env.RENDER_EXTERNAL_URL ?? '').trim(),
+  );
   const allowDevDownloads =
-    (env.NODE_ENV ?? '').trim().toLowerCase() !== 'production' ||
+    (!isHostedRenderEnv && (env.NODE_ENV ?? '').trim().toLowerCase() !== 'production') ||
     (env.ALLOW_DEV_DOWNLOADS ?? '').trim().toLowerCase() === 'true';
 
   if (allowDevDownloads) {
@@ -990,15 +993,23 @@ async function startServer() {
   const app = createKartikExpressApp();
   const port = Number(process.env.PORT ?? 3000);
 
-  if (process.env.NODE_ENV !== 'production') {
+  const distPath = path.join(process.cwd(), 'dist');
+  const distIndexPath = path.join(distPath, 'index.html');
+  const isHostedRender = Boolean(
+    (process.env.RENDER ?? '').trim() ||
+      (process.env.RENDER_EXTERNAL_URL ?? '').trim(),
+  );
+  const useProductionDist =
+    process.env.NODE_ENV === 'production' ||
+    (isHostedRender && fs.existsSync(distIndexPath));
+
+  if (!useProductionDist) {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    const distIndexPath = path.join(distPath, 'index.html');
     const rawDistIndexHtml = fs.existsSync(distIndexPath)
       ? fs.readFileSync(distIndexPath, 'utf8')
       : null;
