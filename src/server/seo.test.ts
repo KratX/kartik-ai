@@ -147,8 +147,8 @@ describe('SEO, Sitemap, Robots.txt, Icons & Rich Results Helpers (Fix #38 / #42)
       assert.match(html, /<link rel="canonical" href="https:\/\/kartik-ai-app\.onrender\.com\/" \/>/);
       assert.match(html, /<link rel="icon" href="\/favicon\.ico" sizes="48x48" \/>/);
       assert.match(html, /<link rel="apple-touch-icon" sizes="180x180" href="\/apple-touch-icon\.png" \/>/);
-      assert.match(html, /<meta property="og:image:width" content="1376" \/>/);
-      assert.match(html, /<meta property="og:image:height" content="768" \/>/);
+      assert.match(html, /<meta property="og:image:width" content="1280" \/>/);
+      assert.match(html, /<meta property="og:image:height" content="640" \/>/);
 
       const ldMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
       assert.ok(ldMatch?.[1], `Missing JSON-LD in ${rel}`);
