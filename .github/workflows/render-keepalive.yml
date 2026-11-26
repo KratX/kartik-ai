@@ -1,0 +1,50 @@
+name: Render Keep-Alive Heartbeat
+
+on:
+  schedule:
+    # Ping Render every 10 minutes (< Render Free tier's 15-minute idle sleep window)
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: render-keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    name: Wake & Keep Render Warm
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Kartik.ai /ping endpoint
+        env:
+          TARGET_ORIGIN: ${{ vars.RENDER_APP_URL || 'https://kartik-ai-app.onrender.com' }}
+        run: |
+          set -euo pipefail
+          BASE_URL="${TARGET_ORIGIN%/}"
+          ENDPOINT="${BASE_URL}/ping"
+          echo "Pinging ${ENDPOINT}..."
+          HTTP_STATUS=$(curl \
+            --silent \
+            --show-error \
+            --output /tmp/keepalive-body.txt \
+            --write-out '%{http_code}' \
+            --location \
+            --max-redirs 2 \
+            --connect-timeout 15 \
+            --max-time 45 \
+            --retry 3 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            --header 'User-Agent: KartikAI-GitHubKeepAlive/1.0' \
+            --header 'X-Keep-Alive: 1' \
+            "${ENDPOINT}")
+          echo "HTTP ${HTTP_STATUS}"
+          cat /tmp/keepalive-body.txt
+          echo ""
+          if [ "${HTTP_STATUS}" -lt 200 ] || [ "${HTTP_STATUS}" -ge 400 ]; then
+            echo "Keep-alive check failed with HTTP ${HTTP_STATUS}" >&2
+            exit 1
+          fi

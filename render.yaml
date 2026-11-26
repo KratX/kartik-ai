@@ -42,6 +42,11 @@ services:
         value: https://kartik-ai-app.onrender.com
       - key: CORS_ALLOWED_ORIGINS
         value: https://kartik-ai-app.onrender.com
+      # Keep Render free tier warm (<15m idle window) alongside .github/workflows/render-keepalive.yml
+      - key: KEEP_ALIVE_ENABLED
+        value: "true"
+      - key: KEEP_ALIVE_INTERVAL_MS
+        value: "600000"
       # Optional: paste your Google Search Console HTML verification token after deploy
       - key: GOOGLE_SITE_VERIFICATION
         sync: false

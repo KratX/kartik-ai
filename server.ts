@@ -55,6 +55,10 @@ import {
   isStaticAssetRequestPath,
   resolvePublicSiteUrl,
 } from './src/server/seo.ts';
+import {
+  createRenderKeepAlive,
+  type KeepAliveSnapshot,
+} from './src/server/keep-alive.ts';
 
 function readHeaderString(req: Request, headerName: string): string | undefined {
   const raw = req.headers[headerName.toLowerCase()];
@@ -93,6 +97,7 @@ function resolveWorkspaceIdentity(req: Request): VerifiedRequestIdentity {
 export function createKartikExpressApp(
   runtime: KartikPlatformRuntime = sharedPlatformRuntime,
   env: NodeJS.ProcessEnv = process.env,
+  getKeepAliveSnapshot?: () => KeepAliveSnapshot,
 ) {
   assertRootRuntimeDemoOrLocalOnly(env);
   registerSessionIdentityResolver((sessionId) =>
@@ -111,15 +116,6 @@ export function createKartikExpressApp(
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
     next();
   });
-  app.use(
-    express.json({
-      limit: '20mb',
-      verify: (req, _res, buf) => {
-        (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
-      },
-    }),
-  );
-  app.use(optionalAuth);
 
   const sendEnvelope = <T>(
     req: Request,
@@ -137,6 +133,69 @@ export function createKartikExpressApp(
       ...createSuccessEnvelope(traceId, data, { requestId: resolvedReqId }),
     });
   };
+
+  // 1. Ultra-Lightweight Keep-Alive, Health & Readiness Probes (BEFORE body-parsing & auth — zero cookie churn)
+  const readKeepAlive = (): KeepAliveSnapshot | undefined =>
+    getKeepAliveSnapshot ? getKeepAliveSnapshot() : undefined;
+
+  app.head(['/ping', '/healthz', '/api/v1/healthz', '/readyz', '/api/v1/readyz'], (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    res.status(200).end();
+  });
+
+  app.get('/ping', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    const keepAlive = readKeepAlive();
+    res.status(200).json({
+      ok: true,
+      status: 'alive',
+      uptimeSeconds: Math.floor(process.uptime()),
+      timestamp: new Date().toISOString(),
+      ...(keepAlive ? { keepAlive } : {}),
+    });
+  });
+
+  app.get(['/healthz', '/api/v1/healthz'], (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    const keepAlive = readKeepAlive();
+    sendEnvelope(req, res, 200, {
+      status: 'ok',
+      service: 'gateway',
+      runtimeScope: 'demo-local-only',
+      uptimeSeconds: Math.floor(process.uptime()),
+      ...(keepAlive ? { keepAlive } : {}),
+    });
+  });
+
+  app.get(['/readyz', '/api/v1/readyz'], (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    sendEnvelope(req, res, 200, {
+      status: 'ready',
+      service: 'gateway',
+      runtimeScope: 'demo-local-only',
+      uptimeSeconds: Math.floor(process.uptime()),
+      upstreams: {
+        auth: 'ready',
+        chat: 'ready',
+        agent: 'ready',
+        billing: 'ready',
+      },
+    });
+  });
+
+  app.use(
+    express.json({
+      limit: '20mb',
+      verify: (req, _res, buf) => {
+        (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+      },
+    }),
+  );
+  app.use(optionalAuth);
 
   const sendError = (req: Request, res: Response, err: unknown) => {
     const traceId =
@@ -163,29 +222,6 @@ export function createKartikExpressApp(
       ...mapped.body,
     });
   };
-
-  // 1. Health & Readiness Probes
-  app.get(['/healthz', '/api/v1/healthz'], (req, res) => {
-    sendEnvelope(req, res, 200, {
-      status: 'ok',
-      service: 'gateway',
-      runtimeScope: 'demo-local-only',
-    });
-  });
-
-  app.get(['/readyz', '/api/v1/readyz'], (req, res) => {
-    sendEnvelope(req, res, 200, {
-      status: 'ready',
-      service: 'gateway',
-      runtimeScope: 'demo-local-only',
-      upstreams: {
-        auth: 'ready',
-        chat: 'ready',
-        agent: 'ready',
-        billing: 'ready',
-      },
-    });
-  });
 
   // 1b. Public SEO & Search Indexing Endpoints (/robots.txt, /sitemap.xml, /site.webmanifest)
   app.get('/robots.txt', (req, res) => {
@@ -914,6 +950,7 @@ export function createKartikExpressApp(
 const ALLOWED_DEV_DOWNLOAD_ROOT_FILES = new Set([
   '.env.example',
   '.dockerignore',
+  '.github/workflows/render-keepalive.yml',
   'Dockerfile',
   'index.html',
   'metadata.json',
@@ -925,6 +962,7 @@ const ALLOWED_DEV_DOWNLOAD_ROOT_FILES = new Set([
   'public/icon-192.png',
   'public/icon-512.png',
   'public/og-image.jpg',
+  'README.md',
   'render.yaml',
   'server.ts',
   'pnpm-workspace.yaml',
@@ -1001,7 +1039,12 @@ export function isAllowedDevDownloadPath(rawRelPath: string): boolean {
 
 async function startServer() {
   assertRootRuntimeDemoOrLocalOnly(process.env);
-  const app = createKartikExpressApp();
+  const keepAlive = createRenderKeepAlive(process.env);
+  const app = createKartikExpressApp(
+    sharedPlatformRuntime,
+    process.env,
+    () => keepAlive.getSnapshot(),
+  );
   const port = Number(process.env.PORT ?? 3000);
 
   const distPath = path.join(process.cwd(), 'dist');
@@ -1058,14 +1101,30 @@ async function startServer() {
     });
   }
 
-  app.listen(port, '0.0.0.0', () => {
+  const server = app.listen(port, '0.0.0.0', () => {
     console.log(
       `[Kartik.ai] Demo/local full-stack platform server ready at http://localhost:${port}`,
     );
     console.log(
       `[Kartik.ai] Active providers: ${sharedPlatformRuntime.getStartupDiagnosticsSummary()}`,
     );
+    keepAlive.start();
   });
+
+  // Match/exceed Render's 60s reverse-proxy idle timeout to eliminate 502 race resets
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
+
+  const handleShutdown = (signal: string) => {
+    console.log(`[Kartik.ai] Received ${signal}, shutting down gracefully...`);
+    keepAlive.stop();
+    server.close(() => process.exit(0));
+    const forceTimer = setTimeout(() => process.exit(0), 5_000);
+    forceTimer.unref?.();
+  };
+
+  process.once('SIGTERM', () => handleShutdown('SIGTERM'));
+  process.once('SIGINT', () => handleShutdown('SIGINT'));
 }
 
 if (isExecutedAsMainModule(import.meta.url)) {
