@@ -58,12 +58,14 @@ describe('SEO, Sitemap, Robots.txt, Icons & Rich Results Helpers (Fix #38 / #42)
     assert.equal(resolvePublicSiteUrl({}), DEFAULT_PRODUCTION_SITE_URL);
   });
 
-  it('builds a valid robots.txt blocking private API/download routes and declaring sitemap', () => {
+  it('builds a valid robots.txt blocking private API/download/probe routes and declaring sitemap', () => {
     const txt = buildRobotsTxt('https://kartik-ai-app.onrender.com/');
     assert.match(txt, /User-agent: \*/);
     assert.match(txt, /Allow: \//);
+    assert.doesNotMatch(txt, /^Disallow:\s*\/\s*$/m);
     assert.match(txt, /Disallow: \/api\//);
     assert.match(txt, /Disallow: \/__downloads\//);
+    assert.match(txt, /Disallow: \/ping/);
     assert.match(txt, /Sitemap: https:\/\/kartik-ai-app\.onrender\.com\/sitemap\.xml/);
   });
 

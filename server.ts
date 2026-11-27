@@ -187,6 +187,28 @@ export function createKartikExpressApp(
     });
   });
 
+  // 1b. Public SEO & Search Indexing Endpoints (BEFORE auth — zero Set-Cookie so Cloudflare/CDN & Googlebot cache cleanly)
+  app.get('/robots.txt', (req, res) => {
+    const siteUrl = resolvePublicSiteUrl(env, req.headers);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=3600');
+    res.status(200).send(buildRobotsTxt(siteUrl));
+  });
+
+  app.get('/sitemap.xml', (req, res) => {
+    const siteUrl = resolvePublicSiteUrl(env, req.headers);
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=3600');
+    res.status(200).send(buildSitemapXml(siteUrl));
+  });
+
+  app.get('/site.webmanifest', (req, res) => {
+    const siteUrl = resolvePublicSiteUrl(env, req.headers);
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=3600');
+    res.status(200).json(buildWebManifest(siteUrl));
+  });
+
   app.use(
     express.json({
       limit: '20mb',
@@ -195,7 +217,8 @@ export function createKartikExpressApp(
       },
     }),
   );
-  app.use(optionalAuth);
+  // Scope auth/guest cookie middleware strictly to API & billing routes so HTML, SEO, and static assets stay cookie-free & edge-cacheable
+  app.use(['/api', '/billing', '/webhooks'], optionalAuth);
 
   const sendError = (req: Request, res: Response, err: unknown) => {
     const traceId =
@@ -222,28 +245,6 @@ export function createKartikExpressApp(
       ...mapped.body,
     });
   };
-
-  // 1b. Public SEO & Search Indexing Endpoints (/robots.txt, /sitemap.xml, /site.webmanifest)
-  app.get('/robots.txt', (req, res) => {
-    const siteUrl = resolvePublicSiteUrl(env, req.headers);
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.status(200).send(buildRobotsTxt(siteUrl));
-  });
-
-  app.get('/sitemap.xml', (req, res) => {
-    const siteUrl = resolvePublicSiteUrl(env, req.headers);
-    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.status(200).send(buildSitemapXml(siteUrl));
-  });
-
-  app.get('/site.webmanifest', (req, res) => {
-    const siteUrl = resolvePublicSiteUrl(env, req.headers);
-    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.status(200).json(buildWebManifest(siteUrl));
-  });
 
   // 2. Auth Routes (/api/v1/auth/firebase-config, /api/v1/auth/google, /api/v1/auth/me, /api/v1/auth/logout)
   app.get('/api/v1/auth/firebase-config', (req, res) => {
